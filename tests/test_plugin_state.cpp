@@ -3,7 +3,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <string>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -130,6 +132,51 @@ int main() {
     const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
     check(result.error == PluginStateError::locator_too_large,
           "oversized locator must be rejected");
+  }
+
+  // Same-major future minor payloads may append fields and remain readable.
+  {
+    auto bytes = encoded.bytes;
+    bytes[10] = 1;  // format minor = 1
+    bytes[11] = 0;
+    std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
+                                 (static_cast<std::uint32_t>(bytes[13]) << 8U) |
+                                 (static_cast<std::uint32_t>(bytes[14]) << 16U) |
+                                 (static_cast<std::uint32_t>(bytes[15]) << 24U);
+    payload_size += 4;
+    bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
+    bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
+    bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
+    bytes.insert(bytes.end(), {0x12U, 0x34U, 0x56U, 0x78U});
+    const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    check(result.ok() && result.state == state,
+          "same-major future minor state with appended fields should remain readable");
+  }
+
+  // Unknown locator mode must be rejected after decoding.
+  {
+    auto bytes = encoded.bytes;
+    bytes[25] = 0xFFU;
+    const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    check(result.error == PluginStateError::invalid_locator_mode,
+          "unknown locator mode must be rejected");
+  }
+
+  // Deterministic malformed-input sweep: decoder must never throw or crash.
+  {
+    std::mt19937 generator(0xAE71A5U);
+    std::uniform_int_distribution<int> length_distribution(0, 1024);
+    std::uniform_int_distribution<int> byte_distribution(0, 255);
+    for (int case_index = 0; case_index < 10000; ++case_index) {
+      std::vector<std::uint8_t> bytes(
+          static_cast<std::size_t>(length_distribution(generator)));
+      for (auto& byte : bytes) {
+        byte = static_cast<std::uint8_t>(byte_distribution(generator));
+      }
+      (void)aeyla::runtime::decode_plugin_component_state(bytes);
+    }
+    check(true, "malformed-input sweep completed");
   }
 
   if (failures == 0) {
