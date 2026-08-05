@@ -30,9 +30,9 @@ bool readStateBytes(IBStream* stream, std::vector<std::uint8_t>& bytes) {
 }
 
 std::int64_t projectSampleFor(const Vst::ProcessData& data) noexcept {
+  // In VST3 SDK 3.8 projectTimeSamples is part of the always-valid base
+  // ProcessContext fields whenever the host provides a context object.
   if (!data.processContext) return -1;
-  if ((data.processContext->state & Vst::ProcessContext::kProjectTimeSamplesValid) == 0)
-    return -1;
   return static_cast<std::int64_t>(data.processContext->projectTimeSamples);
 }
 
@@ -242,11 +242,13 @@ tresult PLUGIN_API Processor::getState(IBStream* state) {
   if (!state) return kResultFalse;
 
   componentState_.blackout = safety_.blackout();
-  const auto encoded = aeyla::runtime::encode_plugin_component_state(componentState_);
+  auto encoded = aeyla::runtime::encode_plugin_component_state(componentState_);
   if (!encoded.ok() || encoded.bytes.size() > static_cast<std::size_t>(std::numeric_limits<int32>::max()))
     return kResultFalse;
 
   int32 bytesWritten = 0;
+  // IBStream::write predates const-correct buffers. The mutable vector is kept
+  // local and the stream contract treats it as read-only input.
   const auto result = state->write(encoded.bytes.data(), static_cast<int32>(encoded.bytes.size()),
                                    &bytesWritten);
   if ((result != kResultOk && result != kResultTrue) ||
