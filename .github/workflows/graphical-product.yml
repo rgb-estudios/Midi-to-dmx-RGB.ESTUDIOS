@@ -21,7 +21,6 @@ jobs:
         shell: pwsh
         run: >-
           cmake -S product -B build-graphical
-          -G "Visual Studio 17 2022" -A x64
           -DIPLUG_DEPLOY_PLUGINS=OFF
           -DIGRAPHICS_BACKEND=NANOVG
 
