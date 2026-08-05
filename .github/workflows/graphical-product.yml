@@ -1,0 +1,114 @@
+name: graphical-app-and-vst3
+
+on:
+  push:
+    branches:
+      - agent/shared-graphics-ui
+  pull_request:
+    paths:
+      - product/**
+      - src/runtime/**
+      - .github/workflows/graphical-product.yml
+  workflow_dispatch:
+
+jobs:
+  windows-graphical:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure graphical product
+        shell: pwsh
+        run: >-
+          cmake -S product -B build-graphical
+          -G "Visual Studio 17 2022" -A x64
+          -DIPLUG_DEPLOY_PLUGINS=OFF
+          -DIGRAPHICS_BACKEND=NANOVG
+
+      - name: Build Windows APP and VST3
+        run: cmake --build build-graphical --config Release --target AeylaVisualDmx-app AeylaVisualDmx-vst3
+
+      - name: Collect Windows graphical package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package/Standalone | Out-Null
+          New-Item -ItemType Directory -Force package/VST3 | Out-Null
+
+          $app = Get-ChildItem -Path build-graphical -Recurse -File -Filter "AeylaVisualDmx.exe" | Select-Object -First 1
+          if (-not $app) { throw "Graphical standalone executable was not produced" }
+          Copy-Item -Force $app.FullName package/Standalone/
+
+          $vst3 = Get-ChildItem -Path build-graphical -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $vst3) { throw "Graphical VST3 bundle was not produced" }
+          Copy-Item -Recurse -Force $vst3.FullName package/VST3/
+
+          @'
+          @echo off
+          cd /d "%~dp0Standalone"
+          start "AEYLA Visual DMX" AeylaVisualDmx.exe
+          '@ | Set-Content -Encoding ASCII package/ABRIR_AEYLA_VISUAL_DMX.cmd
+
+          @'
+          AEYLA VISUAL DMX 0.2 GRAPHICAL ALPHA
+
+          This package must open as a graphical window, not a terminal.
+          Test source buttons, animated canvas, Rig 10/14, fixture selection,
+          Grand Master, extraction sliders, executor pads, Output Arm and Blackout.
+
+          The VST3 uses the same graphical surface inside Ableton.
+          Honest boundary: Art-Net and USB-DMX are not connected in this build.
+          '@ | Set-Content -Encoding UTF8 package/LEEME_PRUEBA_GRAFICA.txt
+
+          Get-ChildItem -Recurse package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-Visual-DMX-0.2-Windows-Graphical-APP-and-VST3
+          path: package/**
+          if-no-files-found: error
+
+  macos-graphical:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure graphical universal product
+        run: >-
+          cmake -S product -B build-graphical -G Xcode
+          -DIPLUG2_UNIVERSAL=ON
+          -DIPLUG_DEPLOY_PLUGINS=OFF
+          -DIGRAPHICS_BACKEND=NANOVG
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build macOS APP and VST3
+        run: cmake --build build-graphical --config Release --target AeylaVisualDmx-app AeylaVisualDmx-vst3
+
+      - name: Collect macOS graphical package
+        run: |
+          mkdir -p package/Standalone package/VST3
+          app="$(find build-graphical -type d -name 'AeylaVisualDmx.app' | head -n 1)"
+          test -n "$app"
+          cp -R "$app" package/Standalone/
+
+          vst3="$(find build-graphical -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          test -n "$vst3"
+          cp -R "$vst3" package/VST3/
+
+          file package/Standalone/AeylaVisualDmx.app/Contents/MacOS/*
+          file package/VST3/AeylaVisualDmx.vst3/Contents/MacOS/*
+
+          cat > package/LEEME_PRUEBA_GRAFICA.txt <<'README'
+          AEYLA VISUAL DMX 0.2 GRAPHICAL ALPHA
+
+          Open Standalone/AeylaVisualDmx.app. It must display the same graphical
+          surface used by the VST3. This unsigned alpha does not transmit DMX.
+          README
+
+          mkdir -p artifacts
+          tar -czf artifacts/AEYLA-Visual-DMX-0.2-macOS-Graphical-APP-and-VST3.tar.gz -C package .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-Visual-DMX-0.2-macOS-Graphical-APP-and-VST3
+          path: artifacts/**
+          if-no-files-found: error
