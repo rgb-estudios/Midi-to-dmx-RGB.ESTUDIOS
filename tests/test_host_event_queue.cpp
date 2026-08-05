@@ -1,4 +1,5 @@
 #include "runtime/host_event.h"
+#include "runtime/host_event_ingress.h"
 #include "runtime/spsc_queue.h"
 
 #include <atomic>
@@ -104,6 +105,25 @@ int main() {
     check(ordering_ok.load(std::memory_order_relaxed),
           "concurrent SPSC transfer must preserve every event in order");
     check(queue.empty(), "queue should be empty after concurrent drain");
+  }
+
+  // Overflow must request a safe transient release instead of failing silently.
+  {
+    aeyla::runtime::HostEventIngress<3> ingress;  // 2 usable entries
+    Event event{};
+    event.type = EventType::note_on;
+    check(ingress.try_submit(event), "ingress submit 1 should succeed");
+    check(ingress.try_submit(event), "ingress submit 2 should succeed");
+    check(!ingress.try_submit(event), "ingress overflow should be reported");
+    check(ingress.dropped_events() == 1, "overflow counter should increment");
+    check(ingress.consume_transient_release_request(),
+          "overflow should request transient release/haze-off");
+    check(!ingress.consume_transient_release_request(),
+          "release request should clear after runtime consumes it");
+    check(!ingress.try_submit(event), "a repeated overflow should still be reported");
+    check(ingress.dropped_events() == 2, "repeated overflow should increment counter");
+    check(ingress.consume_transient_release_request(),
+          "repeated overflow should re-arm the safety request");
   }
 
   if (failures == 0) {
