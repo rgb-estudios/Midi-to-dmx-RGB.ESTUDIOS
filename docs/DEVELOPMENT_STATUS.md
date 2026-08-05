@@ -19,12 +19,15 @@ Canonical repository: `rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS`
 | USB-DMX backends | Specified | not implemented |
 | Host event representation | Implemented | `src/runtime/host_event.h`; trivially copyable fixed-size records |
 | Callback-to-runtime SPSC queue | Implemented | `src/runtime/spsc_queue.h`; FIFO/wraparound/concurrent 200,000-event tests |
+| Event overflow safety ingress | Implemented | dropped-event counter plus transient-release/haze-off request |
+| VST3 component state model | Implemented (initial format) | bounded binary round-trip; corruption/truncation/version/path tests; Output Arm not persisted |
+| Shared runtime safety state | Implemented (initial model) | startup, project/backend gating, arm/disarm, blackout, reload, overflow, host-deactivation and shutdown tests |
 | Executor/layer runtime | Specified | not implemented |
 | Project package loader | Specified and schema scaffolded | not implemented |
 | Windows standalone editor | Interaction prototype only | browser prototype; no native build |
 | macOS standalone editor | Specified | no native build |
 | VST3 platform architecture | Specified | `docs/VST3_PLATFORM_ARCHITECTURE.md` |
-| VST3 persistence/lifecycle | Specified | `docs/VST3_STATE_LIFECYCLE_SPEC.md` |
+| VST3 persistence/lifecycle | Specified plus component-state foundation | `docs/VST3_STATE_LIFECYCLE_SPEC.md`, `src/runtime/plugin_state.*` |
 | Windows VST3/Ableton | Specified | no plugin binary or Ableton host test |
 | macOS VST3/Ableton | Specified | no plugin binary or Ableton host test |
 | Cross-platform release/signing | Specified | `docs/CROSS_PLATFORM_BUILD_RELEASE.md` |
@@ -33,9 +36,19 @@ Canonical repository: `rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS`
 | Hardware validation | Not tested | matrix empty |
 | Show validation | Not tested | requires full system |
 
-## Local validation for host-event foundation
+## Local validation for VST3/runtime foundation
 
-The host event/SPSC queue change was configured and compiled locally with GCC 14.2.0, C++20 and warnings treated as errors. CTest passed `2/2` executables, including FIFO, queue-full, wraparound and a two-thread transfer of 200,000 ordered events. Windows and macOS CI evidence remains required before merge.
+The current branch was configured and compiled locally with GCC 14.2.0, C++20 and warnings treated as errors.
+
+Results:
+
+- normal CTest: `4/4` passed;
+- AddressSanitizer + UndefinedBehaviorSanitizer: `4/4` passed;
+- ThreadSanitizer: `4/4` passed;
+- concurrent queue transfer: 200,000 ordered events;
+- no detected memory, undefined-behavior or data-race failures in the tested paths.
+
+The first plugin-state implementation initially failed compilation because `<algorithm>` was missing for `std::copy_n`; the build caught and corrected the defect before publication. Windows and macOS CI evidence remains required before merge.
 
 ## Parallel-agent Art-Net report boundary
 
@@ -45,4 +58,4 @@ Even after the patch is published, Wine is not a real Windows host test, macOS C
 
 ## Honest test boundary
 
-The current `main` package proves architectural concepts and the semantic DMX compiler. The `agent/vst3-platform-foundation` branch additionally proves a bounded cross-thread host-event primitive. It is not yet safe or complete enough for a live show. The first integrated usable milestone must satisfy all four required execution paths defined in `docs/PRODUCT_SPEC.md` and `docs/TEST_PLAN.md`.
+The current `main` package proves architectural concepts and the semantic DMX compiler. The `agent/vst3-platform-foundation` branch additionally implements and validates bounded host-event transfer, initial VST3 component-state persistence and shared runtime safety policy. It still does not produce a VST3 or native standalone application and is not safe or complete enough for a live show.
