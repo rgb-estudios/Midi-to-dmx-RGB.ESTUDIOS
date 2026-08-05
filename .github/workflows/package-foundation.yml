@@ -1,0 +1,22 @@
+name: package-foundation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aeyla-foundation-win64
+          path: |
+            build/Release/aeyla_core_demo.exe
+            prototype/ui
+            docs
+            schemas
+            examples

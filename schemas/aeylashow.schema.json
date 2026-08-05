@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rgb-estudios.cl/schemas/aeyla/show-1.0.0.json",
+  "title": "AEYLA Show Project",
+  "type": "object",
+  "required": ["schemaVersion", "project", "rig", "output", "executors"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"},
+    "project": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "version": {"type": "string"}
+      }
+    },
+    "rig": {"enum": ["floor-10", "floor-14"]},
+    "output": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"enum": ["artnet", "dmx-usb-pro", "open-dmx"]},
+        "destination": {"type": "string"},
+        "portAddress": {"type": "integer", "minimum": 0, "maximum": 32767},
+        "refreshHz": {"type": "number", "minimum": 1, "maximum": 44}
+      }
+    },
+    "executors": {"type": "array"}
+  }
+}

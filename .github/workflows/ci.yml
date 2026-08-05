@@ -1,0 +1,27 @@
+name: core-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Validate JSON syntax
+        shell: python
+        run: |
+          import json, pathlib
+          for p in pathlib.Path('.').rglob('*.json'):
+              json.loads(p.read_text(encoding='utf-8'))
+              print('OK', p)

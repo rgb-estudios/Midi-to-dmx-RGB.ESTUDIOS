@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0.0",
+  "project": {"id": "aeyla-demo", "name": "Aeyla Rig 10 Demo", "version": "0.1.0"},
+  "rig": "floor-10",
+  "output": {"type": "artnet", "destination": "10.10.10.20", "portAddress": 0, "refreshHz": 40},
+  "executors": [
+    {"id": "blackout", "note": 36, "channel": 1, "mode": "momentary"},
+    {"id": "red-breath", "note": 37, "channel": 1, "mode": "exclusive"},
+    {"id": "white-flash", "note": 38, "channel": 1, "mode": "flash"}
+  ]
+}

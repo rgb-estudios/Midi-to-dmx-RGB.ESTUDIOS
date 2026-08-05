@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "generic-rgbwaluv-13ch",
+  "name": "Generic D/ST/R/G/B/W/A/UV/L/Macro/Speed/Reset/Zoom",
+  "footprint": 13,
+  "channels": [
+    {"slot": 1, "attribute": "dimmer", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 2, "attribute": "strobe", "mode": "range", "dmxMin": 16, "dmxMax": 239, "home": 0},
+    {"slot": 3, "attribute": "red", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 4, "attribute": "green", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 5, "attribute": "blue", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 6, "attribute": "white", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 7, "attribute": "amber", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 8, "attribute": "uv", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 9, "attribute": "lime", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 10, "attribute": "macro", "mode": "range", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 11, "attribute": "speed", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 0},
+    {"slot": 12, "attribute": "reset", "mode": "trigger", "dmxMin": 240, "dmxMax": 255, "home": 0, "dangerous": true},
+    {"slot": 13, "attribute": "zoom", "mode": "continuous", "dmxMin": 0, "dmxMax": 255, "home": 128}
+  ]
+}

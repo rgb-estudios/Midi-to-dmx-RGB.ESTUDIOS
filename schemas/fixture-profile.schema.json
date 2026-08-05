@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rgb-estudios.cl/schemas/aeyla/fixture-profile-1.0.0.json",
+  "title": "AEYLA Fixture Profile",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "footprint", "channels"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"},
+    "id": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "footprint": {"type": "integer", "minimum": 1, "maximum": 512},
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["slot", "attribute", "mode", "home"],
+        "properties": {
+          "slot": {"type": "integer", "minimum": 1, "maximum": 512},
+          "attribute": {"enum": ["dimmer", "shutter", "strobe", "red", "green", "blue", "white", "amber", "uv", "lime", "macro", "speed", "reset", "zoom", "fan", "haze"]},
+          "mode": {"enum": ["continuous", "range", "constant", "trigger", "ignore"]},
+          "dmxMin": {"type": "integer", "minimum": 0, "maximum": 255},
+          "dmxMax": {"type": "integer", "minimum": 0, "maximum": 255},
+          "home": {"type": "integer", "minimum": 0, "maximum": 255},
+          "constantValue": {"type": "integer", "minimum": 0, "maximum": 255},
+          "invert": {"type": "boolean"},
+          "dangerous": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

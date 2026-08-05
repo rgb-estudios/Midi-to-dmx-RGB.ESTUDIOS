@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AEYLA Visual DMX — Prototype</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark"></span><div><strong>AEYLA VISUAL DMX</strong><small>EDITOR PROTOTYPE · 0.0.1</small></div></div>
+      <div class="project-meta"><span>AEYLA_SHOW</span><span class="version">v0.12</span><span class="valid">✓ Valid</span></div>
+      <div class="output-status"><label>OUTPUT</label><select id="outputType"><option>Art-Net</option><option>DMX USB Pro</option><option>Open DMX / FTDI</option></select><button id="armButton" class="arm">ARM OUTPUT</button></div>
+    </header>
+
+    <aside class="left-rail">
+      <nav>
+        <button class="nav-item active" data-panel="sources">Sources</button>
+        <button class="nav-item" data-panel="palettes">Palettes</button>
+        <button class="nav-item" data-panel="scenes">Scenes</button>
+        <button class="nav-item" data-panel="profiles">Profiles</button>
+        <button class="nav-item" data-panel="patch">Patch</button>
+      </nav>
+      <section class="library-panel" id="libraryPanel">
+        <p class="eyebrow">VISUAL SOURCES</p>
+        <button class="source-card active" data-source="gradient"><span class="thumb gradient"></span><span><b>Crimson Field</b><small>Animated gradient</small></span></button>
+        <button class="source-card" data-source="wave"><span class="thumb wave"></span><span><b>Cold Wave</b><small>Procedural</small></span></button>
+        <button class="source-card" data-source="noise"><span class="thumb noise"></span><span><b>Infernal Noise</b><small>Procedural</small></span></button>
+        <button class="source-card" data-source="solid"><span class="thumb solid"></span><span><b>Deep Red</b><small>Solid</small></span></button>
+        <button class="add-source">＋ Import image / video</button>
+      </section>
+      <div class="left-footer"><button id="exportButton">Export project JSON</button><input id="importInput" type="file" accept="application/json" hidden><button id="importButton">Import JSON</button></div>
+    </aside>
+
+    <section class="workspace">
+      <div class="workspace-head">
+        <div><p class="eyebrow">CANVAS / FIXTURE MAP</p><h1 id="sourceTitle">Crimson Field</h1></div>
+        <div class="rig-toggle"><span>LOGICAL RIG</span><button data-rig="10" class="active">10</button><button data-rig="14">14</button></div>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="visualCanvas" width="960" height="520"></canvas>
+        <div class="canvas-overlay"><span>640 × 360 INTERNAL</span><span id="fpsLabel">PREVIEW 60 FPS</span></div>
+      </div>
+      <section class="semantic-strip">
+        <div><small>SELECTED</small><strong id="selectedFixture">L1</strong></div>
+        <div><small>D</small><b id="vD">75</b></div><div><small>R</small><b id="vR">255</b></div><div><small>G</small><b id="vG">28</b></div><div><small>B</small><b id="vB">12</b></div><div><small>W</small><b id="vW">8</b></div><div><small>A</small><b id="vA">42</b></div><div><small>UV</small><b id="vUV">0</b></div><div><small>L</small><b id="vL">4</b></div>
+      </section>
+    </section>
+
+    <aside class="inspector">
+      <p class="eyebrow">LOOK INSPECTOR</p>
+      <h2>Crimson Field</h2>
+      <label>Target group<select><option>Floor · All</option><option>Floor · Left</option><option>Floor · Right</option><option>Symmetrical pairs</option></select></label>
+      <label>Blend<select><option>Replace</option><option>Add</option><option>Multiply</option></select></label>
+      <label>Intensity <output id="intensityOut">76%</output><input id="intensity" type="range" min="0" max="100" value="76"></label>
+      <label>Speed <output id="speedOut">0.45×</output><input id="speed" type="range" min="0" max="200" value="45"></label>
+      <label>White extraction <output id="whiteOut">35%</output><input id="white" type="range" min="0" max="100" value="35"></label>
+      <label>Amber extraction <output id="amberOut">42%</output><input id="amber" type="range" min="0" max="100" value="42"></label>
+      <label>UV override <output id="uvOut">0%</output><input id="uv" type="range" min="0" max="100" value="0"></label>
+      <div class="inspector-divider"></div>
+      <p class="eyebrow">FIXTURE PROFILE</p>
+      <button class="profile-button" id="profileButton"><span><b>Generic 13ch</b><small>D · ST · RGBWALUV · Macro · Speed · Reset · Zoom</small></span><span>EDIT</span></button>
+      <div class="network-card"><div><small>DESTINATION</small><b>10.10.10.20</b></div><div><small>UNIVERSE</small><b>1</b></div><div><small>REFRESH</small><b>40 Hz</b></div></div>
+    </aside>
+
+    <footer class="executor-dock">
+      <div class="dock-head"><div><span class="layer-dot base"></span>BASE <b>1 ACTIVE</b></div><div><span class="layer-dot move"></span>MOVEMENT <b>0 ACTIVE</b></div><div><span class="layer-dot fx"></span>FX <b>0 ACTIVE</b></div><div class="master">MASTER <input type="range" value="78"><b>78%</b></div></div>
+      <div class="executor-grid">
+        <button class="executor active" data-look="gradient"><span>01</span><b>CRIMSON FIELD</b><small>C1 · LATCH</small></button>
+        <button class="executor" data-look="wave"><span>02</span><b>COLD WAVE</b><small>C#1 · LATCH</small></button>
+        <button class="executor" data-look="noise"><span>03</span><b>INFERNAL NOISE</b><small>D1 · LOOP</small></button>
+        <button class="executor flash" id="flashExecutor"><span>04</span><b>WHITE FLASH</b><small>D#1 · MOMENTARY</small></button>
+        <button class="executor dim"><span>05</span><b>LOW RED</b><small>E1 · LATCH</small></button>
+        <button class="executor haze"><span>06</span><b>HAZE 20</b><small>F1 · TOGGLE</small></button>
+        <button class="executor empty"><span>07</span><b>EMPTY</b><small>F#1</small></button>
+        <button class="executor blackout" id="blackoutButton"><span>08</span><b>BLACKOUT</b><small>G1 · MOMENTARY</small></button>
+      </div>
+    </footer>
+  </main>
+
+  <dialog id="profileDialog">
+    <form method="dialog">
+      <header><div><p class="eyebrow">SEMANTIC PROFILE</p><h2>Generic RGBWALUV · 13ch</h2></div><button value="cancel">×</button></header>
+      <p class="dialog-note">Reorder the physical slots without changing looks, scenes or MIDI programming.</p>
+      <table><thead><tr><th>Slot</th><th>Meaning</th><th>Mode</th><th>DMX range</th><th>Home</th></tr></thead><tbody id="profileRows"></tbody></table>
+      <footer><button value="cancel">Cancel</button><button value="default" class="primary">Save profile</button></footer>
+    </form>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>

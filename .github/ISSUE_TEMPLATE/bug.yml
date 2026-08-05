@@ -1,0 +1,29 @@
+name: Bug
+about: Report a reproducible defect
+title: "[BUG] "
+labels: []
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Core, UI, VST3, Media, Art-Net, USB, Profiles, Project format, Safety]
+    validations: {required: true}
+  - type: textarea
+    id: observed
+    attributes: {label: Observed behaviour}
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes: {label: Expected behaviour}
+    validations: {required: true}
+  - type: textarea
+    id: reproduction
+    attributes: {label: Exact reproduction steps}
+    validations: {required: true}
+  - type: textarea
+    id: environment
+    attributes: {label: Build, OS, Ableton, hardware and drivers}
+  - type: textarea
+    id: evidence
+    attributes: {label: Logs, captures, screenshots or project file}

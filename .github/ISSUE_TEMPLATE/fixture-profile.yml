@@ -1,0 +1,20 @@
+name: Fixture profile
+about: Add or correct a semantic fixture profile
+title: "[PROFILE] "
+labels: ["area:profiles"]
+body:
+  - type: input
+    id: model
+    attributes: {label: Manufacturer and model}
+    validations: {required: true}
+  - type: input
+    id: mode
+    attributes: {label: DMX mode and footprint}
+    validations: {required: true}
+  - type: textarea
+    id: manual
+    attributes: {label: Manual/source and exact channel table}
+    validations: {required: true}
+  - type: textarea
+    id: hardware
+    attributes: {label: Hardware test evidence}
