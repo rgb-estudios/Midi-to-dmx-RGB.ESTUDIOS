@@ -27,3 +27,17 @@ enable_testing()
 add_executable(aeyla_core_tests tests/test_main.cpp)
 target_link_libraries(aeyla_core_tests PRIVATE aeyla_core)
 add_test(NAME aeyla_core_tests COMMAND aeyla_core_tests)
+
+# Shared runtime primitives used by standalone and future VST3 adapters.
+add_library(aeyla_runtime INTERFACE)
+target_include_directories(aeyla_runtime INTERFACE src)
+target_link_libraries(aeyla_runtime INTERFACE aeyla_core)
+
+add_executable(aeyla_runtime_tests tests/test_host_event_queue.cpp)
+target_link_libraries(aeyla_runtime_tests PRIVATE aeyla_runtime)
+if(MSVC)
+  target_compile_options(aeyla_runtime_tests PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(aeyla_runtime_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME aeyla_runtime_tests COMMAND aeyla_runtime_tests)
