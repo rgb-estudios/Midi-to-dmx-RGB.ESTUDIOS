@@ -1,0 +1,77 @@
+name: vst3-proof
+
+on:
+  push:
+    branches:
+      - agent/vst3-silent-proof
+  pull_request:
+    paths:
+      - CMakeLists.txt
+      - plugins/vst3/**
+      - src/runtime/**
+      - src/core/**
+      - .github/workflows/vst3-proof.yml
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Windows VST3
+        shell: pwsh
+        run: >-
+          cmake -S . -B build-vst3
+          -DAEYLA_BUILD_VST3_PROOF=ON
+          -DSMTG_CREATE_PLUGIN_LINK=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Windows VST3
+        run: cmake --build build-vst3 --config Release --target AeylaVisualDmxAlpha
+
+      - name: Collect Windows bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $bundle = Get-ChildItem -Path build-vst3 -Recurse -Directory -Filter "AeylaVisualDmxAlpha.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "AeylaVisualDmxAlpha.vst3 was not produced" }
+          Copy-Item -Recurse -Force $bundle.FullName artifacts/
+          Get-ChildItem -Recurse artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-Visual-DMX-Alpha-Windows-VST3
+          path: artifacts/**
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure macOS universal VST3
+        run: >-
+          cmake -S . -B build-vst3 -G Xcode
+          -DAEYLA_BUILD_VST3_PROOF=ON
+          -DSMTG_CREATE_PLUGIN_LINK=OFF
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build macOS universal VST3
+        run: cmake --build build-vst3 --config Release --target AeylaVisualDmxAlpha
+
+      - name: Collect macOS bundle
+        run: |
+          mkdir -p artifacts
+          bundle="$(find build-vst3 -type d -name 'AeylaVisualDmxAlpha.vst3' | head -n 1)"
+          test -n "$bundle"
+          cp -R "$bundle" artifacts/
+          file artifacts/AeylaVisualDmxAlpha.vst3/Contents/MacOS/*
+          find artifacts -maxdepth 5 -type f -print
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-Visual-DMX-Alpha-macOS-VST3
+          path: artifacts/**
+          if-no-files-found: error
