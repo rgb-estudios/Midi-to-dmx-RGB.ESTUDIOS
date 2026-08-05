@@ -1,0 +1,28 @@
+{
+  "status": "candidate_not_approved",
+  "researched_at_utc": "2026-08-05T08:05:00Z",
+  "approval_gate": "Issue #10 proof on Windows/macOS CI, Steinberg Validator, real Ableton Windows and native Apple Silicon macOS",
+  "dependencies": [
+    {
+      "name": "iPlug2",
+      "repository": "https://github.com/iPlug2/iPlug2",
+      "revision": "584df5a3306f3a9a62b5ebb803d3fb58134abdcf",
+      "revision_date": "2026-06-12",
+      "license": "zlib-like permissive",
+      "role": "cross-platform standalone and VST3 framework/UI",
+      "reason": "current reviewed master candidate; official v1.0.0-beta release notes state source downloads are out of date and recommend cloning the repository",
+      "approved": false
+    },
+    {
+      "name": "Steinberg VST3 SDK",
+      "repository": "https://github.com/steinbergmedia/vst3sdk",
+      "tag": "v3.8.0_build_66",
+      "revision": "9fad9770f2ae8542ab1a548a68c1ad1ac690abe0",
+      "release_date": "2025-10-20",
+      "license": "MIT",
+      "role": "official VST3 interfaces, helper classes, examples and Validator",
+      "reason": "latest official tagged SDK located during 2026-08-05 research; supports MSVC 2022, Xcode 10-16 and Apple Silicon",
+      "approved": false
+    }
+  ]
+}
