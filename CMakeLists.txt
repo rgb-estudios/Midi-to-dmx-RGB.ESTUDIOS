@@ -31,6 +31,7 @@ add_test(NAME aeyla_core_tests COMMAND aeyla_core_tests)
 # Shared runtime primitives and state used by standalone and future VST3 adapters.
 add_library(aeyla_runtime
   src/runtime/plugin_state.cpp
+  src/runtime/runtime_safety_state.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
 target_link_libraries(aeyla_runtime PUBLIC aeyla_core)
@@ -57,3 +58,12 @@ else()
   target_compile_options(aeyla_plugin_state_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 add_test(NAME aeyla_plugin_state_tests COMMAND aeyla_plugin_state_tests)
+
+add_executable(aeyla_runtime_safety_tests tests/test_runtime_safety.cpp)
+target_link_libraries(aeyla_runtime_safety_tests PRIVATE aeyla_runtime)
+if(MSVC)
+  target_compile_options(aeyla_runtime_safety_tests PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(aeyla_runtime_safety_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME aeyla_runtime_safety_tests COMMAND aeyla_runtime_safety_tests)
