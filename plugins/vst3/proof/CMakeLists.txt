@@ -1,4 +1,5 @@
 smtg_add_vst3plugin(AeylaVisualDmxAlpha
+  version.h
   aeyla_vst3_cids.h
   aeyla_vst3_processor.h
   aeyla_vst3_processor.cpp
