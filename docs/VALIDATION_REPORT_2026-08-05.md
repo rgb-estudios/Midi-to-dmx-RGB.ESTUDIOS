@@ -1,6 +1,6 @@
 # Validation report — 2026-08-05
 
-Commit under validation: foundation branch before publication.
+Foundation source validated locally before publication; canonical GitHub foundation commit: `689d09694dc50bb98eaeb3723dee44155ca6d680`.
 
 ## Environment
 
@@ -47,9 +47,16 @@ Automated checks:
 
 All repository JSON files parse successfully. Full JSON Schema instance validation remains a Stage 1 task.
 
+## GitHub publication validation
+
+- Canonical public repository is available.
+- README, source, schemas, prototype, governance files and agent handoff were published to `main`.
+- Issues #1–#5 were created for governance, Art-Net, project persistence, native UI and hardware validation.
+- GitHub Actions workflow files are present. At the time of this report the connector had not yet returned a workflow run for the publication commit; CI status therefore remains pending external confirmation.
+
 ## Not validated
 
-- Windows compilation; GitHub Actions is configured but has not run because the repository is not yet published.
+- Windows compilation through GitHub Actions or a target Windows workstation.
 - Art-Net network transmission to a physical node.
 - USB-DMX hardware.
 - Ableton/VST3.
