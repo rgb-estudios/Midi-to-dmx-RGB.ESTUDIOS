@@ -4,7 +4,9 @@ Read this file before changing code, schemas, UI, fixtures, build files or docum
 
 ## 1. Product objective
 
-AEYLA Visual DMX maps visual material and reusable scenes to DMX lighting. The user edits projects in a free standalone Windows application and sends a portable show file to a separate Ableton computer. Ableton loads a VST3 runtime and triggers executors with MIDI notes.
+AEYLA Visual DMX maps visual material and reusable scenes to DMX lighting. The user edits projects in a free standalone application on **Windows or macOS** and sends a portable show file to a separate performance computer. Ableton Live on **Windows or macOS** loads a VST3 runtime and triggers executors with MIDI notes.
+
+Windows standalone, macOS standalone, Windows Ableton/VST3 and macOS Ableton/VST3 are mandatory product paths from the first integrated milestone. They are not later ports.
 
 The application is **not**:
 
@@ -18,14 +20,16 @@ The application is **not**:
 
 1. **Semantic first:** looks output attributes such as `dimmer`, `red`, `strobe` and `zoom`; they never output hard-coded channel numbers.
 2. **Patch independence:** changing fixture model, mode, address or output backend must not require reprogramming looks, scenes, executors or MIDI clips.
-3. **Shared engine:** standalone and VST3 use the same core rendering, semantic, profile, project and DMX code.
-4. **Portable project:** a `.aeylashow` package must contain all referenced media or explicitly mark externally linked media.
-5. **Safe startup:** dimmer, strobe, haze, macros and reset start safe; DMX output starts disarmed.
-6. **No audio dependency:** do not add audio input or audio analysis unless a separately approved product decision explicitly changes scope.
-7. **Visual quality:** do not reduce the editor to generic developer UI. Follow `docs/VISUAL_DESIGN_SYSTEM.md`.
-8. **Determinism:** the same project, timestamp, MIDI state and fixture profile must generate the same semantic frame and DMX frame.
-9. **Real-time isolation:** network/USB I/O and media decoding must never block the host audio thread.
-10. **Backward compatibility:** project migrations are explicit and tested.
+3. **Shared engine:** standalone and VST3 use the same core rendering, semantic, profile, project, runtime, safety and DMX code.
+4. **Cross-platform parity:** Windows and macOS may use different OS adapters, packaging and signing, but must not fork artistic, semantic, project or executor behavior.
+5. **Portable project:** a `.aeylashow` package must contain all referenced media or explicitly mark externally linked media.
+6. **Safe startup:** dimmer, strobe, haze, macros and reset start safe; DMX output starts disarmed.
+7. **No audio dependency:** do not add audio input or audio analysis unless a separately approved product decision explicitly changes scope.
+8. **Visual quality:** do not reduce the editor to generic developer UI. Follow `docs/VISUAL_DESIGN_SYSTEM.md` on both Windows and macOS.
+9. **Determinism:** the same project, timestamp, MIDI state and fixture profile must generate the same semantic frame and DMX frame on standalone and VST3 across both operating systems.
+10. **Real-time isolation:** network/USB I/O, project I/O and media decoding must never block the host audio thread.
+11. **Backward compatibility:** project migrations are explicit and tested.
+12. **Early host proof:** do not postpone all Ableton/VST3 work until the rest of the runtime is complete. Maintain a thin loadable host adapter from the first integrated milestone so architectural mistakes are found early.
 
 ## 3. Supported semantic attributes
 
@@ -55,13 +59,16 @@ Do not rename identifiers casually. Add migration logic before changing persiste
 ## 4. Required workflow for every change
 
 1. Read the relevant specification and ADRs.
-2. State the exact layer being changed: visual source, semantic engine, profile compiler, project format, output backend, UI or runtime adapter.
-3. Add or update tests before claiming completion.
-4. Build the core and run CTest.
-5. Validate JSON examples against schemas when schemas change.
-6. For UI changes, capture before/after screenshots and verify at 1366×768 and 1920×1080.
-7. Update `CHANGELOG.md` and any affected docs.
-8. Do not mark hardware features “verified” without a real-device test record.
+2. State the exact layer being changed: visual source, semantic engine, profile compiler, project format, output backend, UI, runtime or host adapter.
+3. State platform impact for Windows standalone, macOS standalone, Windows VST3 and macOS VST3.
+4. Add or update tests before claiming completion.
+5. Build the core and run CTest.
+6. Keep CI green on Linux, Windows and macOS when the changed layer is portable.
+7. Validate JSON examples against schemas when schemas change.
+8. For UI changes, capture Windows and macOS evidence at required resolutions/scaling.
+9. For VST3 changes, run validator plus Ableton scan/load/save/reopen on both operating systems before claiming host support.
+10. Update `CHANGELOG.md` and any affected docs.
+11. Do not mark hardware features “verified” without a real-device test record.
 
 ## 5. Completion vocabulary
 
@@ -69,24 +76,39 @@ Use these exact statuses:
 
 - **Specified:** behaviour is documented only.
 - **Scaffolded:** code structure exists but is not fully executable.
-- **Implemented:** automated tests pass.
-- **Simulated:** validated against software-generated inputs/packets.
+- **Implemented:** automated tests pass on every required CI platform for the component.
+- **Simulated:** validated against software-generated inputs/packets on the named operating systems.
+- **Host-tested:** loaded and exercised in the named Ableton Live version and operating system, with evidence.
 - **Hardware-tested:** validated with named physical hardware and recorded conditions.
 - **Show-tested:** used successfully in a full rehearsal/show soak test.
 
-Never substitute “done” for these statuses.
+Never substitute “done” for these statuses. Never use an unqualified `Implemented` or `Host-tested` when only one required operating system was validated.
 
 ## 6. Architecture boundaries
 
 - `src/core`: deterministic code, no UI, DAW or hardware dependency.
 - `src/io`: Art-Net, USB and device enumeration; no artistic logic.
-- `src/media`: image/video decoding and visual-frame providers.
+- `src/media`: image/video decoding and visual-frame providers through cross-platform interfaces.
 - `src/runtime`: executor state, layer mixing and show clock.
-- `apps/editor`: standalone editor UI.
-- `plugins/vst3`: thin host adapter only.
+- `apps/editor`: shared standalone editor plus thin Windows/macOS platform packaging.
+- `plugins/vst3`: thin host adapter only; no duplicated artistic logic.
 - `prototype/ui`: disposable interaction prototype; never treat as production implementation.
 
-## 7. Safety review triggers
+## 7. Platform acceptance gates
+
+No integrated alpha or later milestone may pass unless:
+
+- Windows standalone launches and loads the canonical example project;
+- macOS standalone launches and loads the same project;
+- Windows Ableton scans and loads the VST3;
+- macOS Ableton scans and loads the VST3;
+- the same MIDI sequence produces matching executor state and DMX output in all four paths;
+- save/reopen and missing-project behavior are documented and tested;
+- output starts disarmed in all four paths.
+
+CI compilation alone does not equal Ableton compatibility. Wine does not equal a real Windows host test. A macOS CI build does not equal a real Mac Ableton host test.
+
+## 8. Safety review triggers
 
 A change requires explicit safety review when it affects:
 
@@ -100,21 +122,23 @@ A change requires explicit safety review when it affects:
 - DMX timeout behaviour;
 - project auto-load or hot reload.
 
-## 8. Future-agent audit checklist
+## 9. Future-agent audit checklist
 
 Before beginning an audit, report:
 
-- current build status;
+- current build status on Linux, Windows and macOS;
+- current Ableton host-test status on Windows and macOS;
 - current test count and failures;
 - schema version;
 - hardware-validation matrix;
 - unresolved P0/P1 issues;
 - differences between standalone and VST3 behaviour;
+- differences between Windows and macOS behaviour;
 - visual regressions;
 - project migration risks;
 - third-party dependency and licence changes.
 
-## 9. Prohibited shortcuts
+## 10. Prohibited shortcuts
 
 - Do not map visual RGB directly into physical slots.
 - Do not perform UDP or serial writes in the VST audio callback.
@@ -122,3 +146,6 @@ Before beginning an audit, report:
 - Do not silently clamp dangerous reset/macro ranges without warning the user.
 - Do not introduce a dependency without documenting licence, version pinning and update procedure.
 - Do not claim “generic USB DMX” compatibility. Name and test each protocol family.
+- Do not claim macOS support from a Linux POSIX code path alone.
+- Do not claim Windows support from MinGW/Wine alone.
+- Do not claim Ableton compatibility before a real VST3 has been scanned, loaded, saved and reopened in Ableton on the named OS.
