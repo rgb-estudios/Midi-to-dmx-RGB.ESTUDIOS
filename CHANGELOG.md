@@ -11,7 +11,11 @@
 - Framework decision and proof gates for iPlug2 plus the official VST3 SDK.
 - Bug-prevention, fuzzing, sanitizer, concurrency and release quality gates.
 - Trivially copyable host-event records and a fixed-capacity lock-free SPSC queue for the future Ableton callback-to-runtime handoff.
-- Runtime queue automated tests covering FIFO, capacity, wraparound and 200,000 concurrent events.
+- Realtime-safe host-event ingress that counts overflow and requests transient-release/haze-off safety handling.
+- Versioned bounded VST3 component-state serializer with project UUID/checksum, schema version, safe global state and validated locator policy. Output Arm is deliberately not persisted.
+- Shared runtime safety state for startup, project/backend validation, arm/disarm, blackout, reload, overflow, host deactivation and shutdown.
+- Automated tests covering queue FIFO/capacity/wraparound, 200,000 concurrent events, overflow response, state round-trip/corruption/truncation/path validation and runtime safety transitions.
+- ASan/UBSan and ThreadSanitizer GitHub Actions quality gates.
 
 ### Changed
 
