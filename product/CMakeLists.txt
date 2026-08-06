@@ -1,19 +1,17 @@
 cmake_minimum_required(VERSION 3.25)
 project(AeylaVisualDmxProduct VERSION 0.2.0 LANGUAGES C CXX)
 
-# CI and release builds pre-clone the exact iPlug2 revision recursively so its
-# nested VST3 SDK and graphics dependencies are present before configuration.
-# A local developer may omit IPLUG2_DIR; CMake then performs the same pinned
-# recursive fetch as a fallback.
-if(NOT DEFINED IPLUG2_DIR)
-  include(FetchContent)
+include(FetchContent)
 
+# Pin the UI framework independently from its git submodules. GitHub's source
+# fetch used by CMake does not reliably populate nested submodules across all
+# hosted runners, so every required dependency is materialized explicitly.
+if(NOT DEFINED IPLUG2_DIR)
   FetchContent_Declare(
     iplug2
     GIT_REPOSITORY https://github.com/iPlug2/iPlug2.git
     GIT_TAG 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
     GIT_SHALLOW FALSE
-    GIT_SUBMODULES_RECURSE TRUE
   )
 
   FetchContent_MakeAvailable(iplug2)
@@ -24,10 +22,29 @@ if(NOT EXISTS "${IPLUG2_DIR}/iPlug2.cmake")
   message(FATAL_ERROR "IPLUG2_DIR does not contain iPlug2.cmake: ${IPLUG2_DIR}")
 endif()
 
-if(NOT EXISTS "${IPLUG2_DIR}/Dependencies/IPlug/VST3_SDK/pluginterfaces")
+# iPlug2 expects the Steinberg SDK at this exact framework-relative location.
+# Populate the same official revision already proven by the lower-level AEYLA
+# VST3 adapter instead of relying on iPlug2's unpopulated git submodule.
+set(_aeyla_vst3_sdk_dir "${IPLUG2_DIR}/Dependencies/IPlug/VST3_SDK")
+if(NOT EXISTS "${_aeyla_vst3_sdk_dir}/pluginterfaces")
+  FetchContent_Declare(
+    aeyla_vst3sdk
+    GIT_REPOSITORY https://github.com/steinbergmedia/vst3sdk.git
+    GIT_TAG 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+    GIT_SHALLOW FALSE
+    SOURCE_DIR "${_aeyla_vst3_sdk_dir}"
+  )
+  FetchContent_MakeAvailable(aeyla_vst3sdk)
+endif()
+
+if(NOT EXISTS "${_aeyla_vst3_sdk_dir}/pluginterfaces")
   message(FATAL_ERROR
-    "The pinned iPlug2 checkout is missing its VST3 SDK. "
-    "Install the pinned Steinberg SDK at Dependencies/IPlug/VST3_SDK.")
+    "The pinned Steinberg VST3 SDK was not populated at ${_aeyla_vst3_sdk_dir}.")
+endif()
+
+if(NOT EXISTS "${_aeyla_vst3_sdk_dir}/base/source/baseiids.cpp")
+  message(FATAL_ERROR
+    "The pinned Steinberg VST3 SDK is incomplete: base/source/baseiids.cpp is missing.")
 endif()
 
 # Compatibility patch for the pinned iPlug2 proof revision. IColor is a simple
