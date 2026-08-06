@@ -13,6 +13,7 @@ Correction in `0.2.1-alpha.3`:
 - add `resources/main.rc`;
 - define `IDD_DIALOG_MAIN`, `IDD_DIALOG_PREF`, menu and accelerators;
 - keep standalone no-audio startup;
-- require CI to launch the executable and render `AEYLA_UI_SMOKE.png` before packaging.
+- require CI to launch the executable and render `AEYLA_UI_SMOKE.png` before packaging;
+- validate through the trusted default-branch workflow on integration PR #13.
 
 The old `0.2.0` and launcher-only hotfixes are rejected artifacts and must not be redistributed.
