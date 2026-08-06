@@ -1,0 +1,49 @@
+name: report-graphical-run
+
+on:
+  push:
+    branches:
+      - agent/shared-graphics-ui
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for graphical workflow registration
+        run: sleep 20
+
+      - name: Report latest graphical run to PR 13
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs="$(gh run list \
+            --workflow graphical-product.yml \
+            --branch agent/shared-graphics-ui \
+            --limit 3 \
+            --json databaseId,status,conclusion,headSha,url,createdAt)"
+
+          body="$(cat <<EOF
+          ### Graphical workflow locator
+
+          Reporter commit: \`${GITHUB_SHA}\`
+          Reporter run: \`${GITHUB_RUN_ID}\`
+
+          Latest `graphical-product.yml` runs:
+
+          \`\`\`json
+          ${runs}
+          \`\`\`
+          EOF
+          )"
+
+          gh issue comment 13 --body "$body"
