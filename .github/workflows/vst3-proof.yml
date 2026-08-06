@@ -1,0 +1,166 @@
+name: vst3-and-standalone-proof
+
+on:
+  push:
+    branches:
+      - agent/vst3-silent-proof
+  pull_request:
+    paths:
+      - CMakeLists.txt
+      - apps/standalone/**
+      - plugins/vst3/**
+      - src/runtime/**
+      - src/core/**
+      - .github/workflows/vst3-proof.yml
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Windows VST3 and standalone
+        shell: pwsh
+        run: >-
+          cmake -S . -B build-vst3
+          -DAEYLA_BUILD_VST3_PROOF=ON
+          -DAEYLA_BUILD_STANDALONE_PROOF=ON
+          -DSMTG_CREATE_PLUGIN_LINK=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Windows VST3 and standalone
+        run: cmake --build build-vst3 --config Release --target AeylaVisualDmxAlpha AeylaVisualDmxStandalone
+
+      - name: Run Windows standalone self-test
+        shell: pwsh
+        run: |
+          $standalone = Get-ChildItem -Path build-vst3 -Recurse -File -Filter "AeylaVisualDmxStandalone.exe" | Select-Object -First 1
+          if (-not $standalone) { throw "AeylaVisualDmxStandalone.exe was not produced" }
+          & $standalone.FullName --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Standalone self-test failed with exit code $LASTEXITCODE" }
+
+      - name: Collect Windows test package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/VST3 | Out-Null
+          New-Item -ItemType Directory -Force artifacts/Standalone | Out-Null
+
+          $bundle = Get-ChildItem -Path build-vst3 -Recurse -Directory -Filter "AeylaVisualDmxAlpha.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "AeylaVisualDmxAlpha.vst3 was not produced" }
+          Copy-Item -Recurse -Force $bundle.FullName artifacts/VST3/
+
+          $standalone = Get-ChildItem -Path build-vst3 -Recurse -File -Filter "AeylaVisualDmxStandalone.exe" | Select-Object -First 1
+          if (-not $standalone) { throw "AeylaVisualDmxStandalone.exe was not produced" }
+          Copy-Item -Force $standalone.FullName artifacts/Standalone/
+
+          @'
+          @echo off
+          cd /d "%~dp0"
+          Standalone\AeylaVisualDmxStandalone.exe
+          pause
+          '@ | Set-Content -Encoding ASCII artifacts/RUN_STANDALONE_ALPHA.cmd
+
+          @'
+          @echo off
+          setlocal
+          set "SOURCE=%~dp0VST3\AeylaVisualDmxAlpha.vst3"
+          set "DEST=C:\Program Files\Common Files\VST3\AeylaVisualDmxAlpha.vst3"
+          if not exist "%SOURCE%" (
+            echo ERROR: VST3 bundle not found.
+            pause
+            exit /b 1
+          )
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','Copy-Item -Recurse -Force ''%SOURCE%'' ''%DEST%'''"
+          echo VST3 installation command completed.
+          pause
+          '@ | Set-Content -Encoding ASCII artifacts/INSTALL_VST3_ALPHA.cmd
+
+          @'
+          AEYLA Visual DMX Alpha - Windows test package
+
+          1. Double-click RUN_STANDALONE_ALPHA.cmd.
+          2. The application must open in a console and print its safe initial state.
+          3. Type p then Enter to submit a MIDI diagnostic pattern.
+          4. Type a to test the diagnostic arm gate, b for blackout and s for status.
+          5. Type q for safe shutdown.
+          6. To test the VST3, run INSTALL_VST3_ALPHA.cmd as administrator, open Ableton Live 12 and perform a deep VST3 rescan.
+
+          Honest boundary: this alpha does not transmit Art-Net or USB-DMX. It validates the executable, VST3 host adapter, MIDI event ingress, persistence and shared safety behavior.
+          '@ | Set-Content -Encoding UTF8 artifacts/LEEME_PRUEBA_WINDOWS.txt
+
+          Get-ChildItem -Recurse artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-Visual-DMX-Alpha-Windows-VST3-and-Standalone
+          path: artifacts/**
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure macOS universal VST3 and standalone
+        run: >-
+          cmake -S . -B build-vst3 -G Xcode
+          -DAEYLA_BUILD_VST3_PROOF=ON
+          -DAEYLA_BUILD_STANDALONE_PROOF=ON
+          -DSMTG_CREATE_PLUGIN_LINK=OFF
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build macOS universal VST3 and standalone
+        run: cmake --build build-vst3 --config Release --target AeylaVisualDmxAlpha AeylaVisualDmxStandalone
+
+      - name: Run macOS standalone self-test
+        run: |
+          standalone="$(find build-vst3 -type f -name 'AeylaVisualDmxStandalone' -perm -111 | head -n 1)"
+          test -n "$standalone"
+          "$standalone" --self-test
+          file "$standalone"
+
+      - name: Collect macOS test package
+        run: |
+          mkdir -p package/VST3 package/Standalone
+
+          bundle="$(find build-vst3 -type d -name 'AeylaVisualDmxAlpha.vst3' | head -n 1)"
+          test -n "$bundle"
+          cp -R "$bundle" package/VST3/
+
+          standalone="$(find build-vst3 -type f -name 'AeylaVisualDmxStandalone' -perm -111 | head -n 1)"
+          test -n "$standalone"
+          cp "$standalone" package/Standalone/
+          chmod +x package/Standalone/AeylaVisualDmxStandalone
+
+          cat > package/RUN_STANDALONE_ALPHA.command <<'SCRIPT'
+          #!/bin/bash
+          cd "$(dirname "$0")"
+          ./Standalone/AeylaVisualDmxStandalone
+          SCRIPT
+          chmod +x package/RUN_STANDALONE_ALPHA.command
+
+          cat > package/LEEME_PRUEBA_MACOS.txt <<'README'
+          AEYLA Visual DMX Alpha - macOS test package
+
+          1. Open Terminal and run RUN_STANDALONE_ALPHA.command.
+          2. Type p then Return to submit the diagnostic MIDI pattern.
+          3. Type a for the diagnostic arm gate, b for blackout and s for status.
+          4. Type q for safe shutdown.
+          5. Copy VST3/AeylaVisualDmxAlpha.vst3 to ~/Library/Audio/Plug-Ins/VST3 and perform a deep VST3 rescan in Ableton Live 12.
+
+          Honest boundary: this unsigned alpha does not transmit Art-Net or USB-DMX. It validates the executable, VST3 host adapter, MIDI event ingress, persistence and shared safety behavior.
+          README
+
+          mkdir -p artifacts
+          tar -czf artifacts/AEYLA-Visual-DMX-Alpha-macOS-VST3-and-Standalone.tar.gz -C package .
+          file package/VST3/AeylaVisualDmxAlpha.vst3/Contents/MacOS/*
+          file package/Standalone/AeylaVisualDmxStandalone
+          find package -maxdepth 5 -type f -print
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-Visual-DMX-Alpha-macOS-VST3-and-Standalone
+          path: artifacts/**
+          if-no-files-found: error
