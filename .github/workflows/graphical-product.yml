@@ -13,6 +13,7 @@ on:
 
 env:
   IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
 
 jobs:
   windows-graphical:
@@ -20,14 +21,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone pinned iPlug2 recursively
+      - name: Clone pinned graphical framework and VST3 SDK
         shell: pwsh
         run: |
           git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
           git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
-          git -C external/iPlug2 submodule update --init --recursive
-          if (-not (Test-Path "external/iPlug2/Dependencies/IPlug/VST3_SDK/pluginterfaces")) {
-            throw "Pinned iPlug2 VST3 SDK submodule is missing"
+
+          $sdkPath = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdkPath) { Remove-Item -Recurse -Force $sdkPath }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdkPath
+          git -C $sdkPath checkout $env:VST3SDK_COMMIT
+          git -C $sdkPath submodule update --init --recursive
+
+          if (-not (Test-Path "$sdkPath/pluginterfaces")) {
+            throw "Pinned Steinberg VST3 SDK is missing"
           }
 
       - name: Configure graphical product
@@ -95,12 +102,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone pinned iPlug2 recursively
+      - name: Clone pinned graphical framework and VST3 SDK
         run: |
           git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
           git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
-          git -C external/iPlug2 submodule update --init --recursive
-          test -d external/iPlug2/Dependencies/IPlug/VST3_SDK/pluginterfaces
+
+          sdk_path="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk_path"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk_path"
+          git -C "$sdk_path" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk_path" submodule update --init --recursive
+
+          test -d "$sdk_path/pluginterfaces"
 
       - name: Configure graphical universal product
         run: >-
