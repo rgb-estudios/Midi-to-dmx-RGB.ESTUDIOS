@@ -1,7 +1,7 @@
 #define PLUG_NAME "AEYLA Visual DMX"
 #define PLUG_MFR "RGBEstudios"
-#define PLUG_VERSION_HEX 0x00020100
-#define PLUG_VERSION_STR "0.2.1-alpha.2"
+#define PLUG_VERSION_HEX 0x00020103
+#define PLUG_VERSION_STR "0.2.1-alpha.3"
 #define PLUG_UNIQUE_ID 'AyVD'
 #define PLUG_MFR_ID 'RGBE'
 #define PLUG_URL_STR "https://github.com/rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS"
