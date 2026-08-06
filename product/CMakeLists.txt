@@ -26,8 +26,37 @@ endif()
 
 if(NOT EXISTS "${IPLUG2_DIR}/Dependencies/IPlug/VST3_SDK/pluginterfaces")
   message(FATAL_ERROR
-    "The pinned iPlug2 checkout is missing its VST3 SDK submodule. "
-    "Clone iPlug2 recursively or run git submodule update --init --recursive.")
+    "The pinned iPlug2 checkout is missing its VST3 SDK. "
+    "Install the pinned Steinberg SDK at Dependencies/IPlug/VST3_SDK.")
+endif()
+
+# Compatibility patch for the pinned iPlug2 proof revision. IColor is a simple
+# four-integer value type, but its constructor is not marked constexpr. The
+# AEYLA visual design system uses compile-time palette constants. Apply the
+# minimal semantically-safe qualifier only when the exact upstream line exists;
+# fail loudly if upstream changes instead of mutating an unknown source tree.
+set(_aeyla_iplug_color_header "${IPLUG2_DIR}/IGraphics/IGraphicsStructs.h")
+file(READ "${_aeyla_iplug_color_header}" _aeyla_iplug_color_source)
+set(_aeyla_iplug_color_old
+  "  IColor(int a = 255, int r = 0, int g = 0, int b = 0) : A(a), R(r), G(g), B(b) {}")
+set(_aeyla_iplug_color_new
+  "  constexpr IColor(int a = 255, int r = 0, int g = 0, int b = 0) : A(a), R(r), G(g), B(b) {}")
+
+string(FIND "${_aeyla_iplug_color_source}" "${_aeyla_iplug_color_new}" _aeyla_color_already_patched)
+if(_aeyla_color_already_patched EQUAL -1)
+  string(FIND "${_aeyla_iplug_color_source}" "${_aeyla_iplug_color_old}" _aeyla_color_patch_point)
+  if(_aeyla_color_patch_point EQUAL -1)
+    message(FATAL_ERROR
+      "Pinned iPlug2 IColor constructor changed; review the compatibility patch before building.")
+  endif()
+
+  string(REPLACE
+    "${_aeyla_iplug_color_old}"
+    "${_aeyla_iplug_color_new}"
+    _aeyla_iplug_color_source
+    "${_aeyla_iplug_color_source}")
+  file(WRITE "${_aeyla_iplug_color_header}" "${_aeyla_iplug_color_source}")
+  message(STATUS "Applied AEYLA constexpr IColor compatibility patch to pinned iPlug2")
 endif()
 
 set(IPLUG_DEPLOY_PLUGINS OFF CACHE BOOL "Do not deploy CI proof artifacts" FORCE)
