@@ -1,0 +1,122 @@
+name: graphical-pr-validation
+
+on:
+  pull_request:
+    paths:
+      - product/**
+      - src/runtime/**
+      - .github/workflows/graphical-product.yml
+      - .github/workflows/graphical-pr-validation.yml
+  workflow_dispatch:
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  windows-native-window:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone pinned dependencies
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdkPath = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdkPath) { Remove-Item -Recurse -Force $sdkPath }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdkPath
+          git -C $sdkPath checkout $env:VST3SDK_COMMIT
+          git -C $sdkPath submodule update --init --recursive
+
+      - name: Require native Windows resources
+        shell: pwsh
+        run: |
+          $resource = "product/AeylaVisualDmx/resources/main.rc"
+          if (-not (Test-Path $resource)) { throw "resources/main.rc is missing" }
+          $text = Get-Content $resource -Raw
+          foreach ($required in @("IDD_DIALOG_MAIN", "IDR_MENU1", "IDR_ACCELERATOR1")) {
+            if ($text -notmatch $required) { throw "main.rc is missing $required" }
+          }
+
+      - name: Configure APP and VST3
+        shell: pwsh
+        run: >-
+          cmake -S product -B build-graphical
+          -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2"
+          -DIPLUG_DEPLOY_PLUGINS=OFF
+          -DIGRAPHICS_BACKEND=NANOVG
+
+      - name: Build APP and VST3
+        run: cmake --build build-graphical --config Release --target AeylaVisualDmx-app AeylaVisualDmx-vst3
+
+      - name: Open and capture native graphical window
+        shell: pwsh
+        run: |
+          $app = Get-ChildItem build-graphical -Recurse -File -Filter "AeylaVisualDmx.exe" | Select-Object -First 1
+          if (-not $app) { throw "AeylaVisualDmx.exe was not produced" }
+          $smoke = Join-Path (Resolve-Path build-graphical) "AEYLA_UI_SMOKE.png"
+          $process = Start-Process -FilePath $app.FullName -ArgumentList @("--no-io", "--screenshot", $smoke) -PassThru
+          if (-not $process.WaitForExit(45000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "APP timed out without completing native-window capture"
+          }
+          if ($process.ExitCode -ne 0) { throw "APP exited with code $($process.ExitCode)" }
+          if (-not (Test-Path $smoke)) { throw "APP created no screenshot/native window" }
+          if ((Get-Item $smoke).Length -lt 10000) { throw "UI screenshot is too small" }
+          Add-Type -AssemblyName System.Drawing
+          $image = [System.Drawing.Image]::FromFile($smoke)
+          try {
+            if ($image.Width -lt 900 -or $image.Height -lt 600) {
+              throw "UI dimensions are too small: $($image.Width)x$($image.Height)"
+            }
+            Write-Host "Native AEYLA UI rendered: $($image.Width)x$($image.Height)"
+          } finally { $image.Dispose() }
+
+      - name: Package corrected evaluation build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package/Standalone, package/VST3, package/Evidence | Out-Null
+          $app = Get-ChildItem build-graphical -Recurse -File -Filter "AeylaVisualDmx.exe" | Select-Object -First 1
+          $vst3 = Get-ChildItem build-graphical -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          Copy-Item -Force $app.FullName package/Standalone/
+          Copy-Item -Recurse -Force $vst3.FullName package/VST3/
+          Copy-Item -Force build-graphical/AEYLA_UI_SMOKE.png package/Evidence/
+
+          @'
+          @echo off
+          cd /d "%~dp0"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -Path '%~dp0' -Recurse -File | Unblock-File -ErrorAction SilentlyContinue"
+          start "AEYLA Visual DMX" "%~dp0Standalone\AeylaVisualDmx.exe" --no-io
+          '@ | Set-Content -Encoding ASCII package/ABRIR_AEYLA_VISUAL_DMX.cmd
+
+          @'
+          @echo off
+          setlocal
+          set "SOURCE=%~dp0VST3\AeylaVisualDmx.vst3"
+          set "DEST=C:\Program Files\Common Files\VST3\AeylaVisualDmx.vst3"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','if (Test-Path ''%DEST%'') { Remove-Item -Recurse -Force ''%DEST%'' }; Copy-Item -Recurse -Force ''%SOURCE%'' ''%DEST%'''"
+          pause
+          '@ | Set-Content -Encoding ASCII package/INSTALAR_VST3_AEYLA.cmd
+
+          @'
+          AEYLA Visual DMX 0.2.1-alpha.3
+          Correccion: recurso nativo de ventana Windows IDD_DIALOG_MAIN incluido.
+          Evidence/AEYLA_UI_SMOKE.png fue generada por el ejecutable en CI.
+          Esta Alpha no transmite DMX y no es show-ready.
+          '@ | Set-Content -Encoding UTF8 package/LEEME_PRIMERO.txt
+
+          $appHash = (Get-FileHash package/Standalone/AeylaVisualDmx.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $vst3Binary = Get-ChildItem package/VST3 -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $vst3Hash = (Get-FileHash $vst3Binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$appHash  Standalone/AeylaVisualDmx.exe"
+            "$vst3Hash  VST3/AeylaVisualDmx.vst3/Contents/x86_64-win/AeylaVisualDmx.vst3"
+          ) | Set-Content -Encoding ASCII package/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-Visual-DMX-0.2.1-alpha.3-Windows-Verified-Window-APP-and-VST3
+          path: package/**
+          if-no-files-found: error
