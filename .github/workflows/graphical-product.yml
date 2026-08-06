@@ -37,6 +37,20 @@ jobs:
             throw "Pinned Steinberg VST3 SDK is missing"
           }
 
+      - name: Verify Windows standalone resources
+        shell: pwsh
+        run: |
+          $resource = "product/AeylaVisualDmx/resources/main.rc"
+          if (-not (Test-Path $resource)) {
+            throw "Windows APP resource file is missing; iPlug2 cannot create IDD_DIALOG_MAIN"
+          }
+          $text = Get-Content $resource -Raw
+          foreach ($required in @("IDD_DIALOG_MAIN", "IDR_MENU1", "IDR_ACCELERATOR1")) {
+            if ($text -notmatch $required) {
+              throw "Windows APP resource is missing $required"
+            }
+          }
+
       - name: Configure graphical product
         shell: pwsh
         run: >-
@@ -64,13 +78,23 @@ jobs:
             throw "Graphical APP exited with code $($process.ExitCode)"
           }
           if (-not (Test-Path $smoke)) {
-            throw "Graphical APP did not produce the expected UI screenshot"
+            throw "Graphical APP did not create a native window and render the expected screenshot"
           }
           if ((Get-Item $smoke).Length -lt 10000) {
             throw "Graphical APP screenshot is unexpectedly small"
           }
-          Write-Host "UI smoke screenshot: $smoke"
-          Get-Item $smoke
+
+          Add-Type -AssemblyName System.Drawing
+          $image = [System.Drawing.Image]::FromFile($smoke)
+          try {
+            if ($image.Width -lt 900 -or $image.Height -lt 600) {
+              throw "Rendered UI dimensions are too small: $($image.Width)x$($image.Height)"
+            }
+            Write-Host "Rendered native UI: $($image.Width)x$($image.Height), $((Get-Item $smoke).Length) bytes"
+          }
+          finally {
+            $image.Dispose()
+          }
 
       - name: Collect Windows graphical package
         shell: pwsh
@@ -98,7 +122,7 @@ jobs:
           $log = Join-Path $root "AEYLA_DIAGNOSTICO.txt"
 
           @(
-            "AEYLA Visual DMX 0.2.1-alpha.2 startup diagnostic"
+            "AEYLA Visual DMX 0.2.1-alpha.3 startup diagnostic"
             "Timestamp: $(Get-Date -Format o)"
             "Windows: $([Environment]::OSVersion.VersionString)"
             "Executable: $exe"
@@ -113,26 +137,43 @@ jobs:
             "GPU:" | Add-Content $log
             ($gpu | Format-Table -AutoSize | Out-String) | Add-Content $log
 
+            Get-Process AeylaVisualDmx -ErrorAction SilentlyContinue |
+              Stop-Process -Force -ErrorAction SilentlyContinue
+
             $process = Start-Process -FilePath $exe -ArgumentList "--no-io" -PassThru -ErrorAction Stop
-            Start-Sleep -Seconds 8
+            $windowFound = $false
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              Start-Sleep -Milliseconds 500
+              $process.Refresh()
+              if ($process.HasExited) { break }
+              if ($process.MainWindowHandle -ne 0) {
+                $windowFound = $true
+                break
+              }
+            }
 
             if ($process.HasExited) {
               "RESULT: FAILED - process exited during startup" | Add-Content $log
               "Exit code: $($process.ExitCode)" | Add-Content $log
-
-              "Recent Windows Application errors:" | Add-Content $log
-              Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-5)} -ErrorAction SilentlyContinue |
-                Where-Object { $_.LevelDisplayName -eq 'Error' -or $_.Message -match 'AeylaVisualDmx' } |
-                Select-Object -First 15 TimeCreated, ProviderName, Id, LevelDisplayName, Message |
-                Format-List | Out-String | Add-Content $log
-
-              Start-Process notepad.exe $log
-              exit 1
+            }
+            elseif (-not $windowFound) {
+              "RESULT: FAILED - process remained alive but created no native window in 15 seconds" | Add-Content $log
+              "Process ID: $($process.Id)" | Add-Content $log
+            }
+            else {
+              "RESULT: PASS - native window created" | Add-Content $log
+              "Process ID: $($process.Id)" | Add-Content $log
+              "MainWindowHandle: $($process.MainWindowHandle)" | Add-Content $log
+              exit 0
             }
 
-            "RESULT: PASS - graphical process remained running after 8 seconds" | Add-Content $log
-            "Process ID: $($process.Id)" | Add-Content $log
-            exit 0
+            "Recent Windows Application errors:" | Add-Content $log
+            Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddMinutes(-5)} -ErrorAction SilentlyContinue |
+              Where-Object { $_.LevelDisplayName -eq 'Error' -or $_.Message -match 'AeylaVisualDmx' } |
+              Select-Object -First 15 TimeCreated, ProviderName, Id, LevelDisplayName, Message |
+              Format-List | Out-String | Add-Content $log
+            Start-Process notepad.exe $log
+            exit 1
           }
           catch {
             "RESULT: FAILED - launcher exception" | Add-Content $log
@@ -148,7 +189,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ABRIR_Y_DIAGNOSTICAR_AEYLA.ps1"
           if errorlevel 1 (
             echo.
-            echo AEYLA no pudo mantenerse abierta. Revisa AEYLA_DIAGNOSTICO.txt.
+            echo AEYLA no pudo crear su ventana. Revisa AEYLA_DIAGNOSTICO.txt.
             pause
           )
           '@ | Set-Content -Encoding ASCII package/ABRIR_AEYLA_VISUAL_DMX.cmd
@@ -171,18 +212,19 @@ jobs:
           '@ | Set-Content -Encoding ASCII package/INSTALAR_VST3_AEYLA.cmd
 
           @'
-          AEYLA VISUAL DMX 0.2.1-alpha.2 - WINDOWS
+          AEYLA VISUAL DMX 0.2.1-alpha.3 - WINDOWS
 
-          CORRECCION PRINCIPAL
-          El standalone ya no inicializa DirectSound/ASIO. AEYLA es una herramienta
-          de iluminacion y su interfaz debe abrir sin depender de drivers de audio.
+          CORRECCIONES
+          - El standalone incluye ahora el recurso nativo IDD_DIALOG_MAIN que Windows
+            necesita para crear la ventana principal.
+          - La aplicacion no depende de DirectSound/ASIO para mostrar la interfaz.
+          - CI abre la aplicacion y exige una captura renderizada antes de empaquetar.
 
           PRUEBA
-          1. Descomprime TODO el ZIP en una carpeta local.
+          1. Descomprime TODO el ZIP en una carpeta local nueva.
           2. Ejecuta ABRIR_AEYLA_VISUAL_DMX.cmd.
-          3. El lanzador desbloquea los archivos y confirma que el proceso permanezca abierto.
-          4. Si falla, se crea AEYLA_DIAGNOSTICO.txt y se abre automaticamente.
-          5. Evidence/AEYLA_UI_SMOKE.png es la captura generada por el propio ejecutable en CI.
+          3. Evidence/AEYLA_UI_SMOKE.png es la captura generada por el propio ejecutable.
+          4. Si no aparece una ventana, adjunta AEYLA_DIAGNOSTICO.txt.
 
           VST3
           Ejecuta INSTALAR_VST3_AEYLA.cmd, abre Ableton Live y fuerza Alt + Rescan.
@@ -192,7 +234,7 @@ jobs:
           '@ | Set-Content -Encoding UTF8 package/LEEME_PRIMERO.txt
 
           @'
-          0.2.1-alpha.2
+          0.2.1-alpha.3
           Commit: ${{ github.sha }}
           iPlug2: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
           VST3 SDK: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
@@ -210,7 +252,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AEYLA-Visual-DMX-0.2.1-Windows-Startup-Fix-APP-and-VST3
+          name: AEYLA-Visual-DMX-0.2.1-alpha.3-Windows-Window-Fix-APP-and-VST3
           path: package/**
           if-no-files-found: error
 
@@ -229,7 +271,6 @@ jobs:
           git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk_path"
           git -C "$sdk_path" checkout "$VST3SDK_COMMIT"
           git -C "$sdk_path" submodule update --init --recursive
-
           test -d "$sdk_path/pluginterfaces"
 
       - name: Configure graphical universal product
@@ -274,17 +315,17 @@ jobs:
           file package/VST3/AeylaVisualDmx.vst3/Contents/MacOS/*
 
           cat > package/LEEME_PRUEBA_GRAFICA.txt <<'README'
-          AEYLA VISUAL DMX 0.2.1 GRAPHICAL ALPHA
+          AEYLA VISUAL DMX 0.2.1-alpha.3 GRAPHICAL ALPHA
 
           Open Standalone/AeylaVisualDmx.app. It uses the same graphical surface
           as the VST3. This unsigned alpha does not transmit DMX.
           README
 
           mkdir -p artifacts
-          tar -czf artifacts/AEYLA-Visual-DMX-0.2.1-macOS-Graphical-APP-and-VST3.tar.gz -C package .
+          tar -czf artifacts/AEYLA-Visual-DMX-0.2.1-alpha.3-macOS-Graphical-APP-and-VST3.tar.gz -C package .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AEYLA-Visual-DMX-0.2.1-macOS-Graphical-APP-and-VST3
+          name: AEYLA-Visual-DMX-0.2.1-alpha.3-macOS-Graphical-APP-and-VST3
           path: artifacts/**
           if-no-files-found: error
