@@ -11,16 +11,30 @@ on:
       - .github/workflows/graphical-product.yml
   workflow_dispatch:
 
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+
 jobs:
   windows-graphical:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clone pinned iPlug2 recursively
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          git -C external/iPlug2 submodule update --init --recursive
+          if (-not (Test-Path "external/iPlug2/Dependencies/IPlug/VST3_SDK/pluginterfaces")) {
+            throw "Pinned iPlug2 VST3 SDK submodule is missing"
+          }
+
       - name: Configure graphical product
         shell: pwsh
         run: >-
           cmake -S product -B build-graphical
+          -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2"
           -DIPLUG_DEPLOY_PLUGINS=OFF
           -DIGRAPHICS_BACKEND=NANOVG
 
@@ -48,6 +62,16 @@ jobs:
           '@ | Set-Content -Encoding ASCII package/ABRIR_AEYLA_VISUAL_DMX.cmd
 
           @'
+          @echo off
+          setlocal
+          set "SOURCE=%~dp0VST3\AeylaVisualDmx.vst3"
+          set "DEST=C:\Program Files\Common Files\VST3\AeylaVisualDmx.vst3"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','Copy-Item -Recurse -Force ''%SOURCE%'' ''%DEST%'''"
+          echo VST3 installation command completed.
+          pause
+          '@ | Set-Content -Encoding ASCII package/INSTALAR_VST3_AEYLA.cmd
+
+          @'
           AEYLA VISUAL DMX 0.2 GRAPHICAL ALPHA
 
           This package must open as a graphical window, not a terminal.
@@ -71,9 +95,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clone pinned iPlug2 recursively
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          git -C external/iPlug2 submodule update --init --recursive
+          test -d external/iPlug2/Dependencies/IPlug/VST3_SDK/pluginterfaces
+
       - name: Configure graphical universal product
         run: >-
           cmake -S product -B build-graphical -G Xcode
+          -DIPLUG2_DIR="${GITHUB_WORKSPACE}/external/iPlug2"
           -DIPLUG2_UNIVERSAL=ON
           -DIPLUG_DEPLOY_PLUGINS=OFF
           -DIGRAPHICS_BACKEND=NANOVG
