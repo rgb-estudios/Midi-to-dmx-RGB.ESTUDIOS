@@ -30,9 +30,6 @@ public:
 
     const IText leftText(10.0F, text, "AeylaUI", EAlign::Near, EVAlign::Middle);
     const IText centreText(10.0F, muted, "AeylaUI", EAlign::Center, EVAlign::Middle);
-    const IText rightText(10.0F,
-                          mPlug.BackendReady() ? valid : warning,
-                          "AeylaUI", EAlign::Far, EVAlign::Middle);
 
     g.DrawText(leftText,
                "ALPHA 0.3  ·  SHARED ENGINE  ·  NOT SHOW READY",
@@ -58,10 +55,8 @@ public:
     std::snprintf(state, sizeof(state), "%s  ·  %s  ·  %s  ·  %s",
                   project, backend, output, blackout);
 
-    IColor stateColor = rightText.mFGColor;
-    if(mPlug.OutputArmed())
-      stateColor = danger;
-    else if(!mPlug.ProjectValid())
+    IColor stateColor = mPlug.BackendReady() ? valid : warning;
+    if(mPlug.OutputArmed() || !mPlug.ProjectValid())
       stateColor = danger;
 
     g.DrawText(IText(10.0F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
