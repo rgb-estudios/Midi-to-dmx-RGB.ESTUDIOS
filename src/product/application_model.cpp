@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -142,6 +143,57 @@ void add_runtime_error(project::ProjectValidation& validation,
       {project::DiagnosticSeverity::error, std::move(path), std::move(message)});
 }
 
+std::set<std::string> available_look_ids(
+    const project::ProjectDocument& document) {
+  std::set<std::string> result;
+  for (const auto& look : document.looks) result.insert(look.look_id);
+  return result;
+}
+
+void append_show_validation(project::ProjectValidation& destination,
+                            const show::ShowValidation& source) {
+  for (const auto& diagnostic : source.diagnostics) {
+    const auto severity =
+        diagnostic.severity == show::ShowDiagnosticSeverity::error
+            ? project::DiagnosticSeverity::error
+            : project::DiagnosticSeverity::warning;
+    destination.diagnostics.push_back(
+        {severity, "show." + diagnostic.path, diagnostic.message});
+  }
+}
+
+project::ProjectValidation validate_runtime_bundle(
+    const project::ProjectDocument& document,
+    const show::ShowProgram& show_program) {
+  project::ProjectValidation validation =
+      project::validate_project_document(document);
+
+  for (std::size_t index = 0; index < document.fixtures.size(); ++index) {
+    if (document.fixtures[index].universe != document.output.universe) {
+      add_runtime_error(
+          validation,
+          "rig.fixtures[" + std::to_string(index) + "].universe",
+          "Alpha 0.3 supports one output universe; fixture must match output.universe");
+    }
+  }
+
+  const auto active_look = std::find_if(
+      document.looks.begin(), document.looks.end(),
+      [&](const project::LookDocument& look) {
+        return look.look_id == document.visual.active_look_id;
+      });
+  if (active_look == document.looks.end() ||
+      !source_from_name(active_look->source).has_value()) {
+    add_runtime_error(validation, "visual.activeLookId",
+                      "active look cannot be converted to a runtime source");
+  }
+
+  append_show_validation(
+      validation,
+      show::validate_show_program(show_program, available_look_ids(document)));
+  return validation;
+}
+
 }  // namespace
 
 ApplicationModel::ApplicationModel()
@@ -153,48 +205,37 @@ ApplicationModel::ApplicationModel()
   color_settings_.lime_extraction = 0.20F;
   color_settings_.uv_manual = project_.visual.uv_manual;
 
-  safety_.set_project_valid(project::validate_project_document(project_).ok());
+  const auto validation = validate_runtime_bundle(project_, show_program_);
+  safety_.set_project_valid(validation.ok());
+  performance_ready_ = show::validate_show_program_for_performance(
+      show_program_, available_look_ids(project_)).ok();
   // A simulated/null backend must not satisfy the real output-arm gate.
   safety_.set_backend_ready(false);
   rebuild();
 }
 
-project::ProjectValidation ApplicationModel::load_project_document(
-    const project::ProjectDocument& document) {
-  safety_.begin_project_reload();
-  active_executor_ = -1;
-  executor_velocity_ = 0.0F;
-
+project::ProjectValidation ApplicationModel::load_project_bundle(
+    const project::ProjectDocument& document,
+    const show::ShowProgram& show_program) {
+  // Validate everything before touching the current runtime. Failed Open must
+  // leave the currently loaded valid project+show untouched.
   project::ProjectValidation validation =
-      project::validate_project_document(document);
-  for (std::size_t index = 0; index < document.fixtures.size(); ++index) {
-    if (document.fixtures[index].universe != document.output.universe) {
-      add_runtime_error(
-          validation,
-          "rig.fixtures[" + std::to_string(index) + "].universe",
-          "Alpha 0.3 supports one output universe; fixture must match output.universe");
-    }
-  }
+      validate_runtime_bundle(document, show_program);
+  if (!validation.ok()) return validation;
 
-  auto active_look = std::find_if(
+  const auto active_look = std::find_if(
       document.looks.begin(), document.looks.end(),
       [&](const project::LookDocument& look) {
         return look.look_id == document.visual.active_look_id;
       });
-  if (active_look == document.looks.end() ||
-      !source_from_name(active_look->source).has_value()) {
-    add_runtime_error(validation, "visual.activeLookId",
-                      "active look cannot be converted to a runtime source");
-  }
 
-  if (!validation.ok()) {
-    safety_.complete_project_reload(false);
-    rebuild();
-    return validation;
-  }
+  safety_.begin_project_reload();
+  active_executor_ = -1;
+  executor_velocity_ = 0.0F;
 
   project_ = document;
   project_.output.armed = false;
+  show_program_ = show_program;
   authored_source_ = *source_from_name(active_look->source);
   color_settings_.white_extraction = project_.visual.white_extraction;
   color_settings_.amber_extraction = project_.visual.amber_extraction;
@@ -205,10 +246,17 @@ project::ProjectValidation ApplicationModel::load_project_document(
                          return fixture.enabled;
                        });
   project_dirty_ = false;
+  performance_ready_ = show::validate_show_program_for_performance(
+      show_program_, available_look_ids(project_)).ok();
 
   safety_.complete_project_reload(true);
   rebuild();
   return validation;
+}
+
+project::ProjectValidation ApplicationModel::load_project_document(
+    const project::ProjectDocument& document) {
+  return load_project_bundle(document, show::ShowProgram{});
 }
 
 project::ProjectDocument ApplicationModel::project_document_for_save(
@@ -220,6 +268,29 @@ project::ProjectDocument ApplicationModel::project_document_for_save(
   copy.visual.amber_extraction = color_settings_.amber_extraction;
   copy.visual.uv_manual = color_settings_.uv_manual;
   return copy;
+}
+
+show::ShowValidation ApplicationModel::replace_show_program(
+    const show::ShowProgram& program) {
+  const auto validation =
+      show::validate_show_program(program, available_look_ids(project_));
+  if (!validation.ok() || program == show_program_) return validation;
+
+  show_program_ = program;
+  performance_ready_ = show::validate_show_program_for_performance(
+      show_program_, available_look_ids(project_)).ok();
+  active_executor_ = -1;
+  executor_velocity_ = 0.0F;
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return validation;
+}
+
+show::ShowValidation ApplicationModel::show_performance_validation() const {
+  return show::validate_show_program_for_performance(
+      show_program_, available_look_ids(project_));
 }
 
 void ApplicationModel::mark_project_saved(std::string modified_at) {
@@ -247,6 +318,13 @@ void ApplicationModel::set_backend_ready(bool ready) {
 }
 
 bool ApplicationModel::request_arm() {
+  if (!performance_ready_) {
+    safety_.disarm(runtime::RuntimeSafetyReason::show_not_ready);
+    safety_.set_blackout(true);
+    rebuild();
+    return false;
+  }
+
   const bool armed = safety_.request_arm();
   rebuild();
   return armed;
@@ -454,10 +532,12 @@ void ApplicationModel::rebuild() {
   snapshot_.project_name = project_.name;
   snapshot_.project_valid = safety_.project_valid();
   snapshot_.project_dirty = project_dirty_;
+  snapshot_.performance_ready = performance_ready_;
   snapshot_.backend_ready = safety_.backend_ready();
   snapshot_.output_armed = safety_.output_armed();
   snapshot_.blackout = blackout;
   snapshot_.rig14 = rig14_;
+  snapshot_.song_count = show_program_.songs.size();
   snapshot_.output_universe = project_.output.universe;
   snapshot_.active_executor = active_executor_;
   snapshot_.executor_velocity = executor_velocity_;
