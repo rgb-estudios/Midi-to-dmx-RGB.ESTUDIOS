@@ -6,6 +6,7 @@
 #include "product/project_file_controller.h"
 #include "product/project_identity.h"
 #include "runtime/host_event_ingress.h"
+#include "runtime/host_transport_mailbox.h"
 #include "runtime/plugin_state.h"
 
 #include <algorithm>
@@ -243,7 +244,11 @@ private:
     mParameterUpdatePending.store(true, std::memory_order_release);
   }
 
+  // Discrete note events are bounded in the SPSC queue. Absolute transport
+  // state uses a separate latest-state mailbox so MIDI bursts can never cause
+  // Stop/Seek/Loop truth to be lost behind queued note history.
   aeyla::runtime::HostEventIngress<1024> mHostIngress{};
+  aeyla::runtime::HostTransportMailbox mHostTransport{};
   aeyla::product::ApplicationModel mModel{};
   aeyla::product::ProjectFileController mProjectFiles{mModel};
 
