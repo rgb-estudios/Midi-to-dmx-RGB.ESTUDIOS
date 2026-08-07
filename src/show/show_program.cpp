@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <string_view>
+#include <utility>
 
 namespace aeyla::show {
 namespace {
@@ -32,6 +33,14 @@ bool power_of_two(std::uint8_t value) noexcept {
 void error(ShowValidation& validation, std::string path, std::string message) {
   validation.diagnostics.push_back(
       {ShowDiagnosticSeverity::error, std::move(path), std::move(message)});
+}
+
+const SceneDefinition* find_scene(const SongProgram& song,
+                                  std::string_view scene_id) noexcept {
+  const auto found = std::find_if(
+      song.scenes.begin(), song.scenes.end(),
+      [&](const SceneDefinition& scene) { return scene.scene_id == scene_id; });
+  return found == song.scenes.end() ? nullptr : &*found;
 }
 
 void validate_song(const SongProgram& song, std::size_t song_index,
@@ -87,8 +96,12 @@ void validate_song(const SongProgram& song, std::size_t song_index,
   }
 
   std::set<std::string> clip_ids;
-  std::vector<const MidiSceneClip*> ordered;
-  ordered.reserve(song.clips.size());
+  std::map<std::pair<std::uint8_t, std::uint8_t>, std::string> midi_bindings;
+  std::vector<const MidiSceneClip*> latch_clips;
+  std::vector<const MidiSceneClip*> momentary_clips;
+  latch_clips.reserve(song.clips.size());
+  momentary_clips.reserve(song.clips.size());
+
   for (std::size_t index = 0; index < song.clips.size(); ++index) {
     const auto& clip = song.clips[index];
     const std::string path = base + ".clips[" + std::to_string(index) + "]";
@@ -96,8 +109,11 @@ void validate_song(const SongProgram& song, std::size_t song_index,
       error(validation, path + ".clipId", "clip ID must be a stable ASCII identifier");
     else if (!clip_ids.insert(clip.clip_id).second)
       error(validation, path + ".clipId", "clip ID must be unique within the song");
-    if (!scene_ids.contains(clip.scene_id))
+
+    const SceneDefinition* scene = find_scene(song, clip.scene_id);
+    if (scene == nullptr)
       error(validation, path + ".sceneId", "clip references an unknown scene");
+
     if (clip.duration_ticks == 0U)
       error(validation, path + ".durationTicks", "clip duration must be greater than zero");
     if (clip.start_tick >= song.length_ticks)
@@ -112,22 +128,48 @@ void validate_song(const SongProgram& song, std::size_t song_index,
       error(validation, path + ".velocity", "MIDI velocity must be between 1 and 127");
     if (clip.channel == 0U || clip.channel > 16U)
       error(validation, path + ".channel", "MIDI channel must be between 1 and 16");
-    ordered.push_back(&clip);
+
+    const auto key = std::make_pair(clip.channel, clip.note);
+    const auto [binding, inserted] = midi_bindings.emplace(key, clip.scene_id);
+    if (!inserted && binding->second != clip.scene_id)
+      error(validation, path + ".note",
+            "one MIDI note/channel may not address multiple scenes within a song");
+
+    if (scene != nullptr) {
+      if (scene->behavior == CueBehavior::momentary)
+        momentary_clips.push_back(&clip);
+      else
+        latch_clips.push_back(&clip);
+    }
   }
 
-  std::sort(ordered.begin(), ordered.end(), [](const MidiSceneClip* left,
-                                                const MidiSceneClip* right) {
+  std::sort(latch_clips.begin(), latch_clips.end(),
+            [](const MidiSceneClip* left, const MidiSceneClip* right) {
     if (left->start_tick != right->start_tick)
       return left->start_tick < right->start_tick;
     return left->clip_id < right->clip_id;
   });
-  for (std::size_t index = 1U; index < ordered.size(); ++index) {
-    const auto* previous = ordered[index - 1U];
-    const auto* current = ordered[index];
+  for (std::size_t index = 1U; index < latch_clips.size(); ++index) {
+    if (latch_clips[index - 1U]->start_tick == latch_clips[index]->start_tick) {
+      error(validation, base + ".clips",
+            "two latch cues may not share the same start tick");
+      break;
+    }
+  }
+
+  std::sort(momentary_clips.begin(), momentary_clips.end(),
+            [](const MidiSceneClip* left, const MidiSceneClip* right) {
+    if (left->start_tick != right->start_tick)
+      return left->start_tick < right->start_tick;
+    return left->clip_id < right->clip_id;
+  });
+  for (std::size_t index = 1U; index < momentary_clips.size(); ++index) {
+    const auto* previous = momentary_clips[index - 1U];
+    const auto* current = momentary_clips[index];
     const std::uint64_t previous_end = previous->start_tick + previous->duration_ticks;
     if (current->start_tick < previous_end) {
       error(validation, base + ".clips",
-            "Alpha 0.3 uses one deterministic scene lane; clips may touch but not overlap");
+            "momentary cue blocks may touch but may not overlap");
       break;
     }
   }
@@ -204,6 +246,110 @@ const MidiSceneClip* active_clip_at_tick(const SongProgram& song,
       return &clip;
   }
   return nullptr;
+}
+
+const SceneDefinition* resolved_scene_at_tick(const SongProgram& song,
+                                               std::uint64_t tick) noexcept {
+  if (tick >= song.length_ticks) return nullptr;
+
+  const MidiSceneClip* latest_latch = nullptr;
+  const MidiSceneClip* active_momentary = nullptr;
+
+  for (const auto& clip : song.clips) {
+    if (clip.start_tick > tick) continue;
+    const SceneDefinition* scene = find_scene(song, clip.scene_id);
+    if (scene == nullptr) continue;
+
+    if (scene->behavior == CueBehavior::momentary) {
+      if (tick - clip.start_tick < clip.duration_ticks &&
+          (active_momentary == nullptr ||
+           clip.start_tick > active_momentary->start_tick ||
+           (clip.start_tick == active_momentary->start_tick &&
+            clip.clip_id < active_momentary->clip_id))) {
+        active_momentary = &clip;
+      }
+      continue;
+    }
+
+    if (latest_latch == nullptr || clip.start_tick > latest_latch->start_tick ||
+        (clip.start_tick == latest_latch->start_tick &&
+         clip.clip_id < latest_latch->clip_id)) {
+      latest_latch = &clip;
+    }
+  }
+
+  if (active_momentary != nullptr)
+    return find_scene(song, active_momentary->scene_id);
+  if (latest_latch != nullptr)
+    return find_scene(song, latest_latch->scene_id);
+  return nullptr;
+}
+
+void CueRuntime::seek(std::uint64_t tick) noexcept {
+  tick_ = tick;
+  timeline_scene_ = resolved_scene_at_tick(song_, tick);
+  live_latch_scene_ = nullptr;
+  momentary_scene_ = nullptr;
+  momentary_note_ = 0U;
+  momentary_channel_ = 0U;
+}
+
+void CueRuntime::transport_stop() noexcept {
+  transport_running_ = false;
+  timeline_scene_ = nullptr;
+  live_latch_scene_ = nullptr;
+  momentary_scene_ = nullptr;
+  momentary_note_ = 0U;
+  momentary_channel_ = 0U;
+}
+
+const SceneDefinition* CueRuntime::scene_for_midi(
+    std::uint8_t note, std::uint8_t channel) const noexcept {
+  for (const auto& clip : song_.clips) {
+    if (clip.note == note && clip.channel == channel)
+      return find_scene(song_, clip.scene_id);
+  }
+  return nullptr;
+}
+
+void CueRuntime::note_on(std::uint8_t note, std::uint8_t velocity,
+                         std::uint8_t channel) noexcept {
+  if (velocity == 0U) {
+    note_off(note, channel);
+    return;
+  }
+
+  const SceneDefinition* scene = scene_for_midi(note, channel);
+  if (scene == nullptr) return;
+
+  if (scene->behavior == CueBehavior::momentary) {
+    momentary_scene_ = scene;
+    momentary_note_ = note;
+    momentary_channel_ = channel;
+  } else {
+    live_latch_scene_ = scene;
+  }
+}
+
+void CueRuntime::note_off(std::uint8_t note, std::uint8_t channel) noexcept {
+  if (momentary_scene_ != nullptr && momentary_note_ == note &&
+      momentary_channel_ == channel) {
+    momentary_scene_ = nullptr;
+    momentary_note_ = 0U;
+    momentary_channel_ = 0U;
+  }
+}
+
+void CueRuntime::all_notes_off() noexcept {
+  momentary_scene_ = nullptr;
+  momentary_note_ = 0U;
+  momentary_channel_ = 0U;
+}
+
+const SceneDefinition* CueRuntime::effective_scene() const noexcept {
+  if (momentary_scene_ != nullptr) return momentary_scene_;
+  if (live_latch_scene_ != nullptr) return live_latch_scene_;
+  return timeline_scene_;
 }
 
 }  // namespace aeyla::show
