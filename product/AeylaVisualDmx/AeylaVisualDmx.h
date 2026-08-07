@@ -26,6 +26,7 @@ enum EParams
 enum EControlTags
 {
   kCtrlTagMain = 100,
+  kCtrlTagRuntimeStatus,
   kNumCtrlTags
 };
 
