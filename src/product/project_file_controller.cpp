@@ -1,5 +1,6 @@
 #include "product/project_file_controller.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace aeyla::product {
@@ -30,6 +31,19 @@ std::vector<std::string> flatten(
   return result;
 }
 
+bool supported_alpha03_rig_mode(const project::ProjectDocument& document) {
+  if (document.fixtures.size() != 14U) return false;
+
+  bool rig10 = true;
+  bool rig14 = true;
+  for (std::size_t index = 0U; index < document.fixtures.size(); ++index) {
+    const bool enabled = document.fixtures[index].enabled;
+    rig10 = rig10 && (enabled == (index < 10U));
+    rig14 = rig14 && enabled;
+  }
+  return rig10 || rig14;
+}
+
 }  // namespace
 
 ProjectFileStatus ProjectFileController::new_project(
@@ -57,6 +71,13 @@ ProjectFileStatus ProjectFileController::open(
     return publish_failure(ProjectFileOperation::open,
                            "Could not open AEYLA project package",
                            flatten(loaded.diagnostics));
+  }
+
+  if (!supported_alpha03_rig_mode(*loaded.document)) {
+    return publish_failure(
+        ProjectFileOperation::open,
+        "Project package is incompatible with this runtime",
+        {"rig.fixtures: Alpha 0.3 accepts only the canonical Rig 10 or Rig 14 activation pattern"});
   }
 
   // Preflight the document in an isolated runtime. A package may be valid JSON
