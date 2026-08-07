@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
+find_package(Threads REQUIRED)
 
 # Pinned ZIP implementation for the cross-platform .aeylashow container.
 # The dependency is populated without executing its project-level CMake so it
@@ -77,9 +78,17 @@ add_library(aeyla_runtime
   src/project/project_state_store.cpp
   src/project/project_package.cpp
   src/show/show_program.cpp
+  src/output/artnet_output_worker.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
-target_link_libraries(aeyla_runtime PUBLIC aeyla_core aeyla_miniz)
+target_link_libraries(aeyla_runtime PUBLIC
+  aeyla_core
+  aeyla_miniz
+  Threads::Threads
+)
+if(WIN32)
+  target_link_libraries(aeyla_runtime PUBLIC ws2_32)
+endif()
 if(MSVC)
   target_compile_options(aeyla_runtime PRIVATE /W4 /permissive-)
 else()
@@ -106,6 +115,7 @@ aeyla_add_strict_test(aeyla_project_state_store_tests tests/test_project_state_s
 aeyla_add_strict_test(aeyla_project_package_tests tests/test_project_package.cpp)
 aeyla_add_strict_test(aeyla_project_file_controller_tests tests/test_project_file_controller.cpp)
 aeyla_add_strict_test(aeyla_show_program_tests tests/test_show_program.cpp)
+aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
 
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)
