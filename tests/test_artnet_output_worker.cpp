@@ -146,6 +146,14 @@ bool payload_is_zero(const std::vector<std::uint8_t>& packet) {
   return true;
 }
 
+bool receive_until_blackout(TestSocket socket, int maximum_packets) {
+  for (int attempt = 0; attempt < maximum_packets; ++attempt) {
+    const auto packet = receive_packet(socket);
+    if (is_artdmx(packet) && payload_is_zero(packet)) return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 int main() {
@@ -221,15 +229,7 @@ int main() {
         "worker must refresh the newly published latest frame at fixed cadence");
 
   worker.set_enabled(false);
-  bool observed_blackout = false;
-  for (int attempt = 0; attempt < 4; ++attempt) {
-    const auto packet = receive_packet(receiver.socket);
-    if (is_artdmx(packet) && payload_is_zero(packet)) {
-      observed_blackout = true;
-      break;
-    }
-  }
-  check(observed_blackout,
+  check(receive_until_blackout(receiver.socket, 6),
         "disabling output must emit a zero-DMX ArtDMX safety packet");
 
   const auto before_stop = worker.stats();
@@ -257,8 +257,10 @@ int main() {
         "re-enabled worker must resume the latest desired frame");
 
   worker.stop();
-  const auto shutdown_blackout = receive_packet(receiver.socket);
-  check(is_artdmx(shutdown_blackout) && payload_is_zero(shutdown_blackout),
+  // The UDP receive queue may still contain one or more refresh packets that
+  // were already sent before stop() requested the final blackout. Scan a small
+  // bounded number of datagrams and require the safety frame to appear.
+  check(receive_until_blackout(receiver.socket, 8),
         "stopping an enabled worker must emit a final blackout packet");
 
   const auto stopped = worker.stats();
