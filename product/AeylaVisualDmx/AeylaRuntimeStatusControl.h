@@ -102,7 +102,7 @@ public:
     if(Contains(mButtons[0], x, y))
     {
       ConfirmDiscardThen([this]() {
-        (void) mPlug.NewProjectFromUI();
+        ReportFileStatus(mPlug.NewProjectFromUI());
         SetDirty(false);
       });
       return;
@@ -120,7 +120,7 @@ public:
         PromptSaveAs();
       else
       {
-        (void) mPlug.SaveProjectFromUI();
+        ReportFileStatus(mPlug.SaveProjectFromUI());
         SetDirty(false);
       }
       return;
@@ -169,6 +169,17 @@ private:
     }
   }
 
+  void ReportFileStatus(const aeyla::product::ProjectFileStatus& status)
+  {
+    if(status.succeeded)
+      return;
+
+    std::string message = status.message;
+    if(!status.diagnostics.empty())
+      message += "\n\n" + status.diagnostics.front();
+    GetUI()->ShowMessageBox(message.c_str(), "AEYLA project error", kMB_OK);
+  }
+
   void ConfirmDiscardThen(std::function<void()> action)
   {
     if(!mPlug.ProjectDirty())
@@ -198,7 +209,7 @@ private:
         [this](const WDL_String& fileName, const WDL_String& path) {
           if(Empty(fileName))
             return;
-          (void) mPlug.OpenProjectFromUI(DialogPath(fileName, path));
+          ReportFileStatus(mPlug.OpenProjectFromUI(DialogPath(fileName, path)));
           SetDirty(false);
         });
   }
@@ -219,7 +230,7 @@ private:
           auto target = DialogPath(fileName, path);
           if(target.extension() != ".aeylashow")
             target += ".aeylashow";
-          (void) mPlug.SaveProjectAsFromUI(target);
+          ReportFileStatus(mPlug.SaveProjectAsFromUI(target));
           SetDirty(false);
         });
   }
