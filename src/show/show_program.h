@@ -8,6 +8,10 @@
 namespace aeyla::show {
 
 constexpr std::uint32_t kDefaultPpq = 960U;
+constexpr std::size_t kMaximumSongs = 15U;
+constexpr std::size_t kMaximumScenesPerSong = 2048U;
+constexpr std::size_t kMaximumClipsPerSong = 100000U;
+constexpr std::uint32_t kMaximumTransitionMs = 60000U;
 
 enum class CueBehavior : std::uint8_t {
   latch,
