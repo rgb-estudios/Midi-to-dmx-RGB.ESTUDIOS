@@ -32,19 +32,20 @@ public:
     const IText centreText(10.0F, muted, "AeylaUI", EAlign::Center, EVAlign::Middle);
 
     g.DrawText(leftText,
-               "ALPHA 0.3  ·  SHARED ENGINE  ·  NOT SHOW READY",
+               "ALPHA 0.3  ·  DOCUMENT-DRIVEN  ·  NOT SHOW READY",
                IRECT(footer.L + 16.0F, footer.T, footer.L + footer.W() * 0.38F, footer.B));
 
-    char runtime[160];
+    char runtime[192];
     std::snprintf(runtime, sizeof(runtime),
-                  "DMX GEN %llu  ·  %d NON-ZERO CH  ·  MIDI DROPS %llu",
+                  "DMX %llu  ·  %d ACTIVE CH  ·  MIDI DROP %llu  ·  STATE ERR %llu",
                   static_cast<unsigned long long>(mPlug.DmxGeneration()),
                   mPlug.DmxNonZeroChannels(),
-                  static_cast<unsigned long long>(mPlug.DroppedMidiEvents()));
+                  static_cast<unsigned long long>(mPlug.DroppedMidiEvents()),
+                  static_cast<unsigned long long>(mPlug.HostStateRestoreErrors()));
     g.DrawText(centreText, runtime,
-               IRECT(footer.L + footer.W() * 0.34F,
+               IRECT(footer.L + footer.W() * 0.31F,
                      footer.T,
-                     footer.L + footer.W() * 0.73F,
+                     footer.L + footer.W() * 0.72F,
                      footer.B));
 
     char state[180];
@@ -56,12 +57,13 @@ public:
                   project, backend, output, blackout);
 
     IColor stateColor = mPlug.BackendReady() ? valid : warning;
-    if(mPlug.OutputArmed() || !mPlug.ProjectValid())
+    if(mPlug.OutputArmed() || !mPlug.ProjectValid() ||
+       mPlug.HostStateRestoreErrors() > 0U)
       stateColor = danger;
 
     g.DrawText(IText(10.0F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
                state,
-               IRECT(footer.L + footer.W() * 0.68F, footer.T,
+               IRECT(footer.L + footer.W() * 0.67F, footer.T,
                      footer.R - 16.0F, footer.B));
   }
 
