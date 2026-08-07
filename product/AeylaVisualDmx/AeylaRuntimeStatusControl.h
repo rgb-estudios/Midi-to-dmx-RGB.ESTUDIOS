@@ -94,6 +94,17 @@ public:
                      footer.R - 14.0F, footer.B));
   }
 
+  bool IsHit(float x, float y) const override
+  {
+    // This control draws the runtime/file footer but its draw RECT spans the
+    // complete editor. iPlug2 searches controls from front to back, so using
+    // the default full-window hit test makes this overlay swallow every click
+    // intended for the main editor and executor controls underneath it.
+    // Restrict mouse ownership to the footer only; the rest must pass through.
+    const IRECT footer(mRECT.L, mRECT.B - 42.0F, mRECT.R, mRECT.B);
+    return footer.Contains(x, y);
+  }
+
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
     (void) mod;
