@@ -34,7 +34,14 @@ target_include_directories(aeyla_miniz PUBLIC
   "${aeyla_miniz_source_SOURCE_DIR}"
   "${AEYLA_MINIZ_GENERATED_DIR}"
 )
-target_compile_definitions(aeyla_miniz PUBLIC MINIZ_NO_TIME)
+# AEYLA uses only the ZIP archive API. Disabling the zlib-compatibility wrappers
+# prevents unused inline wrappers in upstream miniz.h from weakening our own
+# warnings-as-errors policy. MINIZ_NO_TIME removes host timestamps so identical
+# project documents produce deterministic package bytes.
+target_compile_definitions(aeyla_miniz PUBLIC
+  MINIZ_NO_TIME
+  MINIZ_NO_ZLIB_APIS
+)
 if(MSVC)
   target_compile_options(aeyla_miniz PRIVATE /W3)
 else()
