@@ -153,6 +153,15 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
 {
   (void) inputs;
 
+  // Publish only the newest absolute host transport snapshot. This is bounded,
+  // lock-free and contains no file/network/UI work. Lighting runtime can later
+  // reconstruct Stop/Seek/Loop from host truth without replaying audio blocks.
+  mHostTransport.publish(GetTransportIsRunning(),
+                         GetRenderingOffline(),
+                         GetSamplePos(),
+                         GetPPQPos(),
+                         GetTempo());
+
   // Silent MIDI-controlled lighting runtime: the host callback only clears the
   // advertised bus. It performs no project, graphics, DMX, network or file work.
   for(int channel = 0; channel < 2; ++channel)
@@ -177,8 +186,26 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
     event.type = status == IMidiMsg::kNoteOn && velocity > 0
                      ? aeyla::runtime::HostEventType::note_on
                      : aeyla::runtime::HostEventType::note_off;
+    // iPlug reports channels as 0..15. AEYLA's authored show contract uses
+    // conventional MIDI channels 1..16, so normalize at the wrapper boundary.
+    event.channel = static_cast<std::uint8_t>(
+        std::clamp(msg.Channel() + 1, 1, 16));
     event.note = static_cast<std::uint8_t>(std::clamp(note, 0, 127));
     event.value = static_cast<float>(std::clamp(velocity, 0, 127)) / 127.0F;
+    event.sample_offset = msg.mOffset;
+
+    const double blockSample = GetSamplePos();
+    const int nonNegativeOffset = std::max(msg.mOffset, 0);
+    const double maximumBase =
+        static_cast<double>(std::numeric_limits<std::int64_t>::max() -
+                            static_cast<std::int64_t>(nonNegativeOffset));
+    if(std::isfinite(blockSample) && blockSample >= 0.0 &&
+       blockSample <= maximumBase)
+    {
+      event.project_sample = static_cast<std::int64_t>(blockSample) +
+                             static_cast<std::int64_t>(nonNegativeOffset);
+    }
+
     (void) mHostIngress.try_submit(event);
   }
 }
@@ -450,6 +477,7 @@ void AeylaVisualDmx::TriggerExecutorFromUI(int executorIndex, float velocity)
 
   aeyla::runtime::HostEvent event{};
   event.type = aeyla::runtime::HostEventType::note_on;
+  event.channel = 1U;
   event.note = static_cast<std::uint8_t>(36 + executorIndex);
   event.value = std::clamp(velocity, 0.0F, 1.0F);
   mModel.handle_host_event(event);
@@ -463,6 +491,7 @@ void AeylaVisualDmx::ReleaseExecutorFromUI(int executorIndex)
 
   aeyla::runtime::HostEvent event{};
   event.type = aeyla::runtime::HostEventType::note_off;
+  event.channel = 1U;
   event.note = static_cast<std::uint8_t>(36 + executorIndex);
   event.value = 0.0F;
   mModel.handle_host_event(event);
