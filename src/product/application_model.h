@@ -6,9 +6,11 @@
 #include "project/project_document.h"
 #include "runtime/host_event.h"
 #include "runtime/runtime_safety_state.h"
+#include "show/show_program.h"
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -39,10 +41,12 @@ struct ApplicationSnapshot {
   std::string project_name;
   bool project_valid{false};
   bool project_dirty{false};
+  bool performance_ready{false};
   bool backend_ready{false};
   bool output_armed{false};
   bool blackout{true};
   bool rig14{false};
+  std::size_t song_count{0U};
   std::uint16_t output_universe{0};
   int active_executor{-1};
   float executor_velocity{0.0F};
@@ -58,6 +62,15 @@ class ApplicationModel final {
  public:
   ApplicationModel();
 
+  // Transactional project+show publication. Validation is pure: on failure the
+  // currently loaded valid runtime remains untouched. On success the complete
+  // bundle is published disarmed + blackout as one state transition.
+  project::ProjectValidation load_project_bundle(
+      const project::ProjectDocument& document,
+      const show::ShowProgram& show_program);
+
+  // Compatibility path for project-only callers/new projects. It intentionally
+  // publishes an empty authoring show, which is saveable but not show-ready.
   project::ProjectValidation load_project_document(
       const project::ProjectDocument& document);
 
@@ -65,8 +78,21 @@ class ApplicationModel final {
     return project_;
   }
 
+  [[nodiscard]] const show::ShowProgram& show_program() const noexcept {
+    return show_program_;
+  }
+
   [[nodiscard]] project::ProjectDocument project_document_for_save(
       std::string modified_at) const;
+  [[nodiscard]] show::ShowProgram show_program_for_save() const {
+    return show_program_;
+  }
+
+  // Authoring replacement validates against the current project's Look IDs.
+  // A successful replacement forces output safe because show semantics changed.
+  show::ShowValidation replace_show_program(const show::ShowProgram& program);
+  [[nodiscard]] show::ShowValidation show_performance_validation() const;
+
   void mark_project_saved(std::string modified_at);
   void mark_project_unsaved() {
     project_dirty_ = true;
@@ -110,11 +136,13 @@ class ApplicationModel final {
 
   runtime::RuntimeSafetyState safety_{};
   project::ProjectDocument project_{};
+  show::ShowProgram show_program_{};
   ApplicationSnapshot snapshot_{};
   ColorTransformSettings color_settings_{};
   VisualSource authored_source_{VisualSource::gradient};
   bool rig14_{false};
   bool project_dirty_{true};
+  bool performance_ready_{false};
   float phase_{0.0F};
   float executor_velocity_{0.0F};
   int active_executor_{-1};
