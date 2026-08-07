@@ -76,6 +76,7 @@ add_library(aeyla_runtime
   src/project/project_document.cpp
   src/project/project_state_store.cpp
   src/project/project_package.cpp
+  src/show/show_program.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
 target_link_libraries(aeyla_runtime PUBLIC aeyla_core aeyla_miniz)
@@ -104,6 +105,7 @@ aeyla_add_strict_test(aeyla_project_document_tests tests/test_project_document.c
 aeyla_add_strict_test(aeyla_project_state_store_tests tests/test_project_state_store.cpp)
 aeyla_add_strict_test(aeyla_project_package_tests tests/test_project_package.cpp)
 aeyla_add_strict_test(aeyla_project_file_controller_tests tests/test_project_file_controller.cpp)
+aeyla_add_strict_test(aeyla_show_program_tests tests/test_show_program.cpp)
 
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)
