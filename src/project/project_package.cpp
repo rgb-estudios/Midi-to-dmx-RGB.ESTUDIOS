@@ -253,7 +253,7 @@ ProjectPackageLoadResult load_bytes(
       return result;
     }
 
-    const std::string name = stat.m_filename == nullptr ? "" : stat.m_filename;
+    const std::string name(stat.m_filename);
     if (name == kProjectEntry) {
       if (project_index.has_value()) {
         add(result.diagnostics, "validate-entry", name,
@@ -411,8 +411,7 @@ std::optional<std::vector<std::uint8_t>> build_archive(
   void* heap = nullptr;
   std::size_t heap_size = 0U;
   if (!mz_zip_writer_finalize_heap_archive(&archive, &heap, &heap_size)) {
-    add(diagnostics, "finalize-archive", source_location::current().function_name(),
-        zip_error(archive));
+    add(diagnostics, "finalize-archive", "<generated>", zip_error(archive));
     (void) mz_zip_writer_end(&archive);
     return std::nullopt;
   }
