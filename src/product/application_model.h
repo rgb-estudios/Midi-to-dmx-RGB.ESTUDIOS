@@ -53,11 +53,6 @@ struct ApplicationSnapshot {
   std::vector<std::string> warnings;
 };
 
-// Product-owned document/runtime state shared by standalone and VST3 adapters.
-// It performs no file, socket, USB, media or UI work and must never be called
-// directly from an audio callback. Host callbacks submit compact HostEvent
-// values to a bounded ingress; the non-realtime product thread drains them into
-// this model.
 class ApplicationModel final {
  public:
   ApplicationModel();
@@ -72,6 +67,7 @@ class ApplicationModel final {
   [[nodiscard]] project::ProjectDocument project_document_for_save(
       std::string modified_at) const;
   void mark_project_saved(std::string modified_at);
+  void mark_project_unsaved();
 
   void set_project_valid(bool valid);
   void set_project_name(std::string name);
