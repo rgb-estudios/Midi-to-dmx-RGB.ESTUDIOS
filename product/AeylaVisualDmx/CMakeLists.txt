@@ -21,6 +21,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/core/color_transform.cpp
     ../../src/core/dmx_compiler.cpp
     ../../src/core/rig.cpp
+    ../../src/runtime/plugin_state.cpp
     ../../src/runtime/runtime_safety_state.cpp
     ../../src/project/project_document.cpp
     ../../src/product/application_model.cpp
