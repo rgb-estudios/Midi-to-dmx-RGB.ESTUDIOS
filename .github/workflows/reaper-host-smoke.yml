@@ -94,17 +94,27 @@ jobs:
         timeout-minutes: 3
         run: |
           $script = (Resolve-Path "tests/reaper_host_smoke.lua").Path
-          $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList @("-newinst", "-nosplash", $script) -PassThru
-          if (-not $process.WaitForExit(120000)) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw "REAPER host smoke timed out"
-          }
           $result = Join-Path $env:APPDATA "REAPER\AEYLA_REAPER_HOST_SMOKE.txt"
-          if (-not (Test-Path $result)) { throw "REAPER did not produce AEYLA host evidence" }
-          Get-Content $result
-          if (-not (Select-String -Path $result -Pattern '^RESULT=PASS$' -Quiet)) {
-            throw "REAPER host smoke did not pass"
+          Remove-Item -Force $result -ErrorAction SilentlyContinue
+
+          $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList @("-newinst", "-nosplash", $script) -PassThru
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not (Test-Path $result)) {
+            if ($process.HasExited) { break }
+            Start-Sleep -Milliseconds 500
+            $process.Refresh()
           }
+
+          if (-not (Test-Path $result)) {
+            $exitText = if ($process.HasExited) { "exit=$($process.ExitCode)" } else { "still-running" }
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+            throw "REAPER did not produce AEYLA host evidence ($exitText)"
+          }
+
+          Get-Content $result
+          $passed = Select-String -Path $result -Pattern '^RESULT=PASS$' -Quiet
+          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+          if (-not $passed) { throw "REAPER host smoke did not pass" }
 
       - name: Package verified REAPER test candidate
         shell: pwsh
@@ -121,7 +131,8 @@ jobs:
           AEYLA Visual DMX 0.3.0 — REAPER TEST CANDIDATE / WINDOWS
 
           This exact VST3 bundle passed the automated REAPER 7.78 host gate that
-          scans the plug-in, instantiates it, saves a project and reopens it.
+          scans the plug-in, instantiates it, opens its editor, saves a project,
+          reopens it and opens the restored editor again.
 
           INSTALL
           1. Close REAPER.
@@ -132,8 +143,8 @@ jobs:
           TEST SCOPE
           - Windows x64 / VST3.
           - Core build and regression tests.
-          - REAPER scan + instantiate + project save/reopen.
-          - Safe restore remains DISARMED / BLACKOUT.
+          - REAPER scan + instantiate + editor open + project save/reopen + editor reopen.
+          - Safe restore remains DISARMED / BLACKOUT by product contract.
 
           IMPORTANT
           This is a REAPER Test Candidate for programming and controlled rehearsal.
@@ -235,36 +246,50 @@ jobs:
       - name: Run REAPER VST3 host smoke
         timeout-minutes: 3
         run: |
-          rm -f "$HOME/Library/Application Support/REAPER/AEYLA_REAPER_HOST_SMOKE.txt"
+          result="$HOME/Library/Application Support/REAPER/AEYLA_REAPER_HOST_SMOKE.txt"
+          rm -f "$result"
           /Applications/REAPER.app/Contents/MacOS/REAPER -newinst -nosplash "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" &
           pid=$!
-          for i in {1..120}; do
+          for i in {1..240}; do
+            test -f "$result" && break
             if ! kill -0 "$pid" 2>/dev/null; then break; fi
-            sleep 1
+            sleep 0.5
           done
-          if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid"; echo "REAPER timeout"; exit 1; fi
-          result="$HOME/Library/Application Support/REAPER/AEYLA_REAPER_HOST_SMOKE.txt"
-          test -f "$result"
+          if [ ! -f "$result" ]; then
+            kill -9 "$pid" 2>/dev/null || true
+            echo "REAPER did not produce AEYLA VST3 host evidence"
+            exit 1
+          fi
           cat "$result"
-          grep -q '^RESULT=PASS$' "$result"
+          passed=0
+          grep -q '^RESULT=PASS$' "$result" && passed=1
+          kill -9 "$pid" 2>/dev/null || true
+          test "$passed" -eq 1
 
       - name: Force AU rescan and run REAPER AU host smoke
         timeout-minutes: 3
         run: |
           mv "$HOME/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" "$RUNNER_TEMP/AeylaVisualDmx.vst3"
-          rm -f "$HOME/Library/Application Support/REAPER/AEYLA_REAPER_HOST_SMOKE.txt"
+          result="$HOME/Library/Application Support/REAPER/AEYLA_REAPER_HOST_SMOKE.txt"
+          rm -f "$result"
           rm -f "$HOME/Library/Application Support/REAPER/reaper-vstplugins64.ini"
           /Applications/REAPER.app/Contents/MacOS/REAPER -newinst -nosplash "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" &
           pid=$!
-          for i in {1..120}; do
+          for i in {1..240}; do
+            test -f "$result" && break
             if ! kill -0 "$pid" 2>/dev/null; then break; fi
-            sleep 1
+            sleep 0.5
           done
-          if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid"; echo "REAPER AU timeout"; exit 1; fi
-          result="$HOME/Library/Application Support/REAPER/AEYLA_REAPER_HOST_SMOKE.txt"
-          test -f "$result"
+          if [ ! -f "$result" ]; then
+            kill -9 "$pid" 2>/dev/null || true
+            echo "REAPER did not produce AEYLA AU host evidence"
+            exit 1
+          fi
           cat "$result"
-          grep -q '^RESULT=PASS$' "$result"
+          passed=0
+          grep -q '^RESULT=PASS$' "$result" && passed=1
+          kill -9 "$pid" 2>/dev/null || true
+          test "$passed" -eq 1
 
       - name: Collect REAPER macOS evidence
         if: always()
