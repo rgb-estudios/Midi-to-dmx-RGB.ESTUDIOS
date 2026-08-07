@@ -36,6 +36,15 @@ iplug_add_plugin(${PROJECT_NAME}
     IGRAPHICS
 )
 
+# iPlug2's Windows APP/VST3 targets use the static MSVC runtime. The ZIP
+# library must use the identical CRT or its stdio imports resolve against the
+# dynamic UCRT and fail at link/load time. Keep this target-local so Linux and
+# macOS builds remain unchanged.
+if(MSVC)
+  set_property(TARGET aeyla_product_miniz PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 foreach(target_name AeylaVisualDmx-app AeylaVisualDmx-vst3)
   if(TARGET ${target_name})
     target_include_directories(${target_name} PRIVATE
