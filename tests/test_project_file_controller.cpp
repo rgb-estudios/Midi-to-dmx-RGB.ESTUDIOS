@@ -110,6 +110,7 @@ int main() {
             reopened_model.project_document().visual.white_extraction == 0.77F,
         "Open must restore authored visual state from the package");
 
+  const std::string current_project_id = reopened_model.snapshot().project_id;
   const auto invalid = directory / "invalid.aeylashow";
   {
     std::ofstream output(invalid, std::ios::binary | std::ios::trunc);
@@ -118,8 +119,30 @@ int main() {
   const auto rejected = reopened.open(invalid);
   check(!rejected.succeeded,
         "Open must reject corrupt package without changing current path");
-  check(reopened.current_path() == package,
-        "failed Open must preserve current valid project path");
+  check(reopened.current_path() == package &&
+            reopened_model.snapshot().project_id == current_project_id &&
+            reopened_model.snapshot().project_valid,
+        "corrupt Open must preserve the current valid runtime and path");
+
+  auto incompatible = aeyla::project::make_default_project_document(
+      "99999999-aaaa-4bbb-8ccc-333333333333",
+      "2026-08-07T04:15:00Z");
+  incompatible.fixtures[0].universe = 1U;
+  const auto incompatible_path = directory / "incompatible.aeylashow";
+  const auto incompatible_saved =
+      aeyla::project::save_project_package_atomic(incompatible_path, incompatible);
+  check(incompatible_saved.ok(),
+        "test fixture must be a package-valid but runtime-incompatible document");
+
+  const auto incompatible_open = reopened.open(incompatible_path);
+  check(!incompatible_open.succeeded,
+        "Open must reject a package outside Alpha 0.3 runtime scope");
+  check(reopened.current_path() == package &&
+            reopened_model.snapshot().project_id == current_project_id &&
+            reopened_model.snapshot().project_valid &&
+            reopened_model.snapshot().blackout &&
+            !reopened_model.snapshot().output_armed,
+        "runtime-incompatible Open must preserve the current safe valid show");
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
