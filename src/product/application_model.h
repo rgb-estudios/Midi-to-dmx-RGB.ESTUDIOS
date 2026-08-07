@@ -3,6 +3,7 @@
 #include "core/attributes.h"
 #include "core/color_transform.h"
 #include "core/dmx_compiler.h"
+#include "project/project_document.h"
 #include "runtime/host_event.h"
 #include "runtime/runtime_safety_state.h"
 
@@ -33,11 +34,14 @@ struct FixtureSnapshot {
 
 struct ApplicationSnapshot {
   std::uint64_t generation{0};
+  std::string project_id;
+  std::string project_name;
   bool project_valid{false};
   bool backend_ready{false};
   bool output_armed{false};
   bool blackout{true};
   bool rig14{false};
+  std::uint16_t output_universe{0};
   int active_executor{-1};
   float executor_velocity{0.0F};
   float grand_master{1.0F};
@@ -56,6 +60,13 @@ struct ApplicationSnapshot {
 class ApplicationModel final {
  public:
   ApplicationModel();
+
+  project::ProjectValidation load_project_document(
+      const project::ProjectDocument& document);
+
+  [[nodiscard]] const project::ProjectDocument& project_document() const noexcept {
+    return project_;
+  }
 
   void set_project_valid(bool valid);
   void set_backend_ready(bool ready);
@@ -83,6 +94,7 @@ class ApplicationModel final {
   void rebuild();
 
   runtime::RuntimeSafetyState safety_{};
+  project::ProjectDocument project_{};
   ApplicationSnapshot snapshot_{};
   ColorTransformSettings color_settings_{};
   VisualSource authored_source_{VisualSource::gradient};
