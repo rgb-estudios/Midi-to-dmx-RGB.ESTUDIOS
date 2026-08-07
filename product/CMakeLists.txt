@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(AeylaVisualDmxProduct VERSION 0.2.1 LANGUAGES C CXX)
+project(AeylaVisualDmxProduct VERSION 0.3.0 LANGUAGES C CXX)
 
 include(FetchContent)
 
@@ -43,6 +43,44 @@ endif()
 if(NOT EXISTS "${_aeyla_vst3_sdk_dir}/base/source/baseiids.cpp")
   message(FATAL_ERROR
     "The pinned Steinberg VST3 SDK is incomplete: base/source/baseiids.cpp is missing.")
+endif()
+
+# The product binary uses the same pinned ZIP implementation and compile-time
+# limits as the core test build. It is deliberately built here rather than
+# relying on a system package, preserving Windows/macOS parity.
+FetchContent_Declare(
+  aeyla_product_miniz_source
+  GIT_REPOSITORY https://github.com/richgel999/miniz.git
+  GIT_TAG 77d0dce8627735138c51770d1799a1ef48f2117d
+  GIT_SHALLOW FALSE
+  SOURCE_SUBDIR _aeyla_no_project_cmake
+)
+FetchContent_MakeAvailable(aeyla_product_miniz_source)
+
+set(_aeyla_miniz_generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/miniz")
+file(MAKE_DIRECTORY "${_aeyla_miniz_generated_dir}")
+file(WRITE "${_aeyla_miniz_generated_dir}/miniz_export.h"
+  "#pragma once\n#define MINIZ_EXPORT\n")
+
+add_library(aeyla_product_miniz STATIC
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz.c"
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz_zip.c"
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz_tinfl.c"
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz_tdef.c"
+)
+target_include_directories(aeyla_product_miniz PUBLIC
+  "${aeyla_product_miniz_source_SOURCE_DIR}"
+  "${_aeyla_miniz_generated_dir}"
+)
+target_compile_definitions(aeyla_product_miniz PUBLIC
+  MINIZ_NO_TIME
+  MINIZ_NO_ZLIB_APIS
+)
+if(MSVC)
+  target_compile_options(aeyla_product_miniz PRIVATE /W3)
+else()
+  target_compile_options(aeyla_product_miniz PRIVATE
+    -Wall -Wextra -Wno-unused-parameter)
 endif()
 
 # Compatibility patch for the pinned iPlug2 proof revision. IColor is a simple
