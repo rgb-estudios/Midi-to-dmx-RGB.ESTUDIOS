@@ -37,6 +37,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/product/project_file_controller.cpp
     ../../src/product/project_identity.cpp
     ../../src/show/show_program.cpp
+    ../../src/show/show_program_codec.cpp
   FORMATS
     ${AEYLA_PLUGIN_FORMATS}
   UI
