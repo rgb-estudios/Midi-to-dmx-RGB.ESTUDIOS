@@ -24,6 +24,8 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/runtime/plugin_state.cpp
     ../../src/runtime/runtime_safety_state.cpp
     ../../src/project/project_document.cpp
+    ../../src/project/project_package.cpp
+    ../../src/project/project_state_store.cpp
     ../../src/product/application_model.cpp
   FORMATS
     APP
@@ -38,6 +40,7 @@ foreach(target_name AeylaVisualDmx-app AeylaVisualDmx-vst3)
       ${CMAKE_CURRENT_SOURCE_DIR}
       ${CMAKE_CURRENT_SOURCE_DIR}/../../src
     )
+    target_link_libraries(${target_name} PRIVATE aeyla_product_miniz)
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     if(MSVC)
       target_compile_options(${target_name} PRIVATE /W4 /permissive-)
