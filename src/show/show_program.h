@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -123,9 +122,12 @@ MidiCompilation compile_song_midi(
 // Deterministic live/host-facing cue state. Timeline seek is authoritative and
 // clears manual overrides. Latch Note Off never cancels the selected cue;
 // momentary Note Off releases only the matching active override.
+//
+// The runtime owns its loaded song copy so project-vector reallocation or a
+// project reload can never leave dangling pointers in live playback state.
 class CueRuntime final {
  public:
-  explicit CueRuntime(const SongProgram& song) noexcept : song_(song) {}
+  explicit CueRuntime(const SongProgram& song) : song_(song) {}
 
   void seek(std::uint64_t tick) noexcept;
   void transport_start() noexcept { transport_running_ = true; }
@@ -155,7 +157,7 @@ class CueRuntime final {
   [[nodiscard]] const SceneDefinition* scene_for_midi(
       std::uint8_t note, std::uint8_t channel) const noexcept;
 
-  const SongProgram& song_;
+  SongProgram song_;
   const SceneDefinition* timeline_scene_{nullptr};
   const SceneDefinition* live_latch_scene_{nullptr};
   const SceneDefinition* momentary_scene_{nullptr};
