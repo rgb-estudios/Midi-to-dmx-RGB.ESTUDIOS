@@ -67,7 +67,10 @@ class ApplicationModel final {
   [[nodiscard]] project::ProjectDocument project_document_for_save(
       std::string modified_at) const;
   void mark_project_saved(std::string modified_at);
-  void mark_project_unsaved();
+  void mark_project_unsaved() {
+    project_dirty_ = true;
+    rebuild();
+  }
 
   void set_project_valid(bool valid);
   void set_project_name(std::string name);
