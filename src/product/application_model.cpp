@@ -61,6 +61,17 @@ std::optional<VisualSource> source_from_name(std::string_view name) {
   return std::nullopt;
 }
 
+std::string_view source_name(VisualSource source) {
+  switch (source) {
+    case VisualSource::solid: return "solid";
+    case VisualSource::gradient: return "gradient";
+    case VisualSource::wave: return "wave";
+    case VisualSource::noise: return "noise";
+    case VisualSource::chase: return "chase";
+  }
+  return "gradient";
+}
+
 FixtureProfile make_runtime_profile(
     const project::FixtureProfileDocument& document) {
   FixtureProfile profile;
@@ -188,15 +199,45 @@ project::ProjectValidation ApplicationModel::load_project_document(
   color_settings_.white_extraction = project_.visual.white_extraction;
   color_settings_.amber_extraction = project_.visual.amber_extraction;
   color_settings_.uv_manual = project_.visual.uv_manual;
-  rig14_ = false;
+  rig14_ = project_.fixtures.size() == 14U &&
+           std::all_of(project_.fixtures.begin(), project_.fixtures.end(),
+                       [](const project::FixtureDocument& fixture) {
+                         return fixture.enabled;
+                       });
+  project_dirty_ = false;
 
   safety_.complete_project_reload(true);
   rebuild();
   return validation;
 }
 
+project::ProjectDocument ApplicationModel::project_document_for_save(
+    std::string modified_at) const {
+  project::ProjectDocument copy = project_;
+  copy.modified_at = std::move(modified_at);
+  copy.output.armed = false;
+  copy.visual.white_extraction = color_settings_.white_extraction;
+  copy.visual.amber_extraction = color_settings_.amber_extraction;
+  copy.visual.uv_manual = color_settings_.uv_manual;
+  return copy;
+}
+
+void ApplicationModel::mark_project_saved(std::string modified_at) {
+  project_.modified_at = std::move(modified_at);
+  project_.output.armed = false;
+  project_dirty_ = false;
+  rebuild();
+}
+
 void ApplicationModel::set_project_valid(bool valid) {
   safety_.set_project_valid(valid);
+  rebuild();
+}
+
+void ApplicationModel::set_project_name(std::string name) {
+  if (name.empty() || project_.name == name) return;
+  project_.name = std::move(name);
+  mark_dirty();
   rebuild();
 }
 
@@ -227,12 +268,43 @@ void ApplicationModel::set_grand_master(float value) {
 }
 
 void ApplicationModel::set_rig14(bool enabled) {
+  bool changed = rig14_ != enabled;
   rig14_ = enabled;
+  for (std::size_t index = 0; index < project_.fixtures.size(); ++index) {
+    const bool desired = enabled || index < 10U;
+    if (project_.fixtures[index].enabled != desired) {
+      project_.fixtures[index].enabled = desired;
+      changed = true;
+    }
+  }
+  if (changed) mark_dirty();
   rebuild();
 }
 
 void ApplicationModel::set_visual_source(VisualSource source) {
+  bool changed = authored_source_ != source;
   authored_source_ = source;
+  const auto name = source_name(source);
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.source == name;
+      });
+  if (look != project_.looks.end() &&
+      project_.visual.active_look_id != look->look_id) {
+    project_.visual.active_look_id = look->look_id;
+    changed = true;
+  }
+  if (changed) mark_dirty();
+  rebuild();
+}
+
+void ApplicationModel::set_visual_speed(float value) {
+  const float next = clamp01(value);
+  if (project_.visual.speed != next) {
+    project_.visual.speed = next;
+    mark_dirty();
+  }
   rebuild();
 }
 
@@ -242,17 +314,34 @@ void ApplicationModel::set_phase(float normalized_phase) {
 }
 
 void ApplicationModel::set_white_extraction(float value) {
-  color_settings_.white_extraction = clamp01(value);
+  const float next = clamp01(value);
+  if (color_settings_.white_extraction != next ||
+      project_.visual.white_extraction != next) {
+    color_settings_.white_extraction = next;
+    project_.visual.white_extraction = next;
+    mark_dirty();
+  }
   rebuild();
 }
 
 void ApplicationModel::set_amber_extraction(float value) {
-  color_settings_.amber_extraction = clamp01(value);
+  const float next = clamp01(value);
+  if (color_settings_.amber_extraction != next ||
+      project_.visual.amber_extraction != next) {
+    color_settings_.amber_extraction = next;
+    project_.visual.amber_extraction = next;
+    mark_dirty();
+  }
   rebuild();
 }
 
 void ApplicationModel::set_uv_manual(float value) {
-  color_settings_.uv_manual = clamp01(value);
+  const float next = clamp01(value);
+  if (color_settings_.uv_manual != next || project_.visual.uv_manual != next) {
+    color_settings_.uv_manual = next;
+    project_.visual.uv_manual = next;
+    mark_dirty();
+  }
   rebuild();
 }
 
@@ -290,6 +379,10 @@ void ApplicationModel::release_transients() {
   active_executor_ = -1;
   executor_velocity_ = 0.0F;
   rebuild();
+}
+
+void ApplicationModel::mark_dirty() noexcept {
+  project_dirty_ = true;
 }
 
 void ApplicationModel::rebuild() {
@@ -338,7 +431,7 @@ void ApplicationModel::rebuild() {
         !blackout && active_executor_ == 7 ? executor_velocity_ : 0.0F);
     if (blackout) semantic.fill(0.0F);
 
-    const bool active = rig14_ ? true : document.enabled;
+    const bool active = document.enabled;
     patched.push_back({document.logical_fixture_id, document.address, active,
                        profile_it->second, semantic});
 
@@ -360,6 +453,7 @@ void ApplicationModel::rebuild() {
   snapshot_.project_id = project_.project_id;
   snapshot_.project_name = project_.name;
   snapshot_.project_valid = safety_.project_valid();
+  snapshot_.project_dirty = project_dirty_;
   snapshot_.backend_ready = safety_.backend_ready();
   snapshot_.output_armed = safety_.output_armed();
   snapshot_.blackout = blackout;
