@@ -8,6 +8,7 @@ enum class RuntimeSafetyReason : std::uint8_t {
   none,
   operator_disarm,
   project_invalid,
+  show_not_ready,
   backend_unavailable,
   project_reload,
   event_overflow,
