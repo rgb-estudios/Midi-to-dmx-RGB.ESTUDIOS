@@ -104,7 +104,15 @@ struct MidiCompilation {
   [[nodiscard]] bool ok() const noexcept { return validation.ok(); }
 };
 
+// Authoring/storage validity. Zero songs is valid so a new rig/project can be
+// saved before musical programming begins. Maximum remains exactly 15 songs.
 ShowValidation validate_show_program(
+    const ShowProgram& program,
+    const std::set<std::string>& available_look_ids);
+
+// Show-mode/Arm preflight. Includes authoring validation and additionally
+// requires at least one fully valid song.
+ShowValidation validate_show_program_for_performance(
     const ShowProgram& program,
     const std::set<std::string>& available_look_ids);
 
