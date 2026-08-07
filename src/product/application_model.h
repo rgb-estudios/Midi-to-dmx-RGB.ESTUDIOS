@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,12 @@ struct ApplicationSnapshot {
   bool blackout{true};
   bool rig14{false};
   std::size_t song_count{0U};
+  std::size_t active_song_index{0U};
+  std::string active_song_id;
+  std::string active_song_name;
+  std::string active_scene_id;
+  std::string active_scene_name;
+  bool active_scene_momentary{false};
   std::uint16_t output_universe{0};
   int active_executor{-1};
   float executor_velocity{0.0F};
@@ -93,6 +100,11 @@ class ApplicationModel final {
   show::ShowValidation replace_show_program(const show::ShowProgram& program);
   [[nodiscard]] show::ShowValidation show_performance_validation() const;
 
+  // Active song is runtime/session state, not authored show data. Switching it
+  // never mutates `.aeylashow` but always forces output safe before playback.
+  [[nodiscard]] bool select_song(std::size_t song_index);
+  void seek_active_song_tick(std::uint64_t tick);
+
   void mark_project_saved(std::string modified_at);
   void mark_project_unsaved() {
     project_dirty_ = true;
@@ -132,20 +144,29 @@ class ApplicationModel final {
 
  private:
   void mark_dirty() noexcept;
+  void rebuild_cue_runtime();
+  void apply_cue_runtime_state();
   void rebuild();
 
   runtime::RuntimeSafetyState safety_{};
   project::ProjectDocument project_{};
   show::ShowProgram show_program_{};
+  std::optional<show::CueRuntime> cue_runtime_{};
   ApplicationSnapshot snapshot_{};
   ColorTransformSettings color_settings_{};
   VisualSource authored_source_{VisualSource::gradient};
+  std::optional<VisualSource> cue_source_override_{};
+  bool cue_scene_blackout_{false};
   bool rig14_{false};
   bool project_dirty_{true};
   bool performance_ready_{false};
   float phase_{0.0F};
   float executor_velocity_{0.0F};
   int active_executor_{-1};
+  std::size_t active_song_index_{0U};
+  std::string active_scene_id_;
+  std::string active_scene_name_;
+  bool active_scene_momentary_{false};
 };
 
 }  // namespace aeyla::product
