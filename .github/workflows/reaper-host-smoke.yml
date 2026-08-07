@@ -55,9 +55,14 @@ jobs:
           $url = "https://www.reaper.fm/files/7.x/reaper778_x64-install.exe"
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\reaper-install.exe"
           $process = Start-Process "$env:RUNNER_TEMP\reaper-install.exe" -ArgumentList "/S" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "REAPER installer failed with $($process.ExitCode)" }
+          # REAPER's Windows installer can return 1223 after a successful silent install.
+          # Treat it as provisional success only when the expected executable is actually present.
+          if ($process.ExitCode -notin @(0, 1223)) {
+            throw "REAPER installer failed with $($process.ExitCode)"
+          }
           $reaper = Get-ChildItem "C:\Program Files" -Recurse -File -Filter "reaper.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'REAPER' } | Select-Object -First 1
-          if (-not $reaper) { throw "REAPER executable not found after install" }
+          if (-not $reaper) { throw "REAPER executable not found after install (installer exit $($process.ExitCode))" }
+          Write-Host "REAPER installed at $($reaper.FullName) (installer exit $($process.ExitCode))"
           "REAPER_EXE=$($reaper.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Run REAPER host smoke
