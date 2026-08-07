@@ -78,6 +78,7 @@ add_library(aeyla_runtime
   src/project/project_state_store.cpp
   src/project/project_package.cpp
   src/show/show_program.cpp
+  src/show/show_program_codec.cpp
   src/output/artnet_output_worker.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
@@ -116,6 +117,7 @@ aeyla_add_strict_test(aeyla_project_state_store_tests tests/test_project_state_s
 aeyla_add_strict_test(aeyla_project_package_tests tests/test_project_package.cpp)
 aeyla_add_strict_test(aeyla_project_file_controller_tests tests/test_project_file_controller.cpp)
 aeyla_add_strict_test(aeyla_show_program_tests tests/test_show_program.cpp)
+aeyla_add_strict_test(aeyla_show_program_codec_tests tests/test_show_program_codec.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
 
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
