@@ -5,8 +5,85 @@
 #include "IPlug_include_in_plug_src.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <span>
+#include <string_view>
+#include <vector>
+
+namespace {
+
+int HexValue(char value)
+{
+  if(value >= '0' && value <= '9') return value - '0';
+  if(value >= 'a' && value <= 'f') return 10 + value - 'a';
+  if(value >= 'A' && value <= 'F') return 10 + value - 'A';
+  return -1;
+}
+
+bool DecodeCanonicalUuid(std::string_view text,
+                         std::array<std::uint8_t, 16>& bytes) noexcept
+{
+  if(text.size() != 36U)
+    return false;
+
+  std::size_t source = 0U;
+  for(std::size_t destination = 0U; destination < bytes.size(); ++destination)
+  {
+    if(source == 8U || source == 13U || source == 18U || source == 23U)
+    {
+      if(text[source] != '-')
+        return false;
+      ++source;
+    }
+
+    if(source + 1U >= text.size())
+      return false;
+    const int high = HexValue(text[source]);
+    const int low = HexValue(text[source + 1U]);
+    if(high < 0 || low < 0)
+      return false;
+    bytes[destination] = static_cast<std::uint8_t>((high << 4) | low);
+    source += 2U;
+  }
+  return source == text.size();
+}
+
+bool IsZero(const std::array<std::uint8_t, 16>& bytes) noexcept
+{
+  return std::all_of(bytes.begin(), bytes.end(),
+                     [](std::uint8_t value) { return value == 0U; });
+}
+
+bool IsZero(const std::array<std::uint8_t, 32>& bytes) noexcept
+{
+  return std::all_of(bytes.begin(), bytes.end(),
+                     [](std::uint8_t value) { return value == 0U; });
+}
+
+std::array<std::uint8_t, 4> EncodeLittleEndian32(std::uint32_t value) noexcept
+{
+  return {
+      static_cast<std::uint8_t>(value & 0xFFU),
+      static_cast<std::uint8_t>((value >> 8U) & 0xFFU),
+      static_cast<std::uint8_t>((value >> 16U) & 0xFFU),
+      static_cast<std::uint8_t>((value >> 24U) & 0xFFU),
+  };
+}
+
+std::uint32_t DecodeLittleEndian32(
+    const std::array<std::uint8_t, 4>& bytes) noexcept
+{
+  return static_cast<std::uint32_t>(bytes[0]) |
+         (static_cast<std::uint32_t>(bytes[1]) << 8U) |
+         (static_cast<std::uint32_t>(bytes[2]) << 16U) |
+         (static_cast<std::uint32_t>(bytes[3]) << 24U);
+}
+
+}  // namespace
 
 AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
 : Plugin(info, MakeConfig(kNumParams, kNumPresets))
@@ -26,6 +103,7 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   // disconnected diagnostic backend. Preview is available; real output cannot
   // be armed until a named backend is configured and healthy.
   SyncSnapshotToAtomics();
+  RefreshHostStateCache();
 
 #if IPLUG_EDITOR
   mMakeGraphicsFunc = [&]() {
@@ -129,8 +207,89 @@ void AeylaVisualDmx::OnParamChange(int paramIdx)
 }
 #endif
 
+bool AeylaVisualDmx::SerializeState(IByteChunk& chunk) const
+{
+  try
+  {
+    aeyla::runtime::PluginComponentState state;
+    {
+      const std::scoped_lock lock(mHostStateMutex);
+      state = mHostStateCache;
+    }
+
+    const auto encoded = aeyla::runtime::encode_plugin_component_state(state);
+    if(!encoded.ok() || encoded.bytes.size() >
+                            static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+      return false;
+
+    const auto length = EncodeLittleEndian32(
+        static_cast<std::uint32_t>(encoded.bytes.size()));
+    chunk.PutBytes(length.data(), static_cast<int>(length.size()));
+    if(!encoded.bytes.empty())
+      chunk.PutBytes(encoded.bytes.data(), static_cast<int>(encoded.bytes.size()));
+
+    // iPlug parameters follow the AEYLA component block. Output Arm is not a
+    // parameter and is deliberately absent from both state sections.
+    return SerializeParams(chunk);
+  }
+  catch(...)
+  {
+    return false;
+  }
+}
+
+int AeylaVisualDmx::UnserializeState(const IByteChunk& chunk, int startPos)
+{
+  const auto reject = [&]() {
+    mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);
+    mHostStateRestoreRejected.store(true, std::memory_order_release);
+    return -1;
+  };
+
+  try
+  {
+    std::array<std::uint8_t, 4> lengthBytes{};
+    int position = chunk.GetBytes(lengthBytes.data(),
+                                  static_cast<int>(lengthBytes.size()), startPos);
+    if(position < 0)
+      return reject();
+
+    const std::uint32_t encodedLength = DecodeLittleEndian32(lengthBytes);
+    if(encodedLength == 0U ||
+       encodedLength > aeyla::runtime::kMaxPluginStateBytes ||
+       encodedLength > static_cast<std::uint32_t>(chunk.Size() - position))
+      return reject();
+
+    std::vector<std::uint8_t> encoded(encodedLength);
+    position = chunk.GetBytes(encoded.data(), static_cast<int>(encoded.size()), position);
+    if(position < 0)
+      return reject();
+
+    const auto decoded = aeyla::runtime::decode_plugin_component_state(
+        std::span<const std::uint8_t>(encoded.data(), encoded.size()));
+    if(!decoded.ok())
+      return reject();
+
+    const int parameterEnd = UnserializeParams(chunk, position);
+    if(parameterEnd < 0)
+      return reject();
+
+    {
+      const std::scoped_lock lock(mHostStateMutex);
+      mPendingHostState = decoded.state;
+    }
+    return parameterEnd;
+  }
+  catch(...)
+  {
+    return reject();
+  }
+}
+
 void AeylaVisualDmx::OnIdle()
 {
+  ApplyPendingHostState();
+
   if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
   {
     mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
@@ -147,6 +306,7 @@ void AeylaVisualDmx::OnIdle()
   const double speed = 0.20 + (GetParam(kParamSpeed)->Value() / 100.0) * 2.80;
   mModel.set_phase(static_cast<float>(std::fmod(seconds * speed, 1.0)));
   SyncSnapshotToAtomics();
+  RefreshHostStateCache();
 
 #if IPLUG_EDITOR
   if(auto* ui = GetUI())
@@ -159,6 +319,64 @@ void AeylaVisualDmx::OnIdle()
       status->SetDirty(false);
   }
 #endif
+}
+
+void AeylaVisualDmx::ApplyPendingHostState()
+{
+  if(mHostStateRestoreRejected.exchange(false, std::memory_order_acq_rel))
+  {
+    mModel.release_transients();
+    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
+    mModel.set_blackout(true);
+    GetParam(kParamBlackout)->Set(1.0);
+    mParameterUpdatePending.store(true, std::memory_order_release);
+  }
+
+  std::optional<aeyla::runtime::PluginComponentState> pending;
+  {
+    const std::scoped_lock lock(mHostStateMutex);
+    pending = std::move(mPendingHostState);
+    mPendingHostState.reset();
+  }
+  if(!pending.has_value())
+    return;
+
+  mModel.release_transients();
+  mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
+
+  std::array<std::uint8_t, 16> currentUuid{};
+  const bool currentUuidValid = DecodeCanonicalUuid(
+      mModel.project_document().project_id, currentUuid);
+  const bool savedHasIdentity = !IsZero(pending->project_uuid);
+  const bool uuidMismatch = savedHasIdentity &&
+                            (!currentUuidValid || pending->project_uuid != currentUuid);
+  const bool schemaMismatch = pending->project_schema_major !=
+                              mModel.project_document().schema_version.major;
+
+  aeyla::runtime::PluginComponentState previousCache;
+  {
+    const std::scoped_lock lock(mHostStateMutex);
+    previousCache = mHostStateCache;
+    mHostStateCache = *pending;
+  }
+  const bool checksumMismatch = !IsZero(pending->project_checksum) &&
+                                pending->project_checksum != previousCache.project_checksum;
+
+  if(uuidMismatch || schemaMismatch || checksumMismatch)
+  {
+    // The Set identifies a project that is not the currently loaded package.
+    // Until locator-based asynchronous loading is implemented, expose an
+    // invalid project and publish only the safe frame.
+    mModel.set_project_valid(false);
+    mModel.set_blackout(true);
+    GetParam(kParamBlackout)->Set(1.0);
+    mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);
+  }
+
+  // UnserializeParams already restored host-visible preferences. Applying them
+  // is deferred here, outside the host processing callback. Output remains
+  // disarmed regardless of the saved Set.
+  mParameterUpdatePending.store(true, std::memory_order_release);
 }
 
 void AeylaVisualDmx::ApplyPendingParameterState()
@@ -187,6 +405,32 @@ void AeylaVisualDmx::DrainHostEvents()
   aeyla::runtime::HostEvent event{};
   while(mHostIngress.try_consume(event))
     mModel.handle_host_event(event);
+}
+
+void AeylaVisualDmx::RefreshHostStateCache()
+{
+  const auto& snapshot = mModel.snapshot();
+  if(!snapshot.project_valid)
+    return;
+
+  std::array<std::uint8_t, 16> uuid{};
+  if(!DecodeCanonicalUuid(snapshot.project_id, uuid))
+    return;
+
+  const std::scoped_lock lock(mHostStateMutex);
+  if(mHostStateCache.project_uuid != uuid)
+  {
+    mHostStateCache.project_checksum.fill(0U);
+    mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
+    mHostStateCache.project_locator.clear();
+  }
+  mHostStateCache.project_uuid = uuid;
+  mHostStateCache.project_schema_major =
+      mModel.project_document().schema_version.major;
+  mHostStateCache.project_schema_minor =
+      mModel.project_document().schema_version.minor;
+  mHostStateCache.grand_master = snapshot.grand_master;
+  mHostStateCache.blackout = snapshot.blackout;
 }
 
 void AeylaVisualDmx::ToggleOutputArmFromUI()
