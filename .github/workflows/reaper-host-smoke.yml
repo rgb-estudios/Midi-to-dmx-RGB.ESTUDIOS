@@ -57,45 +57,36 @@ jobs:
           $installer = "$env:RUNNER_TEMP\reaper-install.exe"
           Invoke-WebRequest -Uri $url -OutFile $installer
 
+          $process = Start-Process $installer -ArgumentList "/S" -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 1223)) {
+            throw "REAPER installer failed with $($process.ExitCode)"
+          }
+
           $expectedPaths = @(
             "C:\Program Files\REAPER (x64)\reaper.exe",
             "C:\Program Files\REAPER\reaper.exe"
           )
-          function Find-ReaperExe {
-            foreach ($candidate in $expectedPaths) {
-              if (Test-Path $candidate) { return Get-Item $candidate }
-            }
-            return $null
-          }
-
-          $process = Start-Process $installer -ArgumentList "/S" -PassThru
-          $deadline = (Get-Date).AddSeconds(60)
           $reaper = $null
-          while ((Get-Date) -lt $deadline) {
-            $reaper = Find-ReaperExe
-            if ($reaper) { break }
-            if ($process.HasExited) { break }
-            Start-Sleep -Seconds 1
-          }
-
-          if (-not $reaper) { $reaper = Find-ReaperExe }
-
-          if ($process.HasExited) {
-            $exit = $process.ExitCode
-            if ($exit -notin @(0, 1223) -and -not $reaper) {
-              throw "REAPER installer failed with $exit"
+          foreach ($candidate in $expectedPaths) {
+            if (Test-Path $candidate) {
+              $reaper = Get-Item $candidate
+              break
             }
           }
-          elseif ($reaper) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-          }
-          else {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-            throw "REAPER installer did not produce reaper.exe within 60 seconds"
-          }
+          if (-not $reaper) { throw "REAPER executable not found after completed silent install" }
+          if ($reaper.Length -lt 1MB) { throw "REAPER executable is unexpectedly small: $($reaper.Length) bytes" }
 
-          if (-not $reaper) { throw "REAPER executable not found after install" }
-          Write-Host "REAPER executable: $($reaper.FullName)"
+          $stream = [System.IO.File]::OpenRead($reaper.FullName)
+          try {
+            $b0 = $stream.ReadByte()
+            $b1 = $stream.ReadByte()
+          }
+          finally {
+            $stream.Dispose()
+          }
+          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "REAPER executable does not have a valid PE/MZ header" }
+
+          Write-Host "REAPER executable: $($reaper.FullName) size=$($reaper.Length) installerExit=$($process.ExitCode)"
           "REAPER_EXE=$($reaper.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Run REAPER host smoke
