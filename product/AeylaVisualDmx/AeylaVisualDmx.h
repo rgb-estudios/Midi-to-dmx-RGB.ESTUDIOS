@@ -2,7 +2,8 @@
 
 #include "IPlug_include_in_plug_hdr.h"
 #include "IControls.h"
-#include "runtime/runtime_safety_state.h"
+#include "product/application_model.h"
+#include "runtime/host_event_ingress.h"
 
 #include <atomic>
 #include <cstdint>
@@ -41,16 +42,32 @@ public:
   void ProcessMidiMsg(const IMidiMsg& msg) override;
   void OnReset() override;
   void OnActivate(bool active) override;
+  void OnParamChange(int paramIdx) override;
 #endif
 
   void OnIdle() override;
 
-  void ToggleOutputArmFromUI() noexcept;
-  void ForceDisarmFromUI() noexcept;
+  void ToggleOutputArmFromUI();
+  void ForceDisarmFromUI();
 
   [[nodiscard]] bool OutputArmed() const noexcept
   {
     return mOutputArmed.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] bool EffectiveBlackout() const noexcept
+  {
+    return mEffectiveBlackout.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] bool BackendReady() const noexcept
+  {
+    return mBackendReady.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] bool ProjectValid() const noexcept
+  {
+    return mProjectValid.load(std::memory_order_acquire);
   }
 
   [[nodiscard]] int LastMidiNote() const noexcept
@@ -68,12 +85,39 @@ public:
     return mMidiEventCount.load(std::memory_order_relaxed);
   }
 
-private:
-  void SetOutputArmed(bool armed) noexcept;
+  [[nodiscard]] std::uint64_t DroppedMidiEvents() const noexcept
+  {
+    return mHostIngress.dropped_events();
+  }
 
+  [[nodiscard]] std::uint64_t DmxGeneration() const noexcept
+  {
+    return mDmxGeneration.load(std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] int DmxNonZeroChannels() const noexcept
+  {
+    return mDmxNonZeroChannels.load(std::memory_order_relaxed);
+  }
+
+private:
+  void ApplyPendingParameterState();
+  void DrainHostEvents();
+  void SyncSnapshotToAtomics() noexcept;
+  void SetOutputArmed(bool armed);
+
+  aeyla::runtime::HostEventIngress<1024> mHostIngress{};
+  aeyla::product::ApplicationModel mModel{};
+
+  std::atomic<bool> mParameterUpdatePending{true};
+  std::atomic<bool> mHostDeactivationPending{false};
   std::atomic<bool> mOutputArmed{false};
+  std::atomic<bool> mEffectiveBlackout{true};
+  std::atomic<bool> mBackendReady{false};
+  std::atomic<bool> mProjectValid{false};
   std::atomic<int> mLastMidiNote{-1};
   std::atomic<int> mActiveExecutor{-1};
   std::atomic<std::uint64_t> mMidiEventCount{0};
-  aeyla::runtime::RuntimeSafetyState mSafety{};
+  std::atomic<std::uint64_t> mDmxGeneration{0};
+  std::atomic<int> mDmxNonZeroChannels{0};
 };
