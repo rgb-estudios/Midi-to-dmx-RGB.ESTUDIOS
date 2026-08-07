@@ -28,11 +28,12 @@ add_executable(aeyla_core_tests tests/test_main.cpp)
 target_link_libraries(aeyla_core_tests PRIVATE aeyla_core)
 add_test(NAME aeyla_core_tests COMMAND aeyla_core_tests)
 
-# Shared product/runtime state used by standalone and VST3 adapters.
+# Shared product/runtime/project state used by standalone and VST3 adapters.
 add_library(aeyla_runtime
   src/runtime/plugin_state.cpp
   src/runtime/runtime_safety_state.cpp
   src/product/application_model.cpp
+  src/project/project_document.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
 target_link_libraries(aeyla_runtime PUBLIC aeyla_core)
@@ -77,6 +78,15 @@ else()
   target_compile_options(aeyla_application_model_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 add_test(NAME aeyla_application_model_tests COMMAND aeyla_application_model_tests)
+
+add_executable(aeyla_project_document_tests tests/test_project_document.cpp)
+target_link_libraries(aeyla_project_document_tests PRIVATE aeyla_runtime)
+if(MSVC)
+  target_compile_options(aeyla_project_document_tests PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(aeyla_project_document_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME aeyla_project_document_tests COMMAND aeyla_project_document_tests)
 
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)
