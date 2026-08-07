@@ -21,7 +21,9 @@
 #define PLUG_DOES_MIDI_IN 1
 #define PLUG_DOES_MIDI_OUT 0
 #define PLUG_DOES_MPE 0
-#define PLUG_DOES_STATE_CHUNKS 0
+// Custom component chunks contain versioned AEYLA project identity and safe
+// preferences, followed by iPlug's parameter state. Output Arm is excluded.
+#define PLUG_DOES_STATE_CHUNKS 1
 
 #define PLUG_HAS_UI 1
 #define PLUG_WIDTH 1280
