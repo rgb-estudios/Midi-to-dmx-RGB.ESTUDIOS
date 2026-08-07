@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 
 namespace {
 int failures = 0;
@@ -34,6 +35,8 @@ int main() {
 
   ApplicationModel model;
   check(model.snapshot().project_valid, "canonical development project should be valid");
+  check(model.snapshot().project_name == "Untitled AEYLA Show",
+        "snapshot must expose the project-owned name");
   check(!model.snapshot().backend_ready, "null backend must not report ready");
   check(!model.snapshot().output_armed, "output must start disarmed");
   check(model.snapshot().blackout, "blackout must start enabled");
@@ -92,6 +95,53 @@ int main() {
         "backend loss must disarm output through shared safety state");
   check(model.snapshot().blackout,
         "backend loss must leave blackout enabled");
+
+  auto authored = aeyla::project::make_default_project_document(
+      "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "2026-08-07T01:30:00Z");
+  authored.name = "AEYLA Document-Driven Test";
+  authored.fixtures[0].address = 201U;
+  std::swap(authored.fixture_profiles[0].channels[3].slot,
+            authored.fixture_profiles[0].channels[5].slot);
+  authored.output.armed = true;
+
+  model.set_backend_ready(true);
+  const auto loaded = model.load_project_document(authored);
+  check(loaded.ok(), "valid authored project must load into the shared runtime");
+  check(model.snapshot().project_id == authored.project_id,
+        "runtime snapshot must expose loaded project UUID");
+  check(model.snapshot().project_name == authored.name,
+        "runtime snapshot must expose loaded project name");
+  check(!model.snapshot().output_armed,
+        "project reload must never restore persisted output arm");
+  check(model.snapshot().blackout,
+        "successful project reload must remain in blackout");
+  check(!model.project_document().output.armed,
+        "authoritative loaded document must clear persisted arm state");
+
+  model.set_blackout(false);
+  model.handle_host_event(note_on);
+  check(model.snapshot().dmx[200] == 255,
+        "loaded physical patch must move fixture dimmer to authored address");
+  check(model.snapshot().dmx[201] == 255,
+        "loaded physical patch must preserve shutter at authored address");
+  check(model.snapshot().dmx[203] == 0,
+        "reordered blue slot should remain dark for a solid-red look");
+  check(model.snapshot().dmx[205] > 0,
+        "semantic red must follow the reordered fixture-profile channel");
+
+  auto invalid = authored;
+  invalid.fixtures[0].universe = 1U;
+  const auto rejected = model.load_project_document(invalid);
+  check(!rejected.ok(),
+        "runtime must reject a project that violates one-universe Alpha 0.3 scope");
+  check(!model.snapshot().project_valid,
+        "rejected reload must invalidate authoritative runtime project state");
+  check(!model.snapshot().output_armed,
+        "rejected reload must remain disarmed");
+  check(model.snapshot().blackout,
+        "rejected reload must force blackout");
+  check(all_zero(model.snapshot().dmx),
+        "rejected reload must publish a safe zero DMX frame");
 
   if (failures == 0) {
     std::cout << "All AEYLA application model tests passed.\n";
