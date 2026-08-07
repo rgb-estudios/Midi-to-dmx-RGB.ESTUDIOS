@@ -59,6 +59,17 @@ ProjectFileStatus ProjectFileController::open(
                            flatten(loaded.diagnostics));
   }
 
+  // Preflight the document in an isolated runtime. A package may be valid JSON
+  // and ZIP while violating a product runtime constraint such as Alpha 0.3's
+  // single-universe scope. Failed Open must not invalidate the current show.
+  ApplicationModel candidate;
+  const auto preflight = candidate.load_project_document(*loaded.document);
+  if (!preflight.ok()) {
+    return publish_failure(ProjectFileOperation::open,
+                           "Project package is incompatible with this runtime",
+                           flatten(preflight));
+  }
+
   const auto validation = model_.load_project_document(*loaded.document);
   if (!validation.ok()) {
     return publish_failure(ProjectFileOperation::open,
