@@ -37,6 +37,7 @@ struct ApplicationSnapshot {
   std::string project_id;
   std::string project_name;
   bool project_valid{false};
+  bool project_dirty{false};
   bool backend_ready{false};
   bool output_armed{false};
   bool blackout{true};
@@ -68,7 +69,12 @@ class ApplicationModel final {
     return project_;
   }
 
+  [[nodiscard]] project::ProjectDocument project_document_for_save(
+      std::string modified_at) const;
+  void mark_project_saved(std::string modified_at);
+
   void set_project_valid(bool valid);
+  void set_project_name(std::string name);
   void set_backend_ready(bool ready);
   [[nodiscard]] bool request_arm();
   void disarm(runtime::RuntimeSafetyReason reason =
@@ -78,6 +84,7 @@ class ApplicationModel final {
   void set_grand_master(float value);
   void set_rig14(bool enabled);
   void set_visual_source(VisualSource source);
+  void set_visual_speed(float value);
   void set_phase(float normalized_phase);
   void set_white_extraction(float value);
   void set_amber_extraction(float value);
@@ -91,6 +98,7 @@ class ApplicationModel final {
   }
 
  private:
+  void mark_dirty() noexcept;
   void rebuild();
 
   runtime::RuntimeSafetyState safety_{};
@@ -99,6 +107,7 @@ class ApplicationModel final {
   ColorTransformSettings color_settings_{};
   VisualSource authored_source_{VisualSource::gradient};
   bool rig14_{false};
+  bool project_dirty_{true};
   float phase_{0.0F};
   float executor_velocity_{0.0F};
   int active_executor_{-1};
