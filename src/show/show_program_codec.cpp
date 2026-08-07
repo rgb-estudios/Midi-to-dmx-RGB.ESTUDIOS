@@ -311,9 +311,9 @@ ShowDecodeResult decode_show_program(
         {reader.offset(), "show.bin minor version is newer than this runtime"});
     return result;
   }
-  if (song_count == 0U || song_count > kMaximumSongs) {
+  if (song_count > kMaximumSongs) {
     result.diagnostics.push_back(
-        {reader.offset(), "show.bin song count is outside the 1..15 limit"});
+        {reader.offset(), "show.bin song count exceeds the 15-song limit"});
     return result;
   }
 
