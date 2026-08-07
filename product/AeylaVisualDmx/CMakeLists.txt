@@ -27,6 +27,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/project/project_package.cpp
     ../../src/project/project_state_store.cpp
     ../../src/product/application_model.cpp
+    ../../src/product/project_file_controller.cpp
   FORMATS
     APP
     VST3
