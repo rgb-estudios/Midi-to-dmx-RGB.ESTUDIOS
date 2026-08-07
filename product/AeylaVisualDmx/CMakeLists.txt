@@ -8,6 +8,13 @@ endif()
 include(${IPLUG2_DIR}/iPlug2.cmake)
 find_package(iPlug2 REQUIRED)
 
+set(AEYLA_PLUGIN_FORMATS APP VST3)
+if(APPLE)
+  # Logic Pro does not host VST3. AUv2 is a required first-class product
+  # format on macOS and shares the exact project/runtime engine with APP/VST3.
+  list(APPEND AEYLA_PLUGIN_FORMATS AU)
+endif()
+
 iplug_add_plugin(${PROJECT_NAME}
   SOURCES
     AeylaVisualDmx.cpp
@@ -29,9 +36,9 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/product/application_model.cpp
     ../../src/product/project_file_controller.cpp
     ../../src/product/project_identity.cpp
+    ../../src/show/show_program.cpp
   FORMATS
-    APP
-    VST3
+    ${AEYLA_PLUGIN_FORMATS}
   UI
     IGRAPHICS
 )
@@ -45,7 +52,10 @@ if(MSVC)
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-foreach(target_name AeylaVisualDmx-app AeylaVisualDmx-vst3)
+foreach(target_name
+        AeylaVisualDmx-app
+        AeylaVisualDmx-vst3
+        AeylaVisualDmx-au)
   if(TARGET ${target_name})
     target_include_directories(${target_name} PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
