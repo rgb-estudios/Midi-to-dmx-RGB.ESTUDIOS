@@ -1,0 +1,122 @@
+name: reaper-windows-pretest-package
+
+on:
+  pull_request:
+    paths:
+      - product/**
+      - src/**
+      - tests/**
+      - .github/workflows/reaper-windows-pretest-package.yml
+  workflow_dispatch:
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  package-windows-reaper-pretest:
+    name: Windows / integrated 0.3 VST3 / manual REAPER pretest
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned plugin dependencies
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Build integrated AEYLA 0.3 VST3
+        shell: pwsh
+        run: |
+          cmake -S product -B build-product -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2" -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3
+
+      - name: Verify bundle and PE image
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "AeylaVisualDmx.vst3 bundle not found" }
+          $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $binary) { throw "AeylaVisualDmx VST3 binary not found" }
+          if ($binary.Length -lt 1MB) { throw "AeylaVisualDmx VST3 binary unexpectedly small" }
+          $stream = [System.IO.File]::OpenRead($binary.FullName)
+          try { $b0=$stream.ReadByte(); $b1=$stream.ReadByte() } finally { $stream.Dispose() }
+          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "AeylaVisualDmx VST3 binary lacks PE/MZ header" }
+          Write-Host "Verified bundle $($bundle.FullName) binarySize=$($binary.Length)"
+
+      - name: Package manual REAPER pretest
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $root = Join-Path $PWD "reaper-pretest"
+          $vst3Root = Join-Path $root "VST3"
+          New-Item -ItemType Directory -Force $vst3Root | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName (Join-Path $vst3Root "AeylaVisualDmx.vst3")
+
+          @'
+          AEYLA Visual DMX 0.3 — REAPER WINDOWS PRETEST
+
+          OBJETIVO
+          Este paquete contiene el VST3 integrado 0.3 para una prueba manual real
+          en REAPER/Windows. REAPER 7.78 ya ha escaneado esta familia de build y la
+          registra como "AEYLA Visual DMX (RGBEstudios)" / VST3i.
+
+          INSTALACION
+          1. Cierra REAPER.
+          2. Ejecuta INSTALL_REAPER_VST3.cmd.
+          3. Abre REAPER.
+          4. Si no aparece AEYLA, Preferences > Plug-ins > VST > Re-scan.
+          5. Inserta "AEYLA Visual DMX" en una pista vacia.
+
+          PRUEBA MANUAL MINIMA
+          A. El plugin aparece en el browser de FX.
+          B. Se puede insertar sin cerrar REAPER.
+          C. Abre la interfaz y permanece visible 60 segundos.
+          D. Cierra y vuelve a abrir la interfaz 5 veces.
+          E. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
+          F. La instancia sigue presente y vuelve en estado seguro DISARMED/BLACKOUT.
+          G. Envia notas MIDI y confirma que el monitor/preview responde.
+          H. Mueve el playhead, Play/Stop y Loop y anota cualquier comportamiento inesperado.
+
+          IMPORTANTE
+          PRETEST NO significa Show Candidate. No dependas todavia de este build para
+          salida fisica durante un show. Art-Net real, transporte DAW determinista,
+          recuperacion completa y los gates de hardware siguen pendientes.
+
+          Si REAPER muestra un error al escanear o abrir AEYLA, conserva el mensaje
+          exacto o una captura. Ese dato es parte de la validacion del producto.
+          '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
+
+          @'
+          @echo off
+          setlocal
+          set "SOURCE=%~dp0VST3\AeylaVisualDmx.vst3"
+          set "DEST=C:\Program Files\Common Files\VST3\AeylaVisualDmx.vst3"
+          if not exist "%SOURCE%" (
+            echo ERROR: no se encontro AeylaVisualDmx.vst3.
+            pause
+            exit /b 1
+          )
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','if (Test-Path ''%DEST%'') { Remove-Item -Recurse -Force ''%DEST%'' }; Copy-Item -Recurse -Force ''%SOURCE%'' ''%DEST%'''"
+          echo AEYLA Visual DMX VST3 instalado.
+          echo Abre REAPER y haz Re-scan si no aparece automaticamente.
+          pause
+          '@ | Set-Content -Encoding ASCII (Join-Path $root "INSTALL_REAPER_VST3.cmd")
+
+          $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "SOURCE_COMMIT=${{ github.sha }}" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "BUILD_KIND=REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-0.3-REAPER-Windows-PRETEST
+          path: reaper-pretest/**
+          if-no-files-found: error
