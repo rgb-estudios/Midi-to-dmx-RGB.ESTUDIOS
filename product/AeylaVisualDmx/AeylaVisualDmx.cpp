@@ -1,5 +1,6 @@
 #include "AeylaVisualDmx.h"
 #include "AeylaMainControl.h"
+#include "AeylaRuntimeStatusControl.h"
 #include "IPlug_include_in_plug_src.h"
 
 #include <algorithm>
@@ -43,6 +44,8 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
         background->SetRECT(bounds);
       if(auto* main = pGraphics->GetControlWithTag(kCtrlTagMain))
         main->SetRECT(bounds);
+      if(auto* status = pGraphics->GetControlWithTag(kCtrlTagRuntimeStatus))
+        status->SetRECT(bounds);
       return;
     }
 
@@ -55,6 +58,8 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
       pGraphics->LoadFont("AeylaUI", "Times New Roman", ETextStyle::Normal);
 
     pGraphics->AttachControl(new AeylaMainControl(bounds, *this), kCtrlTagMain);
+    pGraphics->AttachControl(new AeylaRuntimeStatusControl(bounds, *this),
+                             kCtrlTagRuntimeStatus);
   };
 #endif
 }
@@ -142,6 +147,8 @@ void AeylaVisualDmx::OnIdle()
   {
     if(auto* main = ui->GetControlWithTag(kCtrlTagMain))
       main->SetDirty(false);
+    if(auto* status = ui->GetControlWithTag(kCtrlTagRuntimeStatus))
+      status->SetDirty(false);
   }
 #endif
 }
