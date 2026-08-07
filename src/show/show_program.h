@@ -10,6 +10,11 @@ namespace aeyla::show {
 
 constexpr std::uint32_t kDefaultPpq = 960U;
 
+enum class CueBehavior : std::uint8_t {
+  latch,
+  momentary,
+};
+
 struct SceneDefinition {
   std::string scene_id;
   std::string name;
@@ -17,12 +22,19 @@ struct SceneDefinition {
   std::uint32_t transition_in_ms{0U};
   std::uint32_t transition_out_ms{0U};
   bool blackout{false};
+  CueBehavior behavior{CueBehavior::latch};
   bool operator==(const SceneDefinition&) const = default;
 };
 
-// One authored block in the MIDI editor. Its duration is meaningful: Note On
-// activates the scene and Note Off ends the block. Alpha 0.3 intentionally uses
-// one scene lane, so clips may touch but may not overlap.
+// One authored cue placement in the song timeline. MIDI note/channel are a
+// portable control representation, not the creative identity of the cue.
+//
+// For latch scenes, start_tick is the important semantic boundary: the scene
+// remains effective after Note Off until another latch cue supersedes it.
+// duration_ticks remains useful for editor display and portable MIDI export.
+//
+// For momentary scenes, duration_ticks is semantic: the cue overrides the
+// current latch only for [start_tick, start_tick + duration_ticks).
 struct MidiSceneClip {
   std::string clip_id;
   std::string scene_id;
@@ -97,7 +109,60 @@ MidiCompilation compile_song_midi(
     const SongProgram& song,
     const std::set<std::string>& available_look_ids);
 
+// Geometric/editor lookup: returns a clip only while the playhead is inside its
+// authored block. This function does NOT implement latch persistence.
 [[nodiscard]] const MidiSceneClip* active_clip_at_tick(
     const SongProgram& song, std::uint64_t tick) noexcept;
+
+// Show playback lookup: reconstructs the effective scene from the absolute
+// playhead position. Momentary cues override the latest latch while active;
+// otherwise the most recent latch persists until a later latch cue or song end.
+[[nodiscard]] const SceneDefinition* resolved_scene_at_tick(
+    const SongProgram& song, std::uint64_t tick) noexcept;
+
+// Deterministic live/host-facing cue state. Timeline seek is authoritative and
+// clears manual overrides. Latch Note Off never cancels the selected cue;
+// momentary Note Off releases only the matching active override.
+class CueRuntime final {
+ public:
+  explicit CueRuntime(const SongProgram& song) noexcept : song_(song) {}
+
+  void seek(std::uint64_t tick) noexcept;
+  void transport_start() noexcept { transport_running_ = true; }
+  void transport_stop() noexcept;
+
+  void note_on(std::uint8_t note, std::uint8_t velocity,
+               std::uint8_t channel) noexcept;
+  void note_off(std::uint8_t note, std::uint8_t channel) noexcept;
+  void all_notes_off() noexcept;
+
+  [[nodiscard]] const SceneDefinition* effective_scene() const noexcept;
+  [[nodiscard]] const SceneDefinition* timeline_scene() const noexcept {
+    return timeline_scene_;
+  }
+  [[nodiscard]] const SceneDefinition* live_latch_scene() const noexcept {
+    return live_latch_scene_;
+  }
+  [[nodiscard]] const SceneDefinition* momentary_scene() const noexcept {
+    return momentary_scene_;
+  }
+  [[nodiscard]] std::uint64_t tick() const noexcept { return tick_; }
+  [[nodiscard]] bool transport_running() const noexcept {
+    return transport_running_;
+  }
+
+ private:
+  [[nodiscard]] const SceneDefinition* scene_for_midi(
+      std::uint8_t note, std::uint8_t channel) const noexcept;
+
+  const SongProgram& song_;
+  const SceneDefinition* timeline_scene_{nullptr};
+  const SceneDefinition* live_latch_scene_{nullptr};
+  const SceneDefinition* momentary_scene_{nullptr};
+  std::uint64_t tick_{0U};
+  std::uint8_t momentary_note_{0U};
+  std::uint8_t momentary_channel_{0U};
+  bool transport_running_{false};
+};
 
 }  // namespace aeyla::show
