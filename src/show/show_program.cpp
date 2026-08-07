@@ -10,7 +10,7 @@
 namespace aeyla::show {
 namespace {
 
-constexpr std::size_t kMaximumSongs = 128U;
+constexpr std::size_t kMaximumSongs = 15U;
 constexpr std::size_t kMaximumScenesPerSong = 2048U;
 constexpr std::size_t kMaximumClipsPerSong = 100000U;
 constexpr std::uint32_t kMaximumTransitionMs = 60000U;
@@ -151,7 +151,7 @@ ShowValidation validate_show_program(
   if (program.songs.empty())
     error(validation, "songs", "show must contain at least one song");
   if (program.songs.size() > kMaximumSongs)
-    error(validation, "songs", "show exceeds the 128 song limit");
+    error(validation, "songs", "show exceeds the 15 song limit");
 
   std::set<std::string> song_ids;
   for (std::size_t index = 0; index < program.songs.size(); ++index) {
