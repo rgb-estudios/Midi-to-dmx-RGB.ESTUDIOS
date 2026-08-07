@@ -32,9 +32,12 @@ int main() {
   using aeyla::runtime::HostEvent;
   using aeyla::runtime::HostEventType;
   using aeyla::product::ApplicationModel;
+  using aeyla::product::VisualSource;
 
   ApplicationModel model;
   check(model.snapshot().project_valid, "canonical development project should be valid");
+  check(model.snapshot().project_dirty,
+        "new untitled development project should begin dirty");
   check(model.snapshot().project_name == "Untitled AEYLA Show",
         "snapshot must expose the project-owned name");
   check(!model.snapshot().backend_ready, "null backend must not report ready");
@@ -107,6 +110,8 @@ int main() {
   model.set_backend_ready(true);
   const auto loaded = model.load_project_document(authored);
   check(loaded.ok(), "valid authored project must load into the shared runtime");
+  check(!model.snapshot().project_dirty,
+        "successfully loaded project must begin clean");
   check(model.snapshot().project_id == authored.project_id,
         "runtime snapshot must expose loaded project UUID");
   check(model.snapshot().project_name == authored.name,
@@ -117,6 +122,39 @@ int main() {
         "successful project reload must remain in blackout");
   check(!model.project_document().output.armed,
         "authoritative loaded document must clear persisted arm state");
+
+  model.set_visual_source(VisualSource::wave);
+  model.set_visual_speed(0.72F);
+  model.set_white_extraction(0.44F);
+  model.set_amber_extraction(0.31F);
+  model.set_uv_manual(0.28F);
+  model.set_rig14(true);
+  check(model.snapshot().project_dirty,
+        "authored control changes must mark the project dirty");
+
+  const auto save_document =
+      model.project_document_for_save("2026-08-07T01:45:00Z");
+  check(save_document.modified_at == "2026-08-07T01:45:00Z",
+        "save snapshot must receive the requested modified timestamp");
+  check(save_document.visual.active_look_id == "look-wave",
+        "selected visual source must be reflected in the saved document");
+  check(save_document.visual.speed == 0.72F,
+        "visual speed must be reflected in the saved document");
+  check(save_document.visual.white_extraction == 0.44F &&
+            save_document.visual.amber_extraction == 0.31F &&
+            save_document.visual.uv_manual == 0.28F,
+        "authored color extraction must be reflected in the saved document");
+  check(std::all_of(save_document.fixtures.begin(), save_document.fixtures.end(),
+                    [](const auto& fixture) { return fixture.enabled; }),
+        "Rig 14 selection must persist all fourteen enabled fixtures");
+  check(!save_document.output.armed,
+        "save snapshot must never persist output arm");
+
+  model.mark_project_saved("2026-08-07T01:45:00Z");
+  check(!model.snapshot().project_dirty,
+        "successful save acknowledgement must clear dirty state");
+  check(model.project_document().modified_at == "2026-08-07T01:45:00Z",
+        "successful save acknowledgement must update authoritative timestamp");
 
   model.set_blackout(false);
   model.handle_host_event(note_on);
