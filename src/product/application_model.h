@@ -57,30 +57,30 @@ class ApplicationModel final {
  public:
   ApplicationModel();
 
-  void set_project_valid(bool valid) noexcept;
-  void set_backend_ready(bool ready) noexcept;
-  [[nodiscard]] bool request_arm() noexcept;
+  void set_project_valid(bool valid);
+  void set_backend_ready(bool ready);
+  [[nodiscard]] bool request_arm();
   void disarm(runtime::RuntimeSafetyReason reason =
-                  runtime::RuntimeSafetyReason::operator_disarm) noexcept;
-  void set_blackout(bool enabled) noexcept;
+                  runtime::RuntimeSafetyReason::operator_disarm);
+  void set_blackout(bool enabled);
 
-  void set_grand_master(float value) noexcept;
-  void set_rig14(bool enabled) noexcept;
-  void set_visual_source(VisualSource source) noexcept;
-  void set_phase(float normalized_phase) noexcept;
-  void set_white_extraction(float value) noexcept;
-  void set_amber_extraction(float value) noexcept;
-  void set_uv_manual(float value) noexcept;
+  void set_grand_master(float value);
+  void set_rig14(bool enabled);
+  void set_visual_source(VisualSource source);
+  void set_phase(float normalized_phase);
+  void set_white_extraction(float value);
+  void set_amber_extraction(float value);
+  void set_uv_manual(float value);
 
-  void handle_host_event(const runtime::HostEvent& event) noexcept;
-  void release_transients() noexcept;
+  void handle_host_event(const runtime::HostEvent& event);
+  void release_transients();
 
   [[nodiscard]] const ApplicationSnapshot& snapshot() const noexcept {
     return snapshot_;
   }
 
  private:
-  void rebuild() noexcept;
+  void rebuild();
 
   runtime::RuntimeSafetyState safety_{};
   ApplicationSnapshot snapshot_{};
