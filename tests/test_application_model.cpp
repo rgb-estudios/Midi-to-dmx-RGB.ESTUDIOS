@@ -26,6 +26,23 @@ int active_fixture_count(const aeyla::product::ApplicationSnapshot& snapshot) {
       snapshot.fixtures.begin(), snapshot.fixtures.end(),
       [](const auto& fixture) { return fixture.active; }));
 }
+
+aeyla::show::ShowProgram make_ready_show(
+    const aeyla::project::ProjectDocument& document,
+    std::string song_name = "AEYLA Runtime Song") {
+  using namespace aeyla::show;
+  ShowProgram program;
+  SongProgram song;
+  song.song_id = "runtime-song";
+  song.name = std::move(song_name);
+  song.length_ticks = 4U * song.ppq;
+  song.scenes.push_back({"scene-main", "Main", document.looks.front().look_id,
+                         250U, 250U, false, CueBehavior::latch});
+  song.clips.push_back({"clip-main", "scene-main", 0U, song.length_ticks,
+                        36U, 127U, 1U});
+  program.songs.push_back(std::move(song));
+  return program;
+}
 }  // namespace
 
 int main() {
@@ -40,6 +57,8 @@ int main() {
         "new untitled development project should begin dirty");
   check(model.snapshot().project_name == "Untitled AEYLA Show",
         "snapshot must expose the project-owned name");
+  check(model.snapshot().song_count == 0U && !model.snapshot().performance_ready,
+        "new project must be saveable authoring state but not performance-ready");
   check(!model.snapshot().backend_ready, "null backend must not report ready");
   check(!model.snapshot().output_armed, "output must start disarmed");
   check(model.snapshot().blackout, "blackout must start enabled");
@@ -50,11 +69,27 @@ int main() {
 
   model.set_backend_ready(true);
   model.set_blackout(false);
-  check(model.request_arm(), "arming should succeed after project and backend validation");
+  check(!model.request_arm(),
+        "valid rig with no programmed song must fail the performance ARM gate");
+  check(!model.snapshot().output_armed && model.snapshot().blackout,
+        "failed show-readiness ARM must leave output disarmed and blacked out");
+
+  const auto development_show = make_ready_show(model.project_document());
+  const auto show_loaded = model.replace_show_program(development_show);
+  check(show_loaded.ok(), "valid authored show must load into the application model");
+  check(model.snapshot().performance_ready && model.snapshot().song_count == 1U,
+        "one valid song must satisfy the show-program performance preflight");
+  check(model.snapshot().blackout && !model.snapshot().output_armed,
+        "replacing show semantics must force a safe output state");
+
+  model.set_blackout(false);
+  check(model.request_arm(),
+        "arming should succeed only after project, show and backend validation");
   check(model.snapshot().output_armed, "snapshot must expose authoritative armed state");
 
   HostEvent note_on{};
   note_on.type = HostEventType::note_on;
+  note_on.channel = 1U;
   note_on.note = 36;
   note_on.value = 1.0F;
   model.handle_host_event(note_on);
@@ -76,7 +111,7 @@ int main() {
   second_model.set_blackout(false);
   second_model.handle_host_event(note_on);
   check(second_model.snapshot().dmx == golden,
-        "identical standalone/VST3 commands must produce byte-identical DMX");
+        "identical standalone/VST3 preview commands must produce byte-identical DMX");
 
   HostEvent note_off = note_on;
   note_off.type = HostEventType::note_off;
@@ -106,20 +141,25 @@ int main() {
   std::swap(authored.fixture_profiles[0].channels[3].slot,
             authored.fixture_profiles[0].channels[5].slot);
   authored.output.armed = true;
+  const auto authored_show = make_ready_show(authored, "Authored Runtime Song");
 
   model.set_backend_ready(true);
-  const auto loaded = model.load_project_document(authored);
-  check(loaded.ok(), "valid authored project must load into the shared runtime");
+  const auto loaded = model.load_project_bundle(authored, authored_show);
+  check(loaded.ok(), "valid authored project+show bundle must load into shared runtime");
   check(!model.snapshot().project_dirty,
-        "successfully loaded project must begin clean");
+        "successfully loaded project+show bundle must begin clean");
   check(model.snapshot().project_id == authored.project_id,
         "runtime snapshot must expose loaded project UUID");
   check(model.snapshot().project_name == authored.name,
         "runtime snapshot must expose loaded project name");
+  check(model.snapshot().song_count == 1U && model.snapshot().performance_ready,
+        "runtime snapshot must expose loaded show readiness");
+  check(model.show_program() == authored_show,
+        "application model must own the loaded show program beside the project");
   check(!model.snapshot().output_armed,
-        "project reload must never restore persisted output arm");
+        "project+show reload must never restore persisted output arm");
   check(model.snapshot().blackout,
-        "successful project reload must remain in blackout");
+        "successful project+show reload must remain in blackout");
   check(!model.project_document().output.armed,
         "authoritative loaded document must clear persisted arm state");
 
@@ -130,10 +170,11 @@ int main() {
   model.set_uv_manual(0.28F);
   model.set_rig14(true);
   check(model.snapshot().project_dirty,
-        "authored control changes must mark the project dirty");
+        "authored control changes must mark the project+show bundle dirty");
 
   const auto save_document =
       model.project_document_for_save("2026-08-07T01:45:00Z");
+  const auto save_show = model.show_program_for_save();
   check(save_document.modified_at == "2026-08-07T01:45:00Z",
         "save snapshot must receive the requested modified timestamp");
   check(save_document.visual.active_look_id == "look-wave",
@@ -149,6 +190,8 @@ int main() {
         "Rig 14 selection must persist all fourteen enabled fixtures");
   check(!save_document.output.armed,
         "save snapshot must never persist output arm");
+  check(save_show == authored_show,
+        "save snapshot must preserve the authored musical show program");
 
   model.mark_project_saved("2026-08-07T01:45:00Z");
   check(!model.snapshot().project_dirty,
@@ -167,19 +210,39 @@ int main() {
   check(model.snapshot().dmx[205] > 0,
         "semantic red must follow the reordered fixture-profile channel");
 
+  // Invalid candidate loads are transactional: they must not invalidate or
+  // partially replace the currently valid project+show runtime.
   auto invalid = authored;
   invalid.fixtures[0].universe = 1U;
-  const auto rejected = model.load_project_document(invalid);
+  const auto before_rejected_load = model.snapshot();
+  const auto before_show = model.show_program();
+  const auto rejected = model.load_project_bundle(invalid, authored_show);
   check(!rejected.ok(),
-        "runtime must reject a project that violates one-universe Alpha 0.3 scope");
-  check(!model.snapshot().project_valid,
-        "rejected reload must invalidate authoritative runtime project state");
-  check(!model.snapshot().output_armed,
-        "rejected reload must remain disarmed");
-  check(model.snapshot().blackout,
-        "rejected reload must force blackout");
-  check(all_zero(model.snapshot().dmx),
-        "rejected reload must publish a safe zero DMX frame");
+        "runtime must reject a bundle that violates one-universe Alpha 0.3 scope");
+  check(model.snapshot().project_valid &&
+            model.snapshot().project_id == before_rejected_load.project_id &&
+            model.snapshot().project_name == before_rejected_load.project_name,
+        "rejected bundle must preserve the previously loaded valid project");
+  check(model.show_program() == before_show,
+        "rejected bundle must preserve the previously loaded valid show program");
+  check(model.snapshot().blackout == before_rejected_load.blackout &&
+            model.snapshot().output_armed == before_rejected_load.output_armed &&
+            model.snapshot().dmx == before_rejected_load.dmx,
+        "rejected bundle must not mutate live safety or DMX state");
+
+  // Replacing the show with an empty but authoring-valid program is allowed,
+  // but must immediately revoke performance readiness and force safe output.
+  const aeyla::show::ShowProgram empty_show;
+  check(model.replace_show_program(empty_show).ok(),
+        "empty show must remain a valid editable authoring state");
+  check(!model.snapshot().performance_ready && model.snapshot().song_count == 0U,
+        "empty authored show must revoke performance readiness");
+  check(model.snapshot().blackout && !model.snapshot().output_armed,
+        "show semantic replacement must force blackout and disarm");
+  model.set_backend_ready(true);
+  model.set_blackout(false);
+  check(!model.request_arm() && model.snapshot().blackout,
+        "empty show must fail ARM even when backend and project are otherwise valid");
 
   if (failures == 0) {
     std::cout << "All AEYLA application model tests passed.\n";
