@@ -76,24 +76,35 @@ ProjectFileStatus ProjectFileController::save(std::string timestamp_utc) {
     return publish_failure(ProjectFileOperation::save,
                            "Save requires a path; use Save As");
   }
-  return save_as(current_path_, std::move(timestamp_utc));
+  return save_to(current_path_, std::move(timestamp_utc),
+                 ProjectFileOperation::save);
 }
 
 ProjectFileStatus ProjectFileController::save_as(
     const std::filesystem::path& path,
     std::string timestamp_utc) {
+  return save_to(path, std::move(timestamp_utc),
+                 ProjectFileOperation::save_as);
+}
+
+ProjectFileStatus ProjectFileController::save_to(
+    const std::filesystem::path& path,
+    std::string timestamp_utc,
+    ProjectFileOperation operation) {
   const auto document = model_.project_document_for_save(timestamp_utc);
   const auto saved = project::save_project_package_atomic(path, document);
   if (!saved.ok()) {
-    return publish_failure(ProjectFileOperation::save_as,
+    return publish_failure(operation,
                            "Could not save AEYLA project package",
                            flatten(saved.diagnostics));
   }
 
   current_path_ = path;
   model_.mark_project_saved(std::move(timestamp_utc));
-  return publish_success(ProjectFileOperation::save_as,
-                         "Project package saved and verified");
+  return publish_success(operation,
+                         operation == ProjectFileOperation::save
+                             ? "Project package saved and verified"
+                             : "Project package saved to a new path and verified");
 }
 
 ProjectFileStatus ProjectFileController::publish_failure(
