@@ -185,8 +185,6 @@ ShowValidation validate_show_program(
     const ShowProgram& program,
     const std::set<std::string>& available_look_ids) {
   ShowValidation validation;
-  if (program.songs.empty())
-    error(validation, "songs", "show must contain at least one song");
   if (program.songs.size() > kMaximumSongs)
     error(validation, "songs", "show exceeds the 15 song limit");
 
@@ -198,6 +196,15 @@ ShowValidation validate_show_program(
             "song ID must be unique within the show");
     validate_song(song, index, available_look_ids, validation);
   }
+  return validation;
+}
+
+ShowValidation validate_show_program_for_performance(
+    const ShowProgram& program,
+    const std::set<std::string>& available_look_ids) {
+  ShowValidation validation = validate_show_program(program, available_look_ids);
+  if (program.songs.empty())
+    error(validation, "songs", "performance requires at least one programmed song");
   return validation;
 }
 
