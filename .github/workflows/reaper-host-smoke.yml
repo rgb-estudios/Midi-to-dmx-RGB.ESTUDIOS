@@ -97,10 +97,43 @@ jobs:
           $result = Join-Path $env:APPDATA "REAPER\AEYLA_REAPER_HOST_SMOKE.txt"
           Remove-Item -Force $result -ErrorAction SilentlyContinue
 
+          # REAPER's official evaluation is fully functional for 60 days, but
+          # first launch presents a timed "Still Evaluating" acknowledgement.
+          # The CI runner has no human operator, so invoke only that legitimate
+          # acknowledgement if it appears; do not modify licensing state.
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          function Invoke-ReaperEvaluationAcknowledgement {
+            try {
+              $root = [System.Windows.Automation.AutomationElement]::RootElement
+              $condition = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::Button
+              )
+              $buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+              foreach ($button in $buttons) {
+                $name = $button.Current.Name
+                if ($name -like "Still Evaluating*") {
+                  if ($button.Current.IsEnabled) {
+                    $pattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                    $pattern.Invoke()
+                    Write-Host "Acknowledged REAPER evaluation dialog."
+                    return $true
+                  }
+                }
+              }
+            }
+            catch {
+              Write-Host "Evaluation-dialog probe: $($_.Exception.Message)"
+            }
+            return $false
+          }
+
           $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList @("-newinst", "-nosplash", $script) -PassThru
           $deadline = (Get-Date).AddSeconds(120)
           while ((Get-Date) -lt $deadline -and -not (Test-Path $result)) {
             if ($process.HasExited) { break }
+            Invoke-ReaperEvaluationAcknowledgement | Out-Null
             Start-Sleep -Milliseconds 500
             $process.Refresh()
           }
