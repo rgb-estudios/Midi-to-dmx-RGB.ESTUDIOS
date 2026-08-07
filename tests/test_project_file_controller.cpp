@@ -1,4 +1,6 @@
 #include "product/project_file_controller.h"
+#include "product/project_identity.h"
+#include "project/project_document.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -31,6 +33,17 @@ std::filesystem::path unique_test_directory() {
 int main() {
   using namespace aeyla::product;
 
+  const std::string generated_uuid = generate_project_uuid();
+  const std::string second_uuid = generate_project_uuid();
+  check(aeyla::project::is_canonical_uuid(generated_uuid),
+        "generated project UUID must be lowercase canonical UUIDv4 text");
+  check(generated_uuid != second_uuid,
+        "consecutive project UUIDs should not collide");
+  const std::string timestamp = current_utc_timestamp();
+  check(timestamp.size() == 20U && timestamp[4] == '-' &&
+            timestamp[10] == 'T' && timestamp.back() == 'Z',
+        "UTC save timestamp must use YYYY-MM-DDTHH:MM:SSZ form");
+
   const auto directory = unique_test_directory();
   check(!directory.empty(), "test must create an isolated directory");
   if (directory.empty()) return EXIT_FAILURE;
@@ -39,13 +52,16 @@ int main() {
   ProjectFileController controller(model);
 
   const auto no_path = controller.save("2026-08-07T04:00:00Z");
-  check(!no_path.succeeded,
-        "Save without a current package path must require Save As");
+  check(!no_path.succeeded &&
+            no_path.operation == ProjectFileOperation::save,
+        "Save without a current path must fail as a Save operation");
 
   const auto created = controller.new_project(
       "11111111-aaaa-4bbb-8ccc-222222222222",
       "2026-08-07T04:00:00Z");
-  check(created.succeeded, "New must create a valid default project");
+  check(created.succeeded &&
+            created.operation == ProjectFileOperation::new_project,
+        "New must create and report a valid default project");
   check(controller.current_path().empty(),
         "new unsaved project must not invent a package path");
   check(model.snapshot().blackout && !model.snapshot().output_armed,
@@ -59,7 +75,9 @@ int main() {
 
   const auto package = directory / "controller.aeylashow";
   const auto saved = controller.save_as(package, "2026-08-07T04:05:00Z");
-  check(saved.succeeded, "Save As must create and verify a package");
+  check(saved.succeeded &&
+            saved.operation == ProjectFileOperation::save_as,
+        "Save As must create, verify and report a new-path save");
   check(controller.current_path() == package,
         "Save As must adopt the selected package path");
   check(!model.snapshot().project_dirty,
@@ -69,15 +87,17 @@ int main() {
   check(model.snapshot().project_dirty,
         "authored change after save must mark project dirty");
   const auto resaved = controller.save("2026-08-07T04:10:00Z");
-  check(resaved.succeeded,
-        "Save must replace the current package and preserve a backup");
+  check(resaved.succeeded &&
+            resaved.operation == ProjectFileOperation::save,
+        "Save must replace the current package and report Save");
   check(std::filesystem::exists(package.string() + ".bak"),
         "second save must preserve last-known-good package backup");
 
   ApplicationModel reopened_model;
   ProjectFileController reopened(reopened_model);
   const auto opened = reopened.open(package);
-  check(opened.succeeded, "Open must validate and publish a saved package");
+  check(opened.succeeded && opened.operation == ProjectFileOperation::open,
+        "Open must validate and report a saved package");
   check(reopened.current_path() == package,
         "Open must adopt the selected package path");
   check(reopened_model.snapshot().blackout &&
