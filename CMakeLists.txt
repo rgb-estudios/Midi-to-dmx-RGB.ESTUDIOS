@@ -107,6 +107,7 @@ function(aeyla_add_strict_test target source)
 endfunction()
 
 aeyla_add_strict_test(aeyla_runtime_tests tests/test_host_event_queue.cpp)
+aeyla_add_strict_test(aeyla_host_transport_mailbox_tests tests/test_host_transport_mailbox.cpp)
 aeyla_add_strict_test(aeyla_plugin_state_tests tests/test_plugin_state.cpp)
 aeyla_add_strict_test(aeyla_runtime_safety_tests tests/test_runtime_safety.cpp)
 aeyla_add_strict_test(aeyla_application_model_tests tests/test_application_model.cpp)
