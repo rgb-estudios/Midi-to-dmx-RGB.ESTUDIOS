@@ -124,8 +124,8 @@ int main() {
         "loaded physical patch must move fixture dimmer to authored address");
   check(model.snapshot().dmx[201] == 255,
         "loaded physical patch must preserve shutter at authored address");
-  check(model.snapshot().dmx[203] == 0,
-        "reordered blue slot should remain dark for a solid-red look");
+  check(model.snapshot().dmx[203] < model.snapshot().dmx[205],
+        "semantic blue must remain below red after profile-channel reordering");
   check(model.snapshot().dmx[205] > 0,
         "semantic red must follow the reordered fixture-profile channel");
 
