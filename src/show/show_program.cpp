@@ -11,11 +11,6 @@
 namespace aeyla::show {
 namespace {
 
-constexpr std::size_t kMaximumSongs = 15U;
-constexpr std::size_t kMaximumScenesPerSong = 2048U;
-constexpr std::size_t kMaximumClipsPerSong = 100000U;
-constexpr std::uint32_t kMaximumTransitionMs = 60000U;
-
 bool valid_id(std::string_view value) noexcept {
   if (value.empty() || value.size() > 128U) return false;
   return std::all_of(value.begin(), value.end(), [](char character) {
