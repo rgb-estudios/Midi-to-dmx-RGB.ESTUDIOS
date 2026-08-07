@@ -25,8 +25,6 @@ struct ProjectFileStatus {
   std::vector<std::string> diagnostics;
 };
 
-// Non-realtime coordinator for New/Open/Save/Save As. Platform dialogs remain
-// in the UI adapter; package validation and runtime publication remain here.
 class ProjectFileController final {
  public:
   explicit ProjectFileController(ApplicationModel& model) : model_(model) {}
@@ -47,6 +45,9 @@ class ProjectFileController final {
   }
 
  private:
+  ProjectFileStatus save_to(const std::filesystem::path& path,
+                            std::string timestamp_utc,
+                            ProjectFileOperation operation);
   ProjectFileStatus publish_failure(ProjectFileOperation operation,
                                     std::string message,
                                     std::vector<std::string> diagnostics = {});
