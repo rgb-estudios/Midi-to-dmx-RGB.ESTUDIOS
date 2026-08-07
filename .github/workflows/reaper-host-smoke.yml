@@ -51,18 +51,49 @@ jobs:
 
       - name: Install REAPER 7.78 evaluation
         shell: pwsh
+        timeout-minutes: 2
         run: |
           $url = "https://www.reaper.fm/files/7.x/reaper778_x64-install.exe"
-          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\reaper-install.exe"
-          $process = Start-Process "$env:RUNNER_TEMP\reaper-install.exe" -ArgumentList "/S" -Wait -PassThru
-          # REAPER's Windows installer can return 1223 after a successful silent install.
-          # Treat it as provisional success only when the expected executable is actually present.
-          if ($process.ExitCode -notin @(0, 1223)) {
-            throw "REAPER installer failed with $($process.ExitCode)"
+          $installer = "$env:RUNNER_TEMP\reaper-install.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+
+          $process = Start-Process $installer -ArgumentList "/S" -PassThru
+          $deadline = (Get-Date).AddSeconds(60)
+          $reaper = $null
+
+          while ((Get-Date) -lt $deadline) {
+            $reaper = Get-ChildItem "C:\Program Files" -Recurse -File -Filter "reaper.exe" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match 'REAPER' } |
+              Select-Object -First 1
+            if ($reaper) { break }
+            if ($process.HasExited) { break }
+            Start-Sleep -Seconds 1
           }
-          $reaper = Get-ChildItem "C:\Program Files" -Recurse -File -Filter "reaper.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'REAPER' } | Select-Object -First 1
-          if (-not $reaper) { throw "REAPER executable not found after install (installer exit $($process.ExitCode))" }
-          Write-Host "REAPER installed at $($reaper.FullName) (installer exit $($process.ExitCode))"
+
+          if (-not $reaper) {
+            $reaper = Get-ChildItem "C:\Program Files" -Recurse -File -Filter "reaper.exe" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match 'REAPER' } |
+              Select-Object -First 1
+          }
+
+          if ($process.HasExited) {
+            $exit = $process.ExitCode
+            if ($exit -notin @(0, 1223) -and -not $reaper) {
+              throw "REAPER installer failed with $exit"
+            }
+          }
+          elseif ($reaper) {
+            # The NSIS installer can remain alive on a hosted runner after the files are usable.
+            # Bound the CI step: host validation below is the authoritative check.
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+          else {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "REAPER installer did not complete or produce reaper.exe within 60 seconds"
+          }
+
+          if (-not $reaper) { throw "REAPER executable not found after install" }
+          Write-Host "REAPER executable: $($reaper.FullName)"
           "REAPER_EXE=$($reaper.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Run REAPER host smoke
