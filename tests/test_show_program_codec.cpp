@@ -60,6 +60,19 @@ int main() {
   using namespace aeyla::show;
   const std::set<std::string> looks{"look-gradient", "look-solid"};
 
+  // Authoring and performance readiness are intentionally different. A new
+  // project with no songs must survive Save/Open, but cannot enter Show Mode.
+  const ShowProgram empty;
+  const auto empty_encoded = encode_show_program(empty, looks);
+  check(empty_encoded.ok(),
+        "empty authoring show must encode so a new project can be saved");
+  const auto empty_decoded = decode_show_program(empty_encoded.bytes, looks);
+  check(empty_decoded.ok() && empty_decoded.program.has_value() &&
+            empty_decoded.program->songs.empty(),
+        "empty authoring show must round-trip through show.bin");
+  check(!validate_show_program_for_performance(*empty_decoded.program, looks).ok(),
+        "empty decoded show must still fail performance preflight");
+
   const ShowProgram source = make_show(2U);
   const auto encoded = encode_show_program(source, looks);
   check(encoded.ok(), "valid show must encode successfully");
@@ -104,13 +117,15 @@ int main() {
   check(!decode_show_program(future_minor, looks).ok(),
         "newer show minor version must not be silently interpreted");
 
-  auto zero_songs = encoded.bytes;
-  zero_songs[12] = 0U;
-  zero_songs[13] = 0U;
-  zero_songs[14] = 0U;
-  zero_songs[15] = 0U;
-  check(!decode_show_program(zero_songs, looks).ok(),
-        "show.bin claiming zero songs must be rejected before allocation");
+  // A zero-song header is valid only when no stale song payload follows it.
+  // Mutating a two-song file this way must therefore fail on trailing bytes.
+  auto zero_songs_with_stale_payload = encoded.bytes;
+  zero_songs_with_stale_payload[12] = 0U;
+  zero_songs_with_stale_payload[13] = 0U;
+  zero_songs_with_stale_payload[14] = 0U;
+  zero_songs_with_stale_payload[15] = 0U;
+  check(!decode_show_program(zero_songs_with_stale_payload, looks).ok(),
+        "zero-song header with stale trailing song payload must be rejected");
 
   auto too_many_songs = encoded.bytes;
   too_many_songs[12] = 16U;
