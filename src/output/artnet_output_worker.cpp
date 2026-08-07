@@ -9,7 +9,10 @@
 #include <cstddef>
 #include <cstring>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -35,6 +38,10 @@ constexpr SocketHandle kInvalidSocket = INVALID_SOCKET;
 using SocketHandle = int;
 constexpr SocketHandle kInvalidSocket = -1;
 #endif
+
+using OutputLeaseKey = std::tuple<std::string, std::uint16_t, std::uint16_t>;
+std::mutex gOutputLeaseMutex;
+std::set<OutputLeaseKey> gOutputLeases;
 
 void close_socket(SocketHandle socket) noexcept {
   if (socket == kInvalidSocket) return;
@@ -71,11 +78,42 @@ bool valid_config(const ArtNetOutputConfig& config,
   return true;
 }
 
+bool safe_unicast_target(const in_addr& address) noexcept {
+  const std::uint32_t host = ntohl(address.s_addr);
+  if (host == 0U || host == 0xFFFFFFFFU) return false;
+  // 224.0.0.0/4 is multicast. Alpha v1 deliberately uses explicit unicast.
+  if ((host & 0xF0000000U) == 0xE0000000U) return false;
+  return true;
+}
+
 }  // namespace
 
 class ArtNetOutputWorker::Impl final {
  public:
   ~Impl() { shutdown(); }
+
+  bool acquire_lease(const ArtNetOutputConfig& next_config,
+                     std::string& error_message) {
+    const OutputLeaseKey key{
+        next_config.target_ipv4, next_config.udp_port, next_config.port_address};
+    const std::scoped_lock lock(gOutputLeaseMutex);
+    const auto [iterator, inserted] = gOutputLeases.insert(key);
+    (void) iterator;
+    if (!inserted) {
+      error_message =
+          "another AEYLA instance already owns this Art-Net target/universe";
+      return false;
+    }
+    lease_key_ = key;
+    return true;
+  }
+
+  void release_lease() noexcept {
+    if (!lease_key_.has_value()) return;
+    const std::scoped_lock lock(gOutputLeaseMutex);
+    gOutputLeases.erase(*lease_key_);
+    lease_key_.reset();
+  }
 
   bool initialize_socket(const ArtNetOutputConfig& next_config,
                          std::string& error_message) {
@@ -89,20 +127,24 @@ class ArtNetOutputWorker::Impl final {
     winsock_started_ = true;
 #endif
 
-    SocketHandle next_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (next_socket == kInvalidSocket) {
-      error_message = "could not create UDP socket";
-      cleanup_winsock();
-      return false;
-    }
-
     sockaddr_in next_target{};
     next_target.sin_family = AF_INET;
     next_target.sin_port = htons(next_config.udp_port);
     if (inet_pton(AF_INET, next_config.target_ipv4.c_str(),
                   &next_target.sin_addr) != 1) {
-      close_socket(next_socket);
       error_message = "Art-Net target must be a numeric IPv4 address";
+      cleanup_winsock();
+      return false;
+    }
+    if (!safe_unicast_target(next_target.sin_addr)) {
+      error_message = "Art-Net Alpha v1 requires a unicast IPv4 target";
+      cleanup_winsock();
+      return false;
+    }
+
+    SocketHandle next_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (next_socket == kInvalidSocket) {
+      error_message = "could not create UDP socket";
       cleanup_winsock();
       return false;
     }
@@ -134,14 +176,27 @@ class ArtNetOutputWorker::Impl final {
   }
 
   void shutdown() noexcept {
-    stop_requested_.store(true, std::memory_order_release);
-    wake_.notify_all();
-    if (worker_.joinable()) worker_.join();
+    if (worker_.joinable()) {
+      // Clean shutdown from an enabled output is itself a safety transition.
+      // Queue one blackout in the network thread before it exits, avoiding a
+      // concurrent send/sequence race with the caller thread.
+      const bool was_enabled =
+          enabled_.exchange(false, std::memory_order_acq_rel);
+      if (was_enabled)
+        blackout_pending_.store(true, std::memory_order_release);
+      stop_requested_.store(true, std::memory_order_release);
+      wake_.notify_all();
+      worker_.join();
+    } else {
+      enabled_.store(false, std::memory_order_release);
+      stop_requested_.store(true, std::memory_order_release);
+    }
+
     running_.store(false, std::memory_order_release);
-    enabled_.store(false, std::memory_order_release);
     close_socket(socket_);
     socket_ = kInvalidSocket;
     cleanup_winsock();
+    release_lease();
   }
 
   void publish(const DmxUniverse& universe, std::uint64_t generation) {
@@ -246,11 +301,15 @@ class ArtNetOutputWorker::Impl final {
     auto next_deadline = std::chrono::steady_clock::now();
     const DmxUniverse blackout{};
 
-    while (!stop_requested_.load(std::memory_order_acquire)) {
+    for (;;) {
       if (blackout_pending_.exchange(false, std::memory_order_acq_rel)) {
         (void) transmit(blackout, 0U, true);
         next_deadline = std::chrono::steady_clock::now() + period;
       }
+
+      // Stop is checked after the pending blackout so a clean shutdown cannot
+      // leave the last non-zero frame intentionally latched by this worker.
+      if (stop_requested_.load(std::memory_order_acquire)) break;
 
       const auto now = std::chrono::steady_clock::now();
       if (now < next_deadline) {
@@ -275,6 +334,7 @@ class ArtNetOutputWorker::Impl final {
   ArtNetOutputConfig config_{};
   SocketHandle socket_{kInvalidSocket};
   sockaddr_in target_{};
+  std::optional<OutputLeaseKey> lease_key_;
 #ifdef _WIN32
   bool winsock_started_{false};
 #endif
@@ -311,7 +371,11 @@ bool ArtNetOutputWorker::start(const ArtNetOutputConfig& config,
   if (!valid_config(config, error_message)) return false;
 
   impl_->shutdown();
-  if (!impl_->initialize_socket(config, error_message)) return false;
+  if (!impl_->acquire_lease(config, error_message)) return false;
+  if (!impl_->initialize_socket(config, error_message)) {
+    impl_->shutdown();
+    return false;
+  }
 
   try {
     impl_->launch();
