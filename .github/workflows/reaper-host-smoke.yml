@@ -113,6 +113,69 @@ jobs:
             throw "REAPER host smoke did not pass"
           }
 
+      - name: Package verified REAPER test candidate
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "Verified VST3 bundle disappeared before packaging" }
+
+          $root = Join-Path $PWD "reaper-candidate"
+          $vst3Root = Join-Path $root "VST3"
+          New-Item -ItemType Directory -Force $vst3Root | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName (Join-Path $vst3Root "AeylaVisualDmx.vst3")
+
+          @'
+          AEYLA Visual DMX 0.3.0 — REAPER TEST CANDIDATE / WINDOWS
+
+          This exact VST3 bundle passed the automated REAPER 7.78 host gate that
+          scans the plug-in, instantiates it, saves a project and reopens it.
+
+          INSTALL
+          1. Close REAPER.
+          2. Run INSTALL_REAPER_VST3.cmd.
+          3. Open REAPER and rescan VST3 plug-ins if AEYLA is not visible.
+          4. Insert "AEYLA Visual DMX" on a test track.
+
+          TEST SCOPE
+          - Windows x64 / VST3.
+          - Core build and regression tests.
+          - REAPER scan + instantiate + project save/reopen.
+          - Safe restore remains DISARMED / BLACKOUT.
+
+          IMPORTANT
+          This is a REAPER Test Candidate for programming and controlled rehearsal.
+          It is NOT Show Candidate and must NOT be relied on yet for physical show
+          output. Real Art-Net/node validation, deterministic DAW transport and the
+          remaining show-readiness gates are still required.
+          '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_REAPER_TEST.txt")
+
+          @'
+          @echo off
+          setlocal
+          set "SOURCE=%~dp0VST3\AeylaVisualDmx.vst3"
+          set "DEST=C:\Program Files\Common Files\VST3\AeylaVisualDmx.vst3"
+          if not exist "%SOURCE%" (
+            echo ERROR: AeylaVisualDmx.vst3 not found.
+            pause
+            exit /b 1
+          )
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','if (Test-Path ''%DEST%'') { Remove-Item -Recurse -Force ''%DEST%'' }; Copy-Item -Recurse -Force ''%SOURCE%'' ''%DEST%'''"
+          echo AEYLA VST3 installation completed.
+          pause
+          '@ | Set-Content -Encoding ASCII (Join-Path $root "INSTALL_REAPER_VST3.cmd")
+
+          $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $binary) { throw "Candidate VST3 binary not found" }
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "SHA256.txt")
+          "SOURCE_COMMIT=${{ github.sha }}" | Add-Content -Encoding ASCII (Join-Path $root "SHA256.txt")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-0.3.0-REAPER-Test-Candidate-Windows-VST3
+          path: reaper-candidate/**
+          if-no-files-found: error
+
       - name: Collect REAPER Windows evidence
         if: always()
         shell: pwsh
