@@ -1,11 +1,13 @@
 #include "product/application_model.h"
 
 #include "core/fixture_profile.h"
-#include "core/rig.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
+#include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -13,6 +15,9 @@ namespace aeyla::product {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846F;
+constexpr const char* kDevelopmentProjectId =
+    "00000000-0000-4000-8000-000000000003";
+constexpr const char* kDevelopmentTimestamp = "2026-08-07T00:00:00Z";
 
 float clamp01(float value) {
   return std::clamp(value, 0.0F, 1.0F);
@@ -27,24 +32,48 @@ RgbColor mix(const RgbColor& a, const RgbColor& b, float amount) {
   };
 }
 
-FixtureProfile make_reference_profile() {
-  return {
-      "aeyla-rgbwaluv-10ch",
-      "AEYLA RGBWALUV 10ch reference",
-      10,
-      {
-          {1, Attribute::Dimmer},
-          {2, Attribute::Shutter},
-          {3, Attribute::Strobe},
-          {4, Attribute::Red},
-          {5, Attribute::Green},
-          {6, Attribute::Blue},
-          {7, Attribute::White},
-          {8, Attribute::Amber},
-          {9, Attribute::UV},
-          {10, Attribute::Lime},
-      },
-  };
+std::optional<Attribute> attribute_from_name(std::string_view name) {
+  if (name == "dimmer") return Attribute::Dimmer;
+  if (name == "shutter") return Attribute::Shutter;
+  if (name == "strobe") return Attribute::Strobe;
+  if (name == "red") return Attribute::Red;
+  if (name == "green") return Attribute::Green;
+  if (name == "blue") return Attribute::Blue;
+  if (name == "white") return Attribute::White;
+  if (name == "amber") return Attribute::Amber;
+  if (name == "uv") return Attribute::UV;
+  if (name == "lime") return Attribute::Lime;
+  if (name == "macro") return Attribute::Macro;
+  if (name == "speed") return Attribute::Speed;
+  if (name == "reset") return Attribute::Reset;
+  if (name == "zoom") return Attribute::Zoom;
+  if (name == "fan") return Attribute::Fan;
+  if (name == "haze") return Attribute::Haze;
+  return std::nullopt;
+}
+
+std::optional<VisualSource> source_from_name(std::string_view name) {
+  if (name == "solid") return VisualSource::solid;
+  if (name == "gradient") return VisualSource::gradient;
+  if (name == "wave") return VisualSource::wave;
+  if (name == "noise") return VisualSource::noise;
+  if (name == "chase") return VisualSource::chase;
+  return std::nullopt;
+}
+
+FixtureProfile make_runtime_profile(
+    const project::FixtureProfileDocument& document) {
+  FixtureProfile profile;
+  profile.id = document.profile_id;
+  profile.name = document.display_name;
+  profile.footprint = document.footprint;
+  profile.channels.reserve(document.channels.size());
+  for (const auto& channel : document.channels) {
+    if (const auto attribute = attribute_from_name(channel.attribute)) {
+      profile.channels.push_back({channel.slot, *attribute});
+    }
+  }
+  return profile;
 }
 
 RgbColor sample_source(VisualSource source, float x, float y, float phase) {
@@ -96,19 +125,74 @@ VisualSource effective_source(VisualSource authored, int active_executor) {
   return authored;
 }
 
+void add_runtime_error(project::ProjectValidation& validation,
+                       std::string path, std::string message) {
+  validation.diagnostics.push_back(
+      {project::DiagnosticSeverity::error, std::move(path), std::move(message)});
+}
+
 }  // namespace
 
-ApplicationModel::ApplicationModel() {
+ApplicationModel::ApplicationModel()
+    : project_(project::make_default_project_document(
+          kDevelopmentProjectId, kDevelopmentTimestamp)) {
   color_settings_.intensity = 1.0F;
-  color_settings_.white_extraction = 0.20F;
-  color_settings_.amber_extraction = 0.15F;
+  color_settings_.white_extraction = project_.visual.white_extraction;
+  color_settings_.amber_extraction = project_.visual.amber_extraction;
   color_settings_.lime_extraction = 0.20F;
-  color_settings_.uv_manual = 0.0F;
+  color_settings_.uv_manual = project_.visual.uv_manual;
 
-  safety_.set_project_valid(true);
+  safety_.set_project_valid(project::validate_project_document(project_).ok());
   // A simulated/null backend must not satisfy the real output-arm gate.
   safety_.set_backend_ready(false);
   rebuild();
+}
+
+project::ProjectValidation ApplicationModel::load_project_document(
+    const project::ProjectDocument& document) {
+  safety_.begin_project_reload();
+  active_executor_ = -1;
+  executor_velocity_ = 0.0F;
+
+  project::ProjectValidation validation =
+      project::validate_project_document(document);
+  for (std::size_t index = 0; index < document.fixtures.size(); ++index) {
+    if (document.fixtures[index].universe != document.output.universe) {
+      add_runtime_error(
+          validation,
+          "rig.fixtures[" + std::to_string(index) + "].universe",
+          "Alpha 0.3 supports one output universe; fixture must match output.universe");
+    }
+  }
+
+  auto active_look = std::find_if(
+      document.looks.begin(), document.looks.end(),
+      [&](const project::LookDocument& look) {
+        return look.look_id == document.visual.active_look_id;
+      });
+  if (active_look == document.looks.end() ||
+      !source_from_name(active_look->source).has_value()) {
+    add_runtime_error(validation, "visual.activeLookId",
+                      "active look cannot be converted to a runtime source");
+  }
+
+  if (!validation.ok()) {
+    safety_.complete_project_reload(false);
+    rebuild();
+    return validation;
+  }
+
+  project_ = document;
+  project_.output.armed = false;
+  authored_source_ = *source_from_name(active_look->source);
+  color_settings_.white_extraction = project_.visual.white_extraction;
+  color_settings_.amber_extraction = project_.visual.amber_extraction;
+  color_settings_.uv_manual = project_.visual.uv_manual;
+  rig14_ = false;
+
+  safety_.complete_project_reload(true);
+  rebuild();
+  return validation;
 }
 
 void ApplicationModel::set_project_valid(bool valid) {
@@ -209,18 +293,32 @@ void ApplicationModel::release_transients() {
 }
 
 void ApplicationModel::rebuild() {
-  const auto positions = rig14_ ? make_floor_rig_14() : make_floor_rig_10();
-  const FixtureProfile profile = make_reference_profile();
+  std::map<std::string, FixtureProfile> profiles;
+  for (const auto& document : project_.fixture_profiles) {
+    profiles.emplace(document.profile_id, make_runtime_profile(document));
+  }
+
   const VisualSource source = effective_source(authored_source_, active_executor_);
   const bool blackout = safety_.blackout();
 
   std::vector<PatchedFixture> patched;
-  patched.reserve(positions.size());
+  patched.reserve(project_.fixtures.size());
+  snapshot_.warnings.clear();
 
-  for (std::size_t index = 0; index < positions.size(); ++index) {
-    const auto& position = positions[index];
-    RgbColor sampled = sample_source(source, position.x, position.y, phase_);
+  for (auto& fixture : snapshot_.fixtures) fixture = {};
 
+  const std::size_t fixture_count =
+      std::min(project_.fixtures.size(), snapshot_.fixtures.size());
+  for (std::size_t index = 0; index < fixture_count; ++index) {
+    const auto& document = project_.fixtures[index];
+    const auto profile_it = profiles.find(document.fixture_profile_id);
+    if (profile_it == profiles.end()) {
+      snapshot_.warnings.push_back(
+          "Missing runtime profile for fixture '" + document.logical_fixture_id + "'");
+      continue;
+    }
+
+    RgbColor sampled = sample_source(source, document.x, document.y, phase_);
     ColorTransformSettings settings = color_settings_;
     if (active_executor_ >= 0) {
       settings.intensity *= std::max(0.05F, executor_velocity_);
@@ -238,39 +336,41 @@ void ApplicationModel::rebuild() {
     set(semantic, Attribute::Shutter, blackout ? 0.0F : 1.0F);
     set(semantic, Attribute::Strobe,
         !blackout && active_executor_ == 7 ? executor_velocity_ : 0.0F);
+    if (blackout) semantic.fill(0.0F);
 
-    if (blackout) {
-      semantic.fill(0.0F);
-    }
-
-    const std::uint16_t address = static_cast<std::uint16_t>(1U + index * profile.footprint);
-    patched.push_back({position.id, address, position.active, profile, semantic});
+    const bool active = rig14_ ? true : document.enabled;
+    patched.push_back({document.logical_fixture_id, document.address, active,
+                       profile_it->second, semantic});
 
     auto& fixture = snapshot_.fixtures[index];
-    fixture.logical_id = position.id;
-    fixture.x = position.x;
-    fixture.y = position.y;
-    fixture.active = position.active;
-    fixture.address = address;
+    fixture.logical_id = document.logical_fixture_id;
+    fixture.x = document.x;
+    fixture.y = document.y;
+    fixture.active = active;
+    fixture.address = document.address;
     fixture.sampled_rgb = sampled;
     fixture.semantic = semantic;
   }
 
   const CompileResult compiled = compile_dmx(patched);
+  snapshot_.warnings.insert(snapshot_.warnings.end(), compiled.warnings.begin(),
+                            compiled.warnings.end());
 
   ++snapshot_.generation;
+  snapshot_.project_id = project_.project_id;
+  snapshot_.project_name = project_.name;
   snapshot_.project_valid = safety_.project_valid();
   snapshot_.backend_ready = safety_.backend_ready();
   snapshot_.output_armed = safety_.output_armed();
   snapshot_.blackout = blackout;
   snapshot_.rig14 = rig14_;
+  snapshot_.output_universe = project_.output.universe;
   snapshot_.active_executor = active_executor_;
   snapshot_.executor_velocity = executor_velocity_;
   snapshot_.grand_master = color_settings_.intensity;
   snapshot_.phase = phase_;
   snapshot_.source = source;
   snapshot_.dmx = compiled.universe;
-  snapshot_.warnings = compiled.warnings;
 }
 
 }  // namespace aeyla::product
