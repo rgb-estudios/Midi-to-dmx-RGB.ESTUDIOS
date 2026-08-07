@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.25)
 project(AeylaVisualDmxProduct VERSION 0.3.0 LANGUAGES C CXX)
 
+# The product persistence layer uses C++17 filesystem, which Apple exposes from
+# macOS 10.15. Our supported DAW matrix starts at macOS 11 (Live 12's current
+# supported floor is 11.7.10), so reject accidental legacy deployment targets
+# rather than producing a bundle that cannot link or load reliably.
+if(APPLE)
+  if(NOT CMAKE_OSX_DEPLOYMENT_TARGET OR
+     CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "11.0")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING
+        "Minimum macOS version supported by AEYLA Visual DMX" FORCE)
+  endif()
+endif()
+
 include(FetchContent)
 
 # Pin the UI framework independently from its git submodules. GitHub's source
@@ -113,7 +125,7 @@ endif()
 # standalone host attempts to initialise DirectSound/ASIO before opening its
 # window, which can terminate silently on machines with unavailable or unusual
 # audio devices. Make no-I/O mode the standalone default. This does not affect
-# VST3 MIDI delivery inside Ableton. Standalone MIDI will be supplied by the
+# VST3/AUv2 MIDI delivery inside a DAW. Standalone MIDI will be supplied by the
 # dedicated AEYLA MIDI service rather than by the audio-host wrapper.
 set(_aeyla_iplug_app_main "${IPLUG2_DIR}/IPlug/APP/IPlugAPP_main.cpp")
 file(READ "${_aeyla_iplug_app_main}" _aeyla_iplug_app_main_source)
