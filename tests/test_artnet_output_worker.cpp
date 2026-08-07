@@ -1,5 +1,6 @@
 #include "output/artnet_output_worker.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
