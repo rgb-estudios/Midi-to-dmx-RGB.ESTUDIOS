@@ -1,4 +1,5 @@
 #include "AeylaVisualDmx.h"
+#include "AeylaExecutorRuntimeControl.h"
 #include "AeylaMainControl.h"
 #include "AeylaRuntimeStatusControl.h"
 #include "IPlug_include_in_plug_src.h"
@@ -37,6 +38,7 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
 
   mLayoutFunc = [&](IGraphics* pGraphics) {
     const IRECT bounds = pGraphics->GetBounds();
+    const IRECT executorBounds = AeylaExecutorRuntimeControl::BoundsFor(bounds);
 
     if(pGraphics->NControls())
     {
@@ -44,6 +46,8 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
         background->SetRECT(bounds);
       if(auto* main = pGraphics->GetControlWithTag(kCtrlTagMain))
         main->SetRECT(bounds);
+      if(auto* executors = pGraphics->GetControlWithTag(kCtrlTagExecutorRuntime))
+        executors->SetRECT(executorBounds);
       if(auto* status = pGraphics->GetControlWithTag(kCtrlTagRuntimeStatus))
         status->SetRECT(bounds);
       return;
@@ -58,6 +62,8 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
       pGraphics->LoadFont("AeylaUI", "Times New Roman", ETextStyle::Normal);
 
     pGraphics->AttachControl(new AeylaMainControl(bounds, *this), kCtrlTagMain);
+    pGraphics->AttachControl(new AeylaExecutorRuntimeControl(executorBounds, *this),
+                             kCtrlTagExecutorRuntime);
     pGraphics->AttachControl(new AeylaRuntimeStatusControl(bounds, *this),
                              kCtrlTagRuntimeStatus);
   };
@@ -147,6 +153,8 @@ void AeylaVisualDmx::OnIdle()
   {
     if(auto* main = ui->GetControlWithTag(kCtrlTagMain))
       main->SetDirty(false);
+    if(auto* executors = ui->GetControlWithTag(kCtrlTagExecutorRuntime))
+      executors->SetDirty(false);
     if(auto* status = ui->GetControlWithTag(kCtrlTagRuntimeStatus))
       status->SetDirty(false);
   }
@@ -189,6 +197,32 @@ void AeylaVisualDmx::ToggleOutputArmFromUI()
 void AeylaVisualDmx::ForceDisarmFromUI()
 {
   SetOutputArmed(false);
+}
+
+void AeylaVisualDmx::TriggerExecutorFromUI(int executorIndex, float velocity)
+{
+  if(executorIndex < 0 || executorIndex > 7)
+    return;
+
+  aeyla::runtime::HostEvent event{};
+  event.type = aeyla::runtime::HostEventType::note_on;
+  event.note = static_cast<std::uint8_t>(36 + executorIndex);
+  event.value = std::clamp(velocity, 0.0F, 1.0F);
+  mModel.handle_host_event(event);
+  SyncSnapshotToAtomics();
+}
+
+void AeylaVisualDmx::ReleaseExecutorFromUI(int executorIndex)
+{
+  if(executorIndex < 0 || executorIndex > 7)
+    return;
+
+  aeyla::runtime::HostEvent event{};
+  event.type = aeyla::runtime::HostEventType::note_off;
+  event.note = static_cast<std::uint8_t>(36 + executorIndex);
+  event.value = 0.0F;
+  mModel.handle_host_event(event);
+  SyncSnapshotToAtomics();
 }
 
 void AeylaVisualDmx::SetOutputArmed(bool armed)
