@@ -35,6 +35,17 @@ aeyla::show::SongProgram make_song() {
   };
   return song;
 }
+
+aeyla::show::ShowProgram make_show_with_song_count(std::size_t count) {
+  aeyla::show::ShowProgram program;
+  for (std::size_t index = 0; index < count; ++index) {
+    auto song = make_song();
+    song.song_id = "aeyla-song-" + std::to_string(index + 1U);
+    song.name = "AEYLA Song " + std::to_string(index + 1U);
+    program.songs.push_back(std::move(song));
+  }
+  return program;
+}
 }  // namespace
 
 int main() {
@@ -45,6 +56,14 @@ int main() {
   program.songs.push_back(make_song());
   const auto valid = validate_show_program(program, looks);
   check(valid.ok(), "canonical AEYLA scene program should validate");
+
+  const auto fifteen_songs = make_show_with_song_count(15U);
+  check(validate_show_program(fifteen_songs, looks).ok(),
+        "AEYLA v1 must accept a show containing exactly 15 songs");
+
+  const auto sixteen_songs = make_show_with_song_count(16U);
+  check(!validate_show_program(sixteen_songs, looks).ok(),
+        "AEYLA v1 must reject a show containing a 16th song");
 
   const auto compiled = compile_song_midi(program.songs.front(), looks);
   check(compiled.ok(), "valid scene program should compile to MIDI events");
