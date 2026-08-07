@@ -144,6 +144,23 @@ int main() {
             !reopened_model.snapshot().output_armed,
         "runtime-incompatible Open must preserve the current safe valid show");
 
+  auto partial_rig = aeyla::project::make_default_project_document(
+      "77777777-aaaa-4bbb-8ccc-444444444444",
+      "2026-08-07T04:20:00Z");
+  partial_rig.fixtures[9].enabled = false;
+  const auto partial_rig_path = directory / "partial-rig.aeylashow";
+  const auto partial_rig_saved =
+      aeyla::project::save_project_package_atomic(partial_rig_path, partial_rig);
+  check(partial_rig_saved.ok(),
+        "test fixture must be package-valid before runtime rig-mode validation");
+  const auto partial_rig_open = reopened.open(partial_rig_path);
+  check(!partial_rig_open.succeeded,
+        "Open must reject activation states outside canonical Rig 10/Rig 14");
+  check(reopened.current_path() == package &&
+            reopened_model.snapshot().project_id == current_project_id &&
+            reopened_model.snapshot().project_valid,
+        "unsupported rig-mode Open must not normalize or replace the current show");
+
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
   check(!cleanup_error, "test must clean temporary controller files");
