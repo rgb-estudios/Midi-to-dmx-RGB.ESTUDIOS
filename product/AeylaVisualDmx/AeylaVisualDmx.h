@@ -119,6 +119,13 @@ public:
     return mModel.snapshot().project_dirty;
   }
 
+  void RefreshVisualSpeedFromUI()
+  {
+    mModel.update_visual_speed_from_ui(
+        static_cast<float>(GetParam(kParamSpeed)->Value() / 100.0));
+    SyncSnapshotToAtomics();
+  }
+
   [[nodiscard]] const std::string& ProjectName() const noexcept
   {
     return mModel.snapshot().project_name;
