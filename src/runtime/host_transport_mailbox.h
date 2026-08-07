@@ -4,6 +4,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace aeyla::runtime {
 
@@ -25,6 +26,10 @@ struct HostTransportSnapshot {
 // the host's current absolute position, not on replaying every intermediate
 // audio block. If the consumer runs slower than the audio callback it skips old
 // snapshots and consumes the newest coherent state.
+//
+// One host callback thread is the producer. The sequence counter is a seqlock:
+// odd means a write is in progress, even means a stable snapshot. The public
+// revision is sequence / 2, so it counts complete publications from 1 upward.
 class HostTransportMailbox final {
  public:
   HostTransportMailbox() = default;
@@ -37,10 +42,14 @@ class HostTransportMailbox final {
                double tempo_bpm) noexcept {
     const bool sample_valid =
         std::isfinite(sample_position) && sample_position >= 0.0 &&
-        sample_position <= static_cast<double>(INT64_MAX);
+        sample_position <= static_cast<double>(
+            std::numeric_limits<std::int64_t>::max());
     const bool ppq_valid = std::isfinite(ppq_position);
     const bool tempo_valid =
         std::isfinite(tempo_bpm) && tempo_bpm > 0.0 && tempo_bpm <= 1000.0;
+
+    // Enter write section (odd sequence). Single-producer by contract.
+    sequence_.fetch_add(1U, std::memory_order_acq_rel);
 
     running_.store(running, std::memory_order_relaxed);
     rendering_offline_.store(rendering_offline, std::memory_order_relaxed);
@@ -57,19 +66,17 @@ class HostTransportMailbox final {
         std::bit_cast<std::uint64_t>(tempo_valid ? tempo_bpm : 120.0),
         std::memory_order_relaxed);
 
-    // Release publishes the complete field set above. Revision 0 means that no
-    // host callback has published a snapshot yet.
-    revision_.fetch_add(1U, std::memory_order_release);
+    // Leave write section (even sequence). Release publishes every field above.
+    sequence_.fetch_add(1U, std::memory_order_release);
   }
 
   [[nodiscard]] HostTransportSnapshot latest() const noexcept {
     HostTransportSnapshot result;
 
-    // A second revision read prevents a torn logical snapshot if the producer
-    // publishes while the consumer is sampling the individual lock-free fields.
     for (;;) {
-      const std::uint64_t before = revision_.load(std::memory_order_acquire);
+      const std::uint64_t before = sequence_.load(std::memory_order_acquire);
       if (before == 0U) return result;
+      if ((before & 1U) != 0U) continue;
 
       result.running = running_.load(std::memory_order_relaxed);
       result.rendering_offline =
@@ -84,9 +91,9 @@ class HostTransportMailbox final {
       result.tempo_bpm = std::bit_cast<double>(
           tempo_bits_.load(std::memory_order_relaxed));
 
-      const std::uint64_t after = revision_.load(std::memory_order_acquire);
-      if (before == after) {
-        result.revision = after;
+      const std::uint64_t after = sequence_.load(std::memory_order_acquire);
+      if (before == after && (after & 1U) == 0U) {
+        result.revision = after / 2U;
         return result;
       }
     }
@@ -98,7 +105,7 @@ class HostTransportMailbox final {
   static_assert(std::atomic<std::int64_t>::is_always_lock_free,
                 "AEYLA host transport mailbox requires lock-free 64-bit atomics");
 
-  std::atomic<std::uint64_t> revision_{0U};
+  std::atomic<std::uint64_t> sequence_{0U};
   std::atomic<bool> running_{false};
   std::atomic<bool> rendering_offline_{false};
   std::atomic<bool> sample_valid_{false};
