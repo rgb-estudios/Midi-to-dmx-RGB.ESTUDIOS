@@ -4,19 +4,22 @@
 
 AEYLA Visual DMX no es un experimento genérico de MIDI ni una interfaz de
 previsualización. Su primera entrega debe operar el show real de **Aeyla**, de
-hasta 45 minutos, coordinando iluminación, escenas visuales y automatización
-MIDI-DMX con comportamiento determinista, recuperación segura y documentación
-suficiente para ensayo, montaje y función.
+hasta 45 minutos y un máximo de **15 canciones**, coordinando iluminación,
+escenas visuales y automatización MIDI-DMX con comportamiento determinista,
+recuperación segura y documentación suficiente para ensayo, montaje y función.
 
 La misma lógica de proyecto y reproducción debe funcionar en:
 
 1. standalone Windows;
 2. standalone macOS;
-3. VST3 dentro de Ableton Live en Windows;
-4. VST3 dentro de Ableton Live en macOS Apple Silicon.
+3. VST3 dentro de REAPER en Windows;
+4. VST3 dentro de REAPER en macOS;
+5. VST3 dentro de Ableton Live en Windows;
+6. VST3 dentro de Ableton Live en macOS Apple Silicon;
+7. Audio Unit dentro de Logic Pro en macOS Apple Silicon.
 
-El archivo `.aeylashow` es la fuente de verdad portable. APP y VST3 no pueden
-mantener versiones distintas del show.
+El archivo `.aeylashow` es la fuente de verdad portable. APP, VST3 y AU no
+pueden mantener versiones distintas del show.
 
 ## Flujo de trabajo que debe resolver
 
@@ -33,12 +36,13 @@ mantener versiones distintas del show.
 
 - Crear looks reutilizables sin escribir slots DMX directamente.
 - Crear escenas con nombre, look, blackout y tiempos de entrada/salida.
-- Organizar canciones en orden de show.
+- Organizar hasta 15 canciones en orden de show.
 - Dibujar bloques MIDI en una grilla musical con compás, tempo, PPQ, zoom,
   snapping, duración, nota, canal y velocity.
 - Visualizar claramente qué escena produce cada nota.
 - Permitir editar, duplicar, mover, redimensionar y borrar bloques.
-- Importar y exportar archivos MIDI estándar para trabajar con Ableton.
+- Importar y exportar archivos MIDI estándar para trabajar con REAPER,
+  Ableton y Logic.
 - Previsualizar el resultado sin habilitar salida física.
 
 ### 3. Ensayo
@@ -65,7 +69,8 @@ mantener versiones distintas del show.
 
 ## Modelo de show inicial
 
-La versión 0.3 usa una **pista única de escenas** por canción:
+La versión 0.3 usa un máximo de **15 canciones** y una **pista única de escenas**
+por canción:
 
 - una escena activa a la vez;
 - los bloques pueden tocarse, pero no solaparse;
@@ -79,11 +84,17 @@ explícitas. No se permitirá que la superposición accidental decida el show.
 
 ## Gates obligatorios antes del primer show
 
-### G0 — Integridad de build
+### G0 — Integridad de build y hosts
 
 - [ ] APP Windows compila, abre y cierra limpiamente en el Lenovo objetivo.
 - [ ] APP macOS universal compila, abre y cierra en Intel y Apple Silicon.
 - [ ] VST3 Windows y macOS pasan Steinberg Validator sin crash ni fallos.
+- [ ] AU macOS pasa `auval` y validación de Logic Plug-in Manager.
+- [ ] REAPER Windows escanea, instancia, guarda y reabre el VST3.
+- [ ] REAPER macOS escanea, instancia, guarda y reabre el VST3.
+- [ ] Ableton Windows escanea, instancia, guarda y reabre el VST3.
+- [ ] Ableton macOS Apple Silicon escanea, instancia, guarda y reabre el VST3 nativo.
+- [ ] Logic Pro Apple Silicon escanea, instancia, guarda y reabre el AU nativo.
 - [ ] Instaladores reproducibles y checksums publicados.
 
 ### G1 — Proyecto y edición
@@ -92,19 +103,21 @@ explícitas. No se permitirá que la superposición accidental decida el show.
 - [x] `.aeylashow` ZIP mínimo con `project.json` y backup.
 - [x] New/Open/Save/Save As en la arquitectura del producto.
 - [x] Modelo determinista de canciones, escenas y bloques MIDI.
+- [x] Límite de 15 canciones aplicado en el modelo y cubierto por regresión.
 - [ ] Persistencia del programa de show dentro de `.aeylashow`.
 - [ ] Editor de canciones y escenas.
 - [ ] Piano roll/grilla MIDI con creación y edición de bloques.
 - [ ] Importación/exportación MIDI tipo 0/1 con validación.
 - [ ] Undo/redo y autosave de recuperación.
 
-### G2 — Reproducción
+### G2 — Reproducción y transporte DAW
 
 - [ ] Transporte standalone estable: play, pause, stop, seek y loop de ensayo.
-- [ ] Seguimiento del transporte de Ableton y reposicionamiento seguro.
+- [ ] Seguimiento del transporte de REAPER, Ableton y Logic y reposicionamiento seguro.
 - [ ] Scene engine con transiciones deterministas.
 - [ ] Sin notas colgadas después de stop, seek, loop o cierre de editor.
-- [ ] Reapertura de Set recupera el `.aeylashow` correcto en blackout/disarmed.
+- [ ] Reapertura del proyecto DAW recupera el `.aeylashow` correcto en blackout/disarmed.
+- [ ] El comportamiento temporal no depende de reloj de pared cuando debe seguir el DAW.
 - [ ] Prueba completa del set de Aeyla con audios y clips definitivos.
 
 ### G3 — Salida física
@@ -112,6 +125,9 @@ explícitas. No se permitirá que la superposición accidental decida el show.
 - [ ] Backend Art-Net real conectado al motor compartido.
 - [ ] Configuración de interfaz/IP/universo y detección de errores.
 - [ ] Worker de salida con frecuencia estable y contadores de fallo.
+- [ ] Ninguna llamada de red o espera bloqueante ocurre dentro del callback del host.
+- [ ] Render/bounce offline no puede emitir una secuencia acelerada a Art-Net.
+- [ ] Una sola instancia posee la salida física de cada universo; duplicados no compiten.
 - [ ] Prueba con nodo real y fixtures del proyecto.
 - [ ] Blackout, disarm, pérdida de backend y recuperación validados físicamente.
 - [ ] El DMX observado coincide byte a byte con el preview esperado.
@@ -122,7 +138,8 @@ explícitas. No se permitirá que la superposición accidental decida el show.
 - [ ] Sanitizers y tests de plataforma verdes.
 - [ ] Soak test mínimo de 8 horas sin crash, crecimiento de memoria ni drops.
 - [ ] 20 ciclos de abrir/guardar/cerrar/reabrir proyecto sin corrupción.
-- [ ] 20 ciclos de Ableton scan/load/save/reopen sin estado incorrecto.
+- [ ] 20 ciclos de scan/load/save/reopen por cada host soportado sin estado incorrecto.
+- [ ] Saltos y seeks entre las 15 canciones reconstruyen exactamente el mismo estado DMX.
 - [ ] Ensayo completo del show al menos tres veces sin intervención técnica.
 - [ ] Prueba de desconexión de red, cierre de ventana, seek, stop y reinicio.
 - [ ] Procedimiento de backup y fallback ejecutado por otra persona del equipo.
@@ -135,13 +152,20 @@ no existan fallos críticos conocidos y las pruebas físicas/reales reproduzcan 
 flujo de Aeyla completo. Hasta entonces, cada build debe identificarse como
 Development, Rehearsal Candidate o Show Candidate.
 
+Un binario puede declararse **REAPER Test Candidate** antes de Show Candidate
+solamente cuando compile de forma reproducible, pase el core, REAPER lo escanee
+e instancie, sobreviva save/reopen y mantenga la seguridad `DISARMED + BLACKOUT`
+al restaurar. Esa etiqueta autoriza programación/ensayo controlado, no operación
+de luminarias en un show.
+
 ## Orden de implementación
 
 1. corregir build/Validator y obtener binarios reproducibles;
-2. persistir canciones, escenas y clips MIDI en `.aeylashow`;
-3. integrar scene engine y transporte;
-4. construir editor de escenas y piano roll;
-5. importar/exportar MIDI y conectar Ableton;
-6. integrar Art-Net y validar hardware;
-7. ejecutar pruebas de ensayo, soak, recuperación y fallback;
-8. congelar Show Candidate específico para Aeyla.
+2. cerrar REAPER Windows como primer host de ensayo y generar Test Candidate;
+3. persistir canciones, escenas y clips MIDI en `.aeylashow`;
+4. integrar scene engine y transporte determinista de host;
+5. construir editor de escenas y piano roll;
+6. importar/exportar MIDI y cerrar REAPER/Ableton/Logic;
+7. integrar Art-Net y validar hardware;
+8. ejecutar pruebas de ensayo, soak, recuperación y fallback;
+9. congelar Show Candidate específico para Aeyla.
