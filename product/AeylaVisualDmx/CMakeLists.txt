@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(AeylaVisualDmx VERSION 0.2.0)
+project(AeylaVisualDmx VERSION 0.3.0)
 
 if(NOT DEFINED IPLUG2_DIR)
   message(FATAL_ERROR "IPLUG2_DIR must be provided by product/CMakeLists.txt")
@@ -15,7 +15,12 @@ iplug_add_plugin(${PROJECT_NAME}
     AeylaMainControl.h
     config.h
     resources/resource.h
+    ../../src/core/attributes.cpp
+    ../../src/core/color_transform.cpp
+    ../../src/core/dmx_compiler.cpp
+    ../../src/core/rig.cpp
     ../../src/runtime/runtime_safety_state.cpp
+    ../../src/product/application_model.cpp
   FORMATS
     APP
     VST3
