@@ -51,7 +51,8 @@ ProjectFileStatus ProjectFileController::new_project(
     std::string timestamp_utc) {
   auto document = project::make_default_project_document(
       std::move(project_uuid), timestamp_utc);
-  const auto validation = model_.load_project_document(document);
+  const auto validation = model_.load_project_bundle(
+      document, show::ShowProgram{});
   if (!validation.ok()) {
     return publish_failure(ProjectFileOperation::new_project,
                            "Could not create a valid AEYLA project",
@@ -67,7 +68,8 @@ ProjectFileStatus ProjectFileController::new_project(
 ProjectFileStatus ProjectFileController::open(
     const std::filesystem::path& path) {
   const auto loaded = project::load_project_package(path);
-  if (!loaded.ok() || !loaded.document.has_value()) {
+  if (!loaded.ok() || !loaded.document.has_value() ||
+      !loaded.show_program.has_value()) {
     return publish_failure(ProjectFileOperation::open,
                            "Could not open AEYLA project package",
                            flatten(loaded.diagnostics));
@@ -80,18 +82,19 @@ ProjectFileStatus ProjectFileController::open(
         {"rig.fixtures: Alpha 0.3 accepts only the canonical Rig 10 or Rig 14 activation pattern"});
   }
 
-  // Preflight the document in an isolated runtime. A package may be valid JSON
-  // and ZIP while violating a product runtime constraint such as Alpha 0.3's
-  // single-universe scope. Failed Open must not invalidate the current show.
+  // Preflight the complete document+show bundle in an isolated runtime. Failed
+  // Open must never partially replace the current valid runtime state.
   ApplicationModel candidate;
-  const auto preflight = candidate.load_project_document(*loaded.document);
+  const auto preflight = candidate.load_project_bundle(
+      *loaded.document, *loaded.show_program);
   if (!preflight.ok()) {
     return publish_failure(ProjectFileOperation::open,
                            "Project package is incompatible with this runtime",
                            flatten(preflight));
   }
 
-  const auto validation = model_.load_project_document(*loaded.document);
+  const auto validation = model_.load_project_bundle(
+      *loaded.document, *loaded.show_program);
   if (!validation.ok()) {
     return publish_failure(ProjectFileOperation::open,
                            "Project package could not be published to the runtime",
@@ -99,8 +102,11 @@ ProjectFileStatus ProjectFileController::open(
   }
 
   current_path_ = path;
-  return publish_success(ProjectFileOperation::open,
-                         "Project opened in blackout and disarmed");
+  return publish_success(
+      ProjectFileOperation::open,
+      loaded.legacy_project_only
+          ? "Legacy project opened safely; musical show program starts empty"
+          : "Project and show opened in blackout and disarmed");
 }
 
 ProjectFileStatus ProjectFileController::save(std::string timestamp_utc) {
@@ -124,7 +130,9 @@ ProjectFileStatus ProjectFileController::save_to(
     std::string timestamp_utc,
     ProjectFileOperation operation) {
   const auto document = model_.project_document_for_save(timestamp_utc);
-  const auto saved = project::save_project_package_atomic(path, document);
+  const auto show_program = model_.show_program_for_save();
+  const auto saved = project::save_project_package_atomic(
+      path, document, show_program);
   if (!saved.ok()) {
     return publish_failure(operation,
                            "Could not save AEYLA project package",
@@ -135,8 +143,8 @@ ProjectFileStatus ProjectFileController::save_to(
   model_.mark_project_saved(std::move(timestamp_utc));
   return publish_success(operation,
                          operation == ProjectFileOperation::save
-                             ? "Project package saved and verified"
-                             : "Project package saved to a new path and verified");
+                             ? "Project and show package saved and verified"
+                             : "Project and show package saved to a new path and verified");
 }
 
 ProjectFileStatus ProjectFileController::publish_failure(
