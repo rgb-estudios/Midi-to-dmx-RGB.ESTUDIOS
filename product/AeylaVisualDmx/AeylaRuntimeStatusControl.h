@@ -137,6 +137,12 @@ private:
            y >= rectangle.T && y <= rectangle.B;
   }
 
+  static bool Empty(const WDL_String& value) noexcept
+  {
+    const char* text = value.Get();
+    return text == nullptr || text[0] == '\0';
+  }
+
   static std::filesystem::path DialogPath(const WDL_String& fileName,
                                           const WDL_String& path)
   {
@@ -172,13 +178,13 @@ private:
     }
 
     GetUI()->ShowMessageBox(
+        "The current AEYLA project has unsaved changes. Continue and discard them?",
+        "Unsaved AEYLA project",
+        kMB_YESNO,
         [action = std::move(action)](EMsgBoxResult result) {
           if(result == kYES)
             action();
-        },
-        "The current AEYLA project has unsaved changes. Continue and discard them?",
-        "Unsaved AEYLA project",
-        EMsgBoxType::kMB_YESNO);
+        });
   }
 
   void PromptOpen()
@@ -188,9 +194,9 @@ private:
                         ? ""
                         : mPlug.CurrentProjectPath().parent_path().string().c_str());
     GetUI()->PromptForFile(
-        mDialogFileName, mDialogPath, EFileAction::Open, "aeylashow",
-        [this](WDL_String& fileName, WDL_String& path) {
-          if(fileName.GetLength() == 0)
+        mDialogFileName, mDialogPath, EFileAction::Open, ".aeylashow",
+        [this](const WDL_String& fileName, const WDL_String& path) {
+          if(Empty(fileName))
             return;
           (void) mPlug.OpenProjectFromUI(DialogPath(fileName, path));
           SetDirty(false);
@@ -206,9 +212,9 @@ private:
                         ? ""
                         : mPlug.CurrentProjectPath().parent_path().string().c_str());
     GetUI()->PromptForFile(
-        mDialogFileName, mDialogPath, EFileAction::Save, "aeylashow",
-        [this](WDL_String& fileName, WDL_String& path) {
-          if(fileName.GetLength() == 0)
+        mDialogFileName, mDialogPath, EFileAction::Save, ".aeylashow",
+        [this](const WDL_String& fileName, const WDL_String& path) {
+          if(Empty(fileName))
             return;
           auto target = DialogPath(fileName, path);
           if(target.extension() != ".aeylashow")
