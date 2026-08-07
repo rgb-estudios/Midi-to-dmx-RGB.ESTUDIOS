@@ -26,6 +26,7 @@ enum EParams
 enum EControlTags
 {
   kCtrlTagMain = 100,
+  kCtrlTagExecutorRuntime,
   kCtrlTagRuntimeStatus,
   kNumCtrlTags
 };
@@ -50,6 +51,8 @@ public:
 
   void ToggleOutputArmFromUI();
   void ForceDisarmFromUI();
+  void TriggerExecutorFromUI(int executorIndex, float velocity);
+  void ReleaseExecutorFromUI(int executorIndex);
 
   [[nodiscard]] bool OutputArmed() const noexcept
   {
