@@ -4,9 +4,12 @@
 #include "IControls.h"
 #include "product/application_model.h"
 #include "runtime/host_event_ingress.h"
+#include "runtime/plugin_state.h"
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 
 constexpr int kNumPresets = 1;
 
@@ -47,6 +50,8 @@ public:
   void OnParamChange(int paramIdx) override;
 #endif
 
+  bool SerializeState(IByteChunk& chunk) const override;
+  int UnserializeState(const IByteChunk& chunk, int startPos) override;
   void OnIdle() override;
 
   void ToggleOutputArmFromUI();
@@ -94,6 +99,11 @@ public:
     return mHostIngress.dropped_events();
   }
 
+  [[nodiscard]] std::uint64_t HostStateRestoreErrors() const noexcept
+  {
+    return mHostStateRestoreErrors.load(std::memory_order_relaxed);
+  }
+
   [[nodiscard]] std::uint64_t DmxGeneration() const noexcept
   {
     return mDmxGeneration.load(std::memory_order_relaxed);
@@ -105,16 +115,23 @@ public:
   }
 
 private:
+  void ApplyPendingHostState();
   void ApplyPendingParameterState();
   void DrainHostEvents();
+  void RefreshHostStateCache();
   void SyncSnapshotToAtomics() noexcept;
   void SetOutputArmed(bool armed);
 
   aeyla::runtime::HostEventIngress<1024> mHostIngress{};
   aeyla::product::ApplicationModel mModel{};
 
+  mutable std::mutex mHostStateMutex;
+  aeyla::runtime::PluginComponentState mHostStateCache{};
+  std::optional<aeyla::runtime::PluginComponentState> mPendingHostState;
+
   std::atomic<bool> mParameterUpdatePending{true};
   std::atomic<bool> mHostDeactivationPending{false};
+  std::atomic<bool> mHostStateRestoreRejected{false};
   std::atomic<bool> mOutputArmed{false};
   std::atomic<bool> mEffectiveBlackout{true};
   std::atomic<bool> mBackendReady{false};
@@ -122,6 +139,7 @@ private:
   std::atomic<int> mLastMidiNote{-1};
   std::atomic<int> mActiveExecutor{-1};
   std::atomic<std::uint64_t> mMidiEventCount{0};
+  std::atomic<std::uint64_t> mHostStateRestoreErrors{0};
   std::atomic<std::uint64_t> mDmxGeneration{0};
   std::atomic<int> mDmxNonZeroChannels{0};
 };
