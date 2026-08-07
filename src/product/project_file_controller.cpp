@@ -45,7 +45,7 @@ ProjectFileStatus ProjectFileController::new_project(
   }
 
   current_path_.clear();
-  model_.set_project_name("Untitled AEYLA Show");
+  model_.mark_project_unsaved();
   return publish_success(ProjectFileOperation::new_project,
                          "New project created in blackout and disarmed");
 }
