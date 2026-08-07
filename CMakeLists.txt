@@ -34,10 +34,6 @@ target_include_directories(aeyla_miniz PUBLIC
   "${aeyla_miniz_source_SOURCE_DIR}"
   "${AEYLA_MINIZ_GENERATED_DIR}"
 )
-# AEYLA uses only the ZIP archive API. Disabling the zlib-compatibility wrappers
-# prevents unused inline wrappers in upstream miniz.h from weakening our own
-# warnings-as-errors policy. MINIZ_NO_TIME removes host timestamps so identical
-# project documents produce deterministic package bytes.
 target_compile_definitions(aeyla_miniz PUBLIC
   MINIZ_NO_TIME
   MINIZ_NO_ZLIB_APIS
@@ -71,12 +67,12 @@ add_executable(aeyla_core_tests tests/test_main.cpp)
 target_link_libraries(aeyla_core_tests PRIVATE aeyla_core)
 add_test(NAME aeyla_core_tests COMMAND aeyla_core_tests)
 
-# Shared product/runtime/project state used by standalone and VST3 adapters.
 add_library(aeyla_runtime
   src/runtime/plugin_state.cpp
   src/runtime/runtime_safety_state.cpp
   src/product/application_model.cpp
   src/product/project_file_controller.cpp
+  src/product/project_identity.cpp
   src/project/project_document.cpp
   src/project/project_state_store.cpp
   src/project/project_package.cpp
