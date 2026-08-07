@@ -169,6 +169,13 @@ int main() {
   check(worker.start(config, error),
         "Art-Net worker must start on a numeric loopback IPv4 target: " + error);
 
+  ArtNetOutputWorker duplicate;
+  error.clear();
+  check(!duplicate.start(config, error),
+        "a second AEYLA worker must not own the same target/universe");
+  check(!error.empty(),
+        "duplicate output ownership failure must provide an explicit diagnostic");
+
   // Publish a burst before enabling output. The worker must not queue 100
   // historical frames; its first emitted frame must be the latest generation.
   for (std::uint64_t generation = 1U; generation <= 100U; ++generation) {
@@ -235,10 +242,35 @@ int main() {
   check(before_stop.send_errors == 0U,
         "loopback campaign must complete without UDP send errors");
 
+  // Re-enable and then stop without an explicit disable. Clean shutdown itself
+  // must produce a final blackout before the worker thread exits.
+  worker.set_enabled(true);
+  bool observed_reenabled = false;
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    const auto packet = receive_packet(receiver.socket);
+    if (is_artdmx(packet) && packet.size() > 19U && packet[18] == 101U) {
+      observed_reenabled = true;
+      break;
+    }
+  }
+  check(observed_reenabled,
+        "re-enabled worker must resume the latest desired frame");
+
   worker.stop();
+  const auto shutdown_blackout = receive_packet(receiver.socket);
+  check(is_artdmx(shutdown_blackout) && payload_is_zero(shutdown_blackout),
+        "stopping an enabled worker must emit a final blackout packet");
+
   const auto stopped = worker.stats();
   check(!stopped.running && !stopped.enabled,
         "stop must join the network thread and leave output disabled");
+
+  // Once the first worker releases its process-local lease, another instance
+  // may acquire the same endpoint safely.
+  error.clear();
+  check(duplicate.start(config, error),
+        "output lease must be released after worker shutdown: " + error);
+  duplicate.stop();
 
   ArtNetOutputWorker invalid_worker;
   ArtNetOutputConfig invalid = config;
@@ -246,6 +278,18 @@ int main() {
   error.clear();
   check(!invalid_worker.start(invalid, error),
         "runtime must reject DNS hostnames and require numeric IPv4");
+
+  ArtNetOutputWorker broadcast_worker;
+  invalid.target_ipv4 = "255.255.255.255";
+  error.clear();
+  check(!broadcast_worker.start(invalid, error),
+        "Alpha v1 must reject broadcast targets and remain explicit unicast");
+
+  ArtNetOutputWorker multicast_worker;
+  invalid.target_ipv4 = "239.1.2.3";
+  error.clear();
+  check(!multicast_worker.start(invalid, error),
+        "Alpha v1 must reject multicast targets and remain explicit unicast");
 
   if (failures == 0) {
     std::cout << "All AEYLA Art-Net output worker tests passed.\n";
