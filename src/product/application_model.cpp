@@ -211,6 +211,7 @@ ApplicationModel::ApplicationModel()
       show_program_, available_look_ids(project_)).ok();
   // A simulated/null backend must not satisfy the real output-arm gate.
   safety_.set_backend_ready(false);
+  rebuild_cue_runtime();
   rebuild();
 }
 
@@ -236,6 +237,7 @@ project::ProjectValidation ApplicationModel::load_project_bundle(
   project_ = document;
   project_.output.armed = false;
   show_program_ = show_program;
+  active_song_index_ = 0U;
   authored_source_ = *source_from_name(active_look->source);
   color_settings_.white_extraction = project_.visual.white_extraction;
   color_settings_.amber_extraction = project_.visual.amber_extraction;
@@ -248,6 +250,7 @@ project::ProjectValidation ApplicationModel::load_project_bundle(
   project_dirty_ = false;
   performance_ready_ = show::validate_show_program_for_performance(
       show_program_, available_look_ids(project_)).ok();
+  rebuild_cue_runtime();
 
   safety_.complete_project_reload(true);
   rebuild();
@@ -277,10 +280,12 @@ show::ShowValidation ApplicationModel::replace_show_program(
   if (!validation.ok() || program == show_program_) return validation;
 
   show_program_ = program;
+  if (active_song_index_ >= show_program_.songs.size()) active_song_index_ = 0U;
   performance_ready_ = show::validate_show_program_for_performance(
       show_program_, available_look_ids(project_)).ok();
   active_executor_ = -1;
   executor_velocity_ = 0.0F;
+  rebuild_cue_runtime();
   safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
   safety_.set_blackout(true);
   mark_dirty();
@@ -291,6 +296,27 @@ show::ShowValidation ApplicationModel::replace_show_program(
 show::ShowValidation ApplicationModel::show_performance_validation() const {
   return show::validate_show_program_for_performance(
       show_program_, available_look_ids(project_));
+}
+
+bool ApplicationModel::select_song(std::size_t song_index) {
+  if (song_index >= show_program_.songs.size()) return false;
+  if (song_index == active_song_index_ && cue_runtime_.has_value()) return true;
+
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  active_executor_ = -1;
+  executor_velocity_ = 0.0F;
+  active_song_index_ = song_index;
+  rebuild_cue_runtime();
+  rebuild();
+  return true;
+}
+
+void ApplicationModel::seek_active_song_tick(std::uint64_t tick) {
+  if (!cue_runtime_.has_value()) return;
+  cue_runtime_->seek(tick);
+  apply_cue_runtime_state();
+  rebuild();
 }
 
 void ApplicationModel::mark_project_saved(std::string modified_at) {
@@ -424,6 +450,49 @@ void ApplicationModel::set_uv_manual(float value) {
 }
 
 void ApplicationModel::handle_host_event(const runtime::HostEvent& event) {
+  if (cue_runtime_.has_value()) {
+    switch (event.type) {
+      case runtime::HostEventType::note_on: {
+        const float normalized = clamp01(event.value);
+        if (normalized <= 0.0F) {
+          cue_runtime_->note_off(event.note, event.channel);
+        } else {
+          const auto velocity = static_cast<std::uint8_t>(std::clamp(
+              static_cast<int>(std::lround(normalized * 127.0F)), 1, 127));
+          cue_runtime_->note_on(event.note, velocity, event.channel);
+        }
+        break;
+      }
+
+      case runtime::HostEventType::note_off:
+        cue_runtime_->note_off(event.note, event.channel);
+        break;
+
+      case runtime::HostEventType::all_notes_off:
+        cue_runtime_->all_notes_off();
+        break;
+
+      case runtime::HostEventType::transport_started:
+        cue_runtime_->transport_start();
+        break;
+
+      case runtime::HostEventType::transport_stopped:
+        cue_runtime_->transport_stop();
+        break;
+
+      case runtime::HostEventType::transport_seek:
+        // Absolute host position is consumed through HostTransportMailbox and
+        // converted to song-relative ticks by the DAW-session binding layer.
+        // Never guess a song tick from this discrete marker.
+        break;
+    }
+
+    apply_cue_runtime_state();
+    rebuild();
+    return;
+  }
+
+  // Diagnostic/manual fallback used only before a musical show is authored.
   switch (event.type) {
     case runtime::HostEventType::note_on:
       if (event.note >= 36 && event.note <= 43 && event.value > 0.0F) {
@@ -454,13 +523,81 @@ void ApplicationModel::handle_host_event(const runtime::HostEvent& event) {
 }
 
 void ApplicationModel::release_transients() {
-  active_executor_ = -1;
-  executor_velocity_ = 0.0F;
+  if (cue_runtime_.has_value()) {
+    cue_runtime_->all_notes_off();
+    apply_cue_runtime_state();
+  } else {
+    active_executor_ = -1;
+    executor_velocity_ = 0.0F;
+  }
   rebuild();
 }
 
 void ApplicationModel::mark_dirty() noexcept {
   project_dirty_ = true;
+}
+
+void ApplicationModel::rebuild_cue_runtime() {
+  cue_runtime_.reset();
+  cue_source_override_.reset();
+  cue_scene_blackout_ = false;
+  active_scene_id_.clear();
+  active_scene_name_.clear();
+  active_scene_momentary_ = false;
+
+  if (show_program_.songs.empty()) {
+    active_song_index_ = 0U;
+    return;
+  }
+  if (active_song_index_ >= show_program_.songs.size()) active_song_index_ = 0U;
+
+  cue_runtime_.emplace(show_program_.songs[active_song_index_]);
+  cue_runtime_->seek(0U);
+  apply_cue_runtime_state();
+}
+
+void ApplicationModel::apply_cue_runtime_state() {
+  cue_source_override_.reset();
+  cue_scene_blackout_ = false;
+  active_scene_id_.clear();
+  active_scene_name_.clear();
+  active_scene_momentary_ = false;
+
+  if (!cue_runtime_.has_value()) return;
+
+  const show::SceneDefinition* scene = cue_runtime_->effective_scene();
+  if (scene == nullptr) {
+    // Once a musical show exists, absence of a resolved cue is not permission
+    // to fall back to the editable preview Look. It is a deterministic safe
+    // state before the first cue, after Stop, or outside song bounds.
+    cue_scene_blackout_ = true;
+    return;
+  }
+
+  active_scene_id_ = scene->scene_id;
+  active_scene_name_ = scene->name;
+  active_scene_momentary_ = scene->behavior == show::CueBehavior::momentary;
+  if (scene->blackout) {
+    cue_scene_blackout_ = true;
+    return;
+  }
+
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == scene->look_id;
+      });
+  if (look == project_.looks.end()) {
+    cue_scene_blackout_ = true;
+    return;
+  }
+
+  const auto source = source_from_name(look->source);
+  if (!source.has_value()) {
+    cue_scene_blackout_ = true;
+    return;
+  }
+  cue_source_override_ = *source;
 }
 
 void ApplicationModel::rebuild() {
@@ -469,8 +606,9 @@ void ApplicationModel::rebuild() {
     profiles.emplace(document.profile_id, make_runtime_profile(document));
   }
 
-  const VisualSource source = effective_source(authored_source_, active_executor_);
-  const bool blackout = safety_.blackout();
+  const VisualSource source = cue_source_override_.value_or(
+      effective_source(authored_source_, active_executor_));
+  const bool blackout = safety_.blackout() || cue_scene_blackout_;
 
   std::vector<PatchedFixture> patched;
   patched.reserve(project_.fixtures.size());
@@ -538,6 +676,16 @@ void ApplicationModel::rebuild() {
   snapshot_.blackout = blackout;
   snapshot_.rig14 = rig14_;
   snapshot_.song_count = show_program_.songs.size();
+  snapshot_.active_song_index = active_song_index_;
+  snapshot_.active_song_id.clear();
+  snapshot_.active_song_name.clear();
+  if (!show_program_.songs.empty() && active_song_index_ < show_program_.songs.size()) {
+    snapshot_.active_song_id = show_program_.songs[active_song_index_].song_id;
+    snapshot_.active_song_name = show_program_.songs[active_song_index_].name;
+  }
+  snapshot_.active_scene_id = active_scene_id_;
+  snapshot_.active_scene_name = active_scene_name_;
+  snapshot_.active_scene_momentary = active_scene_momentary_;
   snapshot_.output_universe = project_.output.universe;
   snapshot_.active_executor = active_executor_;
   snapshot_.executor_velocity = executor_velocity_;
