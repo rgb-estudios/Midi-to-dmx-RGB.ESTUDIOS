@@ -1,0 +1,132 @@
+name: plugin-format-validation
+
+on:
+  pull_request:
+    paths:
+      - "product/**"
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/plugin-format-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  macos-universal-auv2:
+    name: macOS universal AUv2 / auval
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone pinned iPlug2 and VST3 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+
+          sdk_path="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk_path"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk_path"
+          git -C "$sdk_path" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk_path" submodule update --init --recursive
+          test -d "$sdk_path/pluginterfaces"
+
+      - name: Validate AU metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          plutil -lint product/AeylaVisualDmx/resources/AeylaVisualDmx-AU-Info.plist
+          /usr/libexec/PlistBuddy -c "Print :AudioComponents:0:type" \
+            product/AeylaVisualDmx/resources/AeylaVisualDmx-AU-Info.plist | grep -Fx aumu
+          /usr/libexec/PlistBuddy -c "Print :AudioComponents:0:subtype" \
+            product/AeylaVisualDmx/resources/AeylaVisualDmx-AU-Info.plist | grep -Fx AyVD
+          /usr/libexec/PlistBuddy -c "Print :AudioComponents:0:manufacturer" \
+            product/AeylaVisualDmx/resources/AeylaVisualDmx-AU-Info.plist | grep -Fx RGBE
+
+      - name: Configure universal product
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-format-validation \
+            -DIPLUG2_DIR="$PWD/external/iPlug2" \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build APP, VST3 and AUv2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build-format-validation --config Release \
+            --target AeylaVisualDmx-app AeylaVisualDmx-vst3 AeylaVisualDmx-au \
+            --parallel 2
+
+      - name: Verify universal bundle architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          au_binary="build-format-validation/out/AeylaVisualDmx.component/Contents/MacOS/AeylaVisualDmx"
+          vst_binary="build-format-validation/out/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx"
+          app_binary="build-format-validation/out/AeylaVisualDmx.app/Contents/MacOS/AeylaVisualDmx"
+          for binary in "$au_binary" "$vst_binary" "$app_binary"; do
+            test -f "$binary"
+            architectures="$(lipo -archs "$binary")"
+            echo "$binary: $architectures"
+            grep -qw arm64 <<<"$architectures"
+            grep -qw x86_64 <<<"$architectures"
+          done
+
+      - name: Ad-hoc sign test bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --force --deep --sign - build-format-validation/out/AeylaVisualDmx.component
+          codesign --force --deep --sign - build-format-validation/out/AeylaVisualDmx.vst3
+          codesign --force --deep --sign - build-format-validation/out/AeylaVisualDmx.app
+          codesign --verify --deep --strict --verbose=2 build-format-validation/out/AeylaVisualDmx.component
+
+      - name: Install component and run Apple auval
+        shell: bash
+        run: |
+          set -euo pipefail
+          component_dir="$HOME/Library/Audio/Plug-Ins/Components"
+          mkdir -p "$component_dir"
+          rm -rf "$component_dir/AeylaVisualDmx.component"
+          ditto build-format-validation/out/AeylaVisualDmx.component \
+            "$component_dir/AeylaVisualDmx.component"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -v aumu AyVD RGBE | tee auval-aeyla.log
+
+      - name: Package format-validation evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p format-validation-evidence
+          test -f auval-aeyla.log && cp auval-aeyla.log format-validation-evidence/ || true
+          plutil -convert xml1 -o \
+            format-validation-evidence/AeylaVisualDmx-AU-Info.plist \
+            product/AeylaVisualDmx/resources/AeylaVisualDmx-AU-Info.plist
+          if test -d build-format-validation/out/AeylaVisualDmx.component; then
+            ditto build-format-validation/out/AeylaVisualDmx.component \
+              format-validation-evidence/AeylaVisualDmx.component
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AEYLA-macOS-AUv2-format-validation
+          path: format-validation-evidence
+          if-no-files-found: error
+          retention-days: 14
