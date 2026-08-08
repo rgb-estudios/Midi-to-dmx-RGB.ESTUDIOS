@@ -564,6 +564,53 @@ float ApplicationModel::active_look_intensity() const noexcept {
   return look == project_.looks.end() ? 0.0F : look->intensity;
 }
 
+AuthoringResult ApplicationModel::configure_artnet_output(
+    std::string target_ipv4, std::uint16_t port_address) {
+  if (target_ipv4.empty())
+    return {false, {}, "Art-Net target IPv4 address is required"};
+  if (port_address > 0x7FFFU)
+    return {false, {}, "Art-Net port address exceeds 15 bits"};
+
+  project::ProjectDocument candidate = project_;
+  candidate.output.backend = "artnet";
+  candidate.output.target = std::move(target_ipv4);
+  candidate.output.universe = port_address;
+  candidate.output.armed = false;
+  for (auto& fixture : candidate.fixtures)
+    fixture.universe = port_address;
+
+  const auto validation = validate_runtime_bundle(candidate, show_program_);
+  if (!validation.ok())
+    return {false, {}, "Art-Net configuration failed project validation"};
+
+  project_ = std::move(candidate);
+  safety_.set_backend_ready(false);
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return {true, project_.output.target, "Art-Net configuration stored"};
+}
+
+AuthoringResult ApplicationModel::disable_output_backend() {
+  project::ProjectDocument candidate = project_;
+  candidate.output.backend = "none";
+  candidate.output.target.clear();
+  candidate.output.armed = false;
+
+  const auto validation = validate_runtime_bundle(candidate, show_program_);
+  if (!validation.ok())
+    return {false, {}, "Disabled output configuration failed project validation"};
+
+  project_ = std::move(candidate);
+  safety_.set_backend_ready(false);
+  safety_.disarm(runtime::RuntimeSafetyReason::backend_unavailable);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return {true, {}, "Physical output disabled"};
+}
+
 bool ApplicationModel::select_song(std::size_t song_index) {
   if (song_index >= show_program_.songs.size()) return false;
   if (song_index == active_song_index_ && cue_runtime_.has_value()) return true;

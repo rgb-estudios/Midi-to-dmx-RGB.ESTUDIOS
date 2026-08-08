@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — CP-AEYLA-0.3.3
+
+- Connected the graphical product to the dedicated latest-frame-only Art-Net
+  UDP worker at a fixed 40 FPS, outside the host audio callback.
+- Added visible `OUTPUT SETUP` configuration using numeric
+  `IPv4@universe`, plus `OFF` to disable physical output.
+- Added deterministic output preflight, one-owner target/universe leasing,
+  packet/error counters and send-error fail-closed disarm + blackout.
+- Added application-model tests for persisted Art-Net configuration and
+  transport tests for strict numeric unicast target validation.
+- Changed the REAPER gate to execute its smoke ReaScript through REAPER's
+  supported `Scripts/__startup.lua` lifecycle.
+
+### Safety boundary — CP-AEYLA-0.3.3
+
+- Configuration, project reload, backend disable, offline render, send error
+  and shutdown all disable transmission and preserve explicit manual re-arm.
+- UDP socket readiness does not prove that a physical Art-Net node received a
+  packet. Named node/PAR validation, disconnect detection and show soak remain
+  mandatory before Show Candidate.
+
 ### Added — CP-AEYLA-0.3.2
 
 - Added a 4 ms independent control/runtime worker so Cue, transport, MIDI and
@@ -36,8 +57,8 @@
 - Eight affected strict GCC test executables pass locally; full CTest, iPlug2
   product build, platform CI and real-host evidence remain pending on the new
   SHA.
-- Physical Art-Net remains disconnected; Windows OpenGL issue #17, REAPER
-  evidence, hardware validation and show soak remain open.
+- Windows OpenGL issue #17, REAPER evidence, hardware validation and show soak
+  remain open.
 
 ### Fixed — CP-AEYLA-0.3.1
 

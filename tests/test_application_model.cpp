@@ -69,6 +69,28 @@ int main() {
   check(!model.request_arm(), "arming must fail while no backend is ready");
 
   model.set_backend_ready(true);
+  const auto configured_output = model.configure_artnet_output("127.0.0.1", 23U);
+  check(configured_output.succeeded &&
+            model.project_document().output.backend == "artnet" &&
+            model.project_document().output.target == "127.0.0.1" &&
+            model.project_document().output.universe == 23U,
+        "Art-Net setup must persist backend, target and 15-bit port address");
+  check(std::all_of(model.project_document().fixtures.begin(),
+                    model.project_document().fixtures.end(),
+                    [](const auto& fixture) { return fixture.universe == 23U; }),
+        "one-universe Art-Net setup must repatch fixture universe metadata atomically");
+  check(model.snapshot().blackout && !model.snapshot().output_armed,
+        "changing physical output configuration must force a safe boundary");
+  check(!model.snapshot().backend_ready,
+        "changing Art-Net endpoint must revoke readiness until socket preflight");
+  const auto disabled_output = model.disable_output_backend();
+  check(disabled_output.succeeded &&
+            model.project_document().output.backend == "none" &&
+            model.project_document().output.target.empty() &&
+            !model.snapshot().backend_ready,
+        "disabling physical output must persist NONE and revoke backend readiness");
+
+  model.set_backend_ready(true);
   model.set_blackout(false);
   check(!model.request_arm(),
         "valid rig with no programmed song must fail the performance ARM gate");

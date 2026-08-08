@@ -1,6 +1,6 @@
 # AEYLA — matriz funcional de UI
 
-Checkpoint: `CP-AEYLA-0.3.2`
+Checkpoint: `CP-AEYLA-0.3.3`
 Regla: visible = funcional, bloqueado con causa o no presente.
 
 | Superficie | Evento → handler → efecto | Persistencia | Estado actual |
@@ -9,7 +9,7 @@ Regla: visible = funcional, bloqueado con causa o no presente.
 | OPEN | click → diálogo → carga transaccional | sí | **Implemented** en SHA previo; revalidación pendiente |
 | SAVE / SAVE AS | click → ZIP atómico + read-back + `.bak` | sí | **Implemented** en SHA previo; revalidación pendiente |
 | BLACKOUT | click → parámetro → modelo → DMX cero | host/show | **Implemented**; cambio de runtime en revalidación |
-| ARM | click → gates → arma o explica proyecto/backend/runtime/offline | ARM nunca persiste | **Scaffolded**; backend físico no conectado |
+| ARM | click → gates → arma o explica proyecto/backend/runtime/offline | ARM nunca persiste | **Scaffolded**; Art-Net integrado, CI/nodo pendientes |
 | RIG 10/14 | click → fixtures físicos habilitados | sí | **Implemented** en modelo |
 | Source | click → selecciona Look base y carga sus valores propios | sí | **Scaffolded**; producto pendiente de CI |
 | Paleta primaria/secundaria | click → color del Look → preview/DMX semántico | sí | **Scaffolded**; 8 colores, sin selector continuo |
@@ -27,7 +27,7 @@ Regla: visible = funcional, bloqueado con causa o no presente.
 | Executors | mouse/MIDI → Cue o diagnóstico sin Show | runtime | **Implemented** en modelo; revalidación de host pendiente |
 | Runtime con editor cerrado | worker 4 ms independiente de `OnIdle` | no | **Scaffolded**; falta prueba real en hosts |
 | Offline render | hard disarm + blackout cada tick offline | no | **Scaffolded**; falta prueba de host y backend conectado |
-| OUTPUT PREFLIGHT | no presente | config | **Specified** |
+| OUTPUT SETUP | texto `IPv4@universe`/`OFF` → valida, persiste, abre/cierra socket y desarma | sí | **Scaffolded**; CI/nodo pendientes |
 | SHOW MODE | no presente | UI state | **Specified** |
 
 ## Límites visibles de esta entrega
@@ -36,6 +36,7 @@ Regla: visible = funcional, bloqueado con causa o no presente.
   de timeline.
 - La Cue creada desde UI es LATCH; el modelo soporta MOMENTARY pero todavía no
   hay selector visible.
-- Art-Net físico sigue sin estar conectado al producto.
+- Art-Net está conectado al producto, pero no existe evidencia de nodo/PAR
+  físico ni detección positiva de recepción.
 - Nada en esta matriz autoriza uso de show sin CI actual, hosts reales,
   hardware, soak y ensayo.

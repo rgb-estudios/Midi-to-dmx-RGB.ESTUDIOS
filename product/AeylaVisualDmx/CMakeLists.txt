@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(AeylaVisualDmx VERSION 0.3.0)
+project(AeylaVisualDmx VERSION 0.3.3)
 
 if(NOT DEFINED IPLUG2_DIR)
   message(FATAL_ERROR "IPLUG2_DIR must be provided by product/CMakeLists.txt")
@@ -25,6 +25,7 @@ iplug_add_plugin(${PROJECT_NAME}
     config.h
     resources/resource.h
     ../../src/core/attributes.cpp
+    ../../src/core/artnet_packet.cpp
     ../../src/core/color_transform.cpp
     ../../src/core/dmx_compiler.cpp
     ../../src/core/rig.cpp
@@ -39,6 +40,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/product/project_identity.cpp
     ../../src/show/show_program.cpp
     ../../src/show/show_program_codec.cpp
+    ../../src/output/artnet_output_worker.cpp
   FORMATS
     ${AEYLA_PLUGIN_FORMATS}
   UI
@@ -64,6 +66,9 @@ foreach(target_name
       ${CMAKE_CURRENT_SOURCE_DIR}/../../src
     )
     target_link_libraries(${target_name} PRIVATE aeyla_product_miniz)
+    if(WIN32)
+      target_link_libraries(${target_name} PRIVATE ws2_32)
+    endif()
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     if(MSVC)
       target_compile_options(${target_name} PRIVATE /W4 /permissive-)

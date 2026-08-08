@@ -20,7 +20,7 @@ if(APPLE)
   endif()
 endif()
 
-project(AeylaVisualDmxProduct VERSION 0.3.0 LANGUAGES C CXX)
+project(AeylaVisualDmxProduct VERSION 0.3.3 LANGUAGES C CXX)
 
 include(FetchContent)
 

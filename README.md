@@ -31,14 +31,18 @@ It currently includes:
   15-Song navigation and explicit DAW Song-start bindings.
 - An independent lighting runtime worker so musical state is not owned by the
   editor's `OnIdle` callback, plus an offline-render disarm/blackout inhibit.
+- Configurable Art-Net unicast output at 40 FPS on its own network worker, with
+  startup-disarmed ownership, latest-frame publication and fail-closed send
+  errors.
 - JSON schemas for projects and fixture profiles.
 - Full architecture, product, visual, QA, release and agent documentation.
 - GitHub Actions CI configuration.
 
-Current hard limits remain: physical Art-Net is not connected to the product,
-the Windows standalone OpenGL startup P0 is unresolved, host save/reopen and
-editor-closed behavior require real REAPER/Ableton/Logic evidence, and no
-hardware or full-show soak has been performed.
+Current hard limits remain: Art-Net is integrated in source but has not been
+validated with the named node/PAR hardware, node reachability is not yet
+monitored, the Windows standalone OpenGL startup P0 is unresolved, host
+save/reopen and editor-closed behavior require real REAPER/Ableton/Logic
+evidence, and no hardware or full-show soak has been performed.
 
 ## First test
 

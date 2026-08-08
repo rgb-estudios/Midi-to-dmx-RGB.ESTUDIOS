@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <charconv>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -64,6 +66,24 @@ bool IsZero(const std::array<std::uint8_t, 32>& bytes) noexcept
 {
   return std::all_of(bytes.begin(), bytes.end(),
                      [](std::uint8_t value) { return value == 0U; });
+}
+
+std::string TrimAscii(std::string_view value)
+{
+  while(!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
+    value.remove_prefix(1U);
+  while(!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
+    value.remove_suffix(1U);
+  return std::string(value);
+}
+
+bool IsOffSpecification(std::string_view value) noexcept
+{
+  if(value.size() != 3U)
+    return false;
+  return std::tolower(static_cast<unsigned char>(value[0])) == 'o' &&
+         std::tolower(static_cast<unsigned char>(value[1])) == 'f' &&
+         std::tolower(static_cast<unsigned char>(value[2])) == 'f';
 }
 
 std::array<std::uint8_t, 4> EncodeLittleEndian32(std::uint32_t value) noexcept
@@ -155,7 +175,9 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
 
 AeylaVisualDmx::~AeylaVisualDmx()
 {
+  mArtNetOutput.set_enabled(false);
   StopRuntimeWorker();
+  mArtNetOutput.stop();
 }
 
 #if IPLUG_DSP
@@ -568,6 +590,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
         host, cyclesPerQuarter);
     mModel.set_phase(phase.value_or(0.0F));
     SyncSnapshotToAtomicsLocked();
+    PublishOutputFrameLocked(host.rendering_offline);
     RefreshHostStateCacheLocked();
   }
   catch(...)
@@ -1099,6 +1122,128 @@ float AeylaVisualDmx::ActiveLookIntensity() const
   return mModel.active_look_intensity();
 }
 
+aeyla::product::AuthoringResult AeylaVisualDmx::ConfigureArtNetFromUI(
+    std::string_view specification)
+{
+  const std::string normalized = TrimAscii(specification);
+  if(IsOffSpecification(normalized))
+  {
+    const std::scoped_lock lock(mModelMutex);
+    auto result = mModel.disable_output_backend();
+    RefreshOutputBackendFromProjectLocked();
+    SyncSnapshotToAtomicsLocked();
+    return result;
+  }
+
+  const std::size_t separator = normalized.rfind('@');
+  if(separator == std::string::npos || separator == 0U ||
+     separator + 1U >= normalized.size())
+    return {false, {}, "Use numeric IPv4@universe, for example 2.0.0.20@0, or OFF"};
+
+  const std::string target = TrimAscii(
+      std::string_view(normalized).substr(0U, separator));
+  const std::string universeText = TrimAscii(
+      std::string_view(normalized).substr(separator + 1U));
+  unsigned universe = 0U;
+  const auto parsed = std::from_chars(
+      universeText.data(), universeText.data() + universeText.size(), universe);
+  if(parsed.ec != std::errc{} ||
+     parsed.ptr != universeText.data() + universeText.size() ||
+     universe > 0x7FFFU)
+    return {false, {}, "Art-Net universe must be a number from 0 to 32767"};
+
+  aeyla::output::ArtNetOutputConfig preflight;
+  preflight.target_ipv4 = target;
+  preflight.port_address = static_cast<std::uint16_t>(universe);
+  preflight.frames_per_second = 40U;
+  std::string error;
+  if(!aeyla::output::validate_artnet_output_config(preflight, error))
+    return {false, {}, error};
+
+  const std::scoped_lock lock(mModelMutex);
+  auto result = mModel.configure_artnet_output(
+      target, static_cast<std::uint16_t>(universe));
+  if(!result.succeeded)
+    return result;
+  RefreshOutputBackendFromProjectLocked();
+  SyncSnapshotToAtomicsLocked();
+  if(!mModel.snapshot().backend_ready)
+    return {false, target, mOutputBackendError.empty()
+                                ? "Art-Net backend preflight failed"
+                                : mOutputBackendError};
+  return {true, target, "Art-Net ready at " + target + "@" + universeText};
+}
+
+std::string AeylaVisualDmx::OutputBackendStatus() const
+{
+  const std::scoped_lock lock(mModelMutex);
+  const auto& output = mModel.project_document().output;
+  if(output.backend != "artnet" || output.target.empty())
+    return "OUTPUT OFF";
+  return "ARTNET " + output.target + "@" + std::to_string(output.universe);
+}
+
+std::string AeylaVisualDmx::OutputBackendError() const
+{
+  const std::scoped_lock lock(mModelMutex);
+  return mOutputBackendError;
+}
+
+void AeylaVisualDmx::RefreshOutputBackendFromProjectLocked()
+{
+  mArtNetOutput.set_enabled(false);
+  mArtNetOutput.stop();
+  mLastArtNetSendErrors = 0U;
+  mOutputBackendError.clear();
+
+  const auto& output = mModel.project_document().output;
+  if(output.backend != "artnet" || output.target.empty())
+  {
+    mModel.set_backend_ready(false);
+    if(output.backend != "none")
+      mOutputBackendError = "Configured output backend is not implemented";
+    return;
+  }
+
+  aeyla::output::ArtNetOutputConfig config;
+  config.target_ipv4 = output.target;
+  config.port_address = output.universe;
+  config.frames_per_second = 40U;
+  if(!mArtNetOutput.start(config, mOutputBackendError))
+  {
+    mModel.set_backend_ready(false);
+    return;
+  }
+  mModel.set_backend_ready(true);
+}
+
+void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
+{
+  const auto& snapshot = mModel.snapshot();
+  if(!snapshot.backend_ready)
+  {
+    mArtNetOutput.set_enabled(false);
+    return;
+  }
+
+  mArtNetOutput.publish_latest(snapshot.dmx, snapshot.generation);
+  mArtNetOutput.set_enabled(snapshot.output_armed && !renderingOffline);
+
+  const auto stats = mArtNetOutput.stats();
+  if(stats.send_errors <= mLastArtNetSendErrors)
+    return;
+
+  mLastArtNetSendErrors = stats.send_errors;
+  mOutputBackendError = "Art-Net send failed; output was disarmed";
+  mArtNetOutput.set_enabled(false);
+  mModel.release_transients();
+  mModel.set_backend_ready(false);
+  mModel.disarm(aeyla::runtime::RuntimeSafetyReason::backend_unavailable);
+  mModel.set_blackout(true);
+  mParamBlackout.store(true, std::memory_order_release);
+  SyncSnapshotToAtomicsLocked();
+}
+
 void AeylaVisualDmx::SetOutputArmed(bool armed)
 {
   const std::scoped_lock lock(mModelMutex);
@@ -1113,6 +1258,8 @@ void AeylaVisualDmx::SetOutputArmed(bool armed)
     mModel.disarm();
 
   SyncSnapshotToAtomicsLocked();
+  PublishOutputFrameLocked(
+      mRenderingOffline.load(std::memory_order_acquire));
 }
 
 void AeylaVisualDmx::SyncSnapshotToAtomicsLocked() noexcept

@@ -5,6 +5,7 @@
 #include "product/application_model.h"
 #include "product/project_file_controller.h"
 #include "product/project_identity.h"
+#include "output/artnet_output_worker.h"
 #include "runtime/host_event_ingress.h"
 #include "runtime/host_transport_mailbox.h"
 #include "runtime/plugin_state.h"
@@ -84,6 +85,18 @@ public:
   [[nodiscard]] std::array<float, 3> ActiveLookColor(bool secondary) const;
   [[nodiscard]] bool SetActiveLookIntensityFromUI(float intensity);
   [[nodiscard]] float ActiveLookIntensity() const;
+  [[nodiscard]] aeyla::product::AuthoringResult ConfigureArtNetFromUI(
+      std::string_view specification);
+  [[nodiscard]] std::string OutputBackendStatus() const;
+  [[nodiscard]] std::string OutputBackendError() const;
+  [[nodiscard]] std::uint64_t ArtNetSentPackets() const noexcept
+  {
+    return mArtNetOutput.stats().sent_packets;
+  }
+  [[nodiscard]] std::uint64_t ArtNetSendErrors() const noexcept
+  {
+    return mArtNetOutput.stats().send_errors;
+  }
 
   aeyla::product::ProjectFileStatus NewProjectFromUI()
   {
@@ -92,7 +105,10 @@ public:
         aeyla::product::generate_project_uuid(),
         aeyla::product::current_utc_timestamp());
     if(status.succeeded)
+    {
       SyncParametersFromProject();
+      RefreshOutputBackendFromProjectLocked();
+    }
     SyncSnapshotToAtomicsLocked();
     return status;
   }
@@ -103,7 +119,10 @@ public:
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.open(path);
     if(status.succeeded)
+    {
       SyncParametersFromProject();
+      RefreshOutputBackendFromProjectLocked();
+    }
     SyncSnapshotToAtomicsLocked();
     return status;
   }
@@ -242,6 +261,8 @@ private:
   void CaptureParameterValueFromHost(int paramIdx) noexcept;
   void CaptureAllParameterValuesFromHost() noexcept;
   void SetOutputArmed(bool armed);
+  void RefreshOutputBackendFromProjectLocked();
+  void PublishOutputFrameLocked(bool renderingOffline);
 
   void PrepareProjectForSave()
   {
@@ -309,6 +330,9 @@ private:
   mutable std::mutex mModelMutex;
   aeyla::product::ApplicationModel mModel{};
   aeyla::product::ProjectFileController mProjectFiles{mModel};
+  aeyla::output::ArtNetOutputWorker mArtNetOutput{};
+  std::string mOutputBackendError;
+  std::uint64_t mLastArtNetSendErrors{0U};
 
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};

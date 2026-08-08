@@ -29,6 +29,12 @@ struct ArtNetOutputStats {
   std::uint64_t stale_publish_drops{0U};
 };
 
+// Pure, non-network preflight used before changing persisted output settings.
+// Alpha v1 accepts only explicit numeric unicast IPv4 targets: no DNS,
+// broadcast, multicast or implicit interface discovery.
+[[nodiscard]] bool validate_artnet_output_config(
+    const ArtNetOutputConfig& config, std::string& error_message) noexcept;
+
 // Dedicated non-realtime Art-Net transport.
 //
 // Contract:

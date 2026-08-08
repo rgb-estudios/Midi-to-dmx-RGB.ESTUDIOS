@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <condition_variable>
 #include <cstddef>
 #include <cstring>
@@ -52,8 +53,34 @@ void close_socket(SocketHandle socket) noexcept {
 #endif
 }
 
-bool valid_config(const ArtNetOutputConfig& config,
-                  std::string& error_message) {
+bool parse_numeric_ipv4(std::string_view text,
+                        std::array<std::uint8_t, 4>& octets) noexcept {
+  std::size_t begin = 0U;
+  for (std::size_t index = 0U; index < octets.size(); ++index) {
+    const std::size_t end = index + 1U == octets.size()
+                                ? text.size()
+                                : text.find('.', begin);
+    if (end == std::string_view::npos || end == begin) return false;
+    unsigned value = 0U;
+    const char* first = text.data() + begin;
+    const char* last = text.data() + end;
+    const auto parsed = std::from_chars(first, last, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != last || value > 255U)
+      return false;
+    octets[index] = static_cast<std::uint8_t>(value);
+    begin = end + 1U;
+  }
+  return begin == text.size() + 1U;
+}
+
+bool valid_unicast_octets(const std::array<std::uint8_t, 4>& octets) noexcept {
+  // 0/8 is "this network" and 224/4 includes multicast plus the reserved
+  // high range. Neither is a deterministic unicast node destination.
+  return octets[0] != 0U && octets[0] < 224U;
+}
+
+bool valid_config_ranges(const ArtNetOutputConfig& config,
+                         std::string& error_message) {
   if (config.target_ipv4.empty()) {
     error_message = "Art-Net target IPv4 address is required";
     return false;
@@ -87,6 +114,23 @@ bool safe_unicast_target(const in_addr& address) noexcept {
 }
 
 }  // namespace
+
+bool validate_artnet_output_config(const ArtNetOutputConfig& config,
+                                   std::string& error_message) noexcept {
+  error_message.clear();
+  if (!valid_config_ranges(config, error_message)) return false;
+
+  std::array<std::uint8_t, 4> octets{};
+  if (!parse_numeric_ipv4(config.target_ipv4, octets)) {
+    error_message = "Art-Net target must be a numeric IPv4 address";
+    return false;
+  }
+  if (!valid_unicast_octets(octets)) {
+    error_message = "Art-Net Alpha v1 requires a unicast IPv4 target";
+    return false;
+  }
+  return true;
+}
 
 class ArtNetOutputWorker::Impl final {
  public:
@@ -368,7 +412,7 @@ ArtNetOutputWorker::~ArtNetOutputWorker() = default;
 bool ArtNetOutputWorker::start(const ArtNetOutputConfig& config,
                                std::string& error_message) {
   error_message.clear();
-  if (!valid_config(config, error_message)) return false;
+  if (!validate_artnet_output_config(config, error_message)) return false;
 
   impl_->shutdown();
   if (!impl_->acquire_lease(config, error_message)) return false;

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 class AeylaRuntimeStatusControl final : public IControl
@@ -42,7 +43,7 @@ public:
     g.DrawLine(line, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
     static constexpr const char* labels[] = {
-        "NEW", "OPEN", "SAVE", "SAVE AS", "SET SONG START"};
+        "NEW", "OPEN", "SAVE", "SAVE AS", "SET SONG START", "OUTPUT SETUP"};
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
       g.FillRoundRect(raised, mButtons[index], 5.0F);
@@ -67,19 +68,20 @@ public:
 
     g.DrawText(IText(9.0F, projectColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
                projectLabel.c_str(),
-               IRECT(footer.L + 390.0F, footer.T, footer.L + 620.0F, footer.B));
+               IRECT(footer.L + 488.0F, footer.T, footer.L + 680.0F, footer.B));
 
     char runtime[160];
     std::snprintf(runtime, sizeof(runtime),
-                  "DMX %llu  ·  %d CH  ·  DROP %llu  ·  STATE %llu",
+                  "DMX %llu · %d CH · NET %llu/%llu · DROP %llu",
                   static_cast<unsigned long long>(mPlug.DmxGeneration()),
                   mPlug.DmxNonZeroChannels(),
-                  static_cast<unsigned long long>(mPlug.DroppedMidiEvents()),
-                  static_cast<unsigned long long>(mPlug.HostStateRestoreErrors()));
+                  static_cast<unsigned long long>(mPlug.ArtNetSentPackets()),
+                  static_cast<unsigned long long>(mPlug.ArtNetSendErrors()),
+                  static_cast<unsigned long long>(mPlug.DroppedMidiEvents()));
     g.DrawText(IText(9.0F, muted, "AeylaUI", EAlign::Center, EVAlign::Middle),
                runtime,
-               IRECT(footer.L + 620.0F, footer.T,
-                     footer.L + 850.0F, footer.B));
+               IRECT(footer.L + 680.0F, footer.T,
+                     footer.L + 900.0F, footer.B));
 
     char state[220];
     const char* project = mPlug.ProjectValid() ? "PROJECT VALID" : "PROJECT INVALID";
@@ -100,7 +102,7 @@ public:
 
     g.DrawText(IText(9.0F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
                state,
-               IRECT(footer.L + 850.0F, footer.T,
+               IRECT(footer.L + 900.0F, footer.T,
                      footer.R - 14.0F, footer.B));
   }
 
@@ -169,7 +171,29 @@ public:
             kMB_OK);
       }
       SetDirty(false);
+      return;
     }
+
+    if(Contains(mButtons[5], x, y))
+    {
+      PromptOutputSetup();
+    }
+  }
+
+  void OnTextEntryCompletion(const char* str, int valIdx) override
+  {
+    if(valIdx != kOutputConfigTextEntry || str == nullptr)
+      return;
+    const auto result = mPlug.ConfigureArtNetFromUI(str);
+    if(!result.succeeded)
+    {
+      GetUI()->ShowMessageBox(
+          (result.message +
+           "\n\nUse IPv4@universe (example: 2.0.0.20@0), or type OFF.")
+              .c_str(),
+          "AEYLA · ART-NET PREFLIGHT", kMB_OK);
+    }
+    SetDirty(false);
   }
 
 private:
@@ -282,10 +306,15 @@ private:
 
     if(!mPlug.BackendReady())
     {
+      std::string message =
+          "ARM is locked because no healthy physical output backend is ready.\n\n"
+          "Open OUTPUT SETUP, enter the Art-Net node as IPv4@universe, and "
+          "complete preflight before arming.";
+      const std::string backendError = mPlug.OutputBackendError();
+      if(!backendError.empty())
+        message += "\n\nLast backend error: " + backendError;
       GetUI()->ShowMessageBox(
-          "ARM is locked because the physical output backend is not connected yet.\n\n"
-          "This build is intentionally PREVIEW / NO DMX. Art-Net will only become "
-          "armable after backend preflight and safety integration pass.",
+          message.c_str(),
           "AEYLA · ARM LOCKED",
           kMB_OK);
       return;
@@ -325,7 +354,7 @@ private:
     constexpr float left = 12.0F;
     constexpr float topPad = 8.0F;
     constexpr float gap = 6.0F;
-    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F, 112.0F};
+    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F, 112.0F, 92.0F};
 
     float cursor = footer.L + left;
     for(std::size_t index = 0; index < mButtons.size(); ++index)
@@ -334,6 +363,22 @@ private:
                               cursor + widths[index], footer.B - topPad);
       cursor += widths[index] + gap;
     }
+  }
+
+  void PromptOutputSetup()
+  {
+    std::string current = mPlug.OutputBackendStatus();
+    static constexpr std::string_view prefix = "ARTNET ";
+    if(current.rfind(prefix, 0U) == 0U)
+      current.erase(0U, prefix.size());
+    else
+      current = "127.0.0.1@0";
+
+    GetUI()->CreateTextEntry(
+        *this,
+        IText(12.0F, IColor(255, 236, 238, 242), "AeylaUI",
+              EAlign::Center, EVAlign::Middle),
+        mButtons[5], current.c_str(), kOutputConfigTextEntry);
   }
 
   void ReportFileStatus(const aeyla::product::ProjectFileStatus& status)
@@ -403,7 +448,8 @@ private:
   }
 
   AeylaVisualDmx& mPlug;
-  std::array<IRECT, 5> mButtons{};
+  static constexpr int kOutputConfigTextEntry = 1001;
+  std::array<IRECT, 6> mButtons{};
   WDL_String mDialogFileName;
   WDL_String mDialogPath;
 };

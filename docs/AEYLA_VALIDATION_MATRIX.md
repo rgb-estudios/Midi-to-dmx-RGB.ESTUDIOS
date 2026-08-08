@@ -1,13 +1,13 @@
 # AEYLA — matriz de validación
 
-Checkpoint: `CP-AEYLA-0.3.2`
-Base del trabajo: PR #14, `4cede207`; el SHA del checkpoint se completa al publicar.
+Checkpoint: `CP-AEYLA-0.3.3`
+Base del trabajo: PR #14; el SHA del checkpoint se completa al publicar.
 
 | Área | Evidencia actual | Estado |
 |---|---|---|
 | Core portable previo | `core-ci` Linux/Windows/macOS verde en `4cede207` | **Implemented** en SHA previo |
 | Quality previo | ASan/UBSan/TSan verde en `4cede207` | **Implemented** en SHA previo |
-| Cambios CP-0.3.2 | 8 ejecutables afectados compilados con GCC 13.3, `-Werror`: PASS | **Scaffolded**; CI multiplataforma pendiente |
+| Base CP-0.3.2 | quality/core/product/format CI verde en `703d4a0` | **Implemented** en CI |
 | Project schema | v2 completo; migración explícita v1→v2: PASS local | **Scaffolded**; package/CI pendiente |
 | show.bin | v1.1 Cue-owned MIDI; migración 1.0 ambigua falla cerrado: PASS local | **Scaffolded**; CI pendiente |
 | Host component state | v1.1 con máximo 15 bindings Song→PPQ: PASS local | **Scaffolded**; host save/reopen pendiente |
@@ -20,13 +20,15 @@ Base del trabajo: PR #14, `4cede207`; el SHA del checkpoint se completa al publi
 | macOS VST3/AUv2 universal | build previo PASS; host smoke no concluyente | **Simulated** build; host pendiente |
 | Ableton Windows/macOS | sin prueba real actual | **Specified** |
 | Logic Pro AUv2 | sin prueba real actual | **Specified** |
-| Art-Net worker | paquetes/loopback en pruebas previas; no conectado al producto | **Simulated**; NOT CONNECTED |
+| Art-Net worker | conectado a snapshot seguro del producto; config/model/transporte PASS local | **Scaffolded**; producto CI y nodo pendientes |
+| Art-Net preflight | IPv4 unicast numérica, universo, socket y ownership | **Scaffolded**; no prueba recepción de nodo |
 | Nodo + PAR físicos | sin evidencia | **Specified** |
 | Show 15 Songs / soak | sin evidencia | **Specified** |
 
-## Pruebas locales ejecutadas para CP-AEYLA-0.3.2
+## Pruebas locales ejecutadas para CP-AEYLA-0.3.3
 
 - `test_application_model`: PASS.
+- `test_artnet_output_worker`: PASS.
 - `test_host_song_binding`: PASS.
 - `test_plugin_state`: PASS.
 - `test_runtime_safety`: PASS.
@@ -45,6 +47,6 @@ quedan obligatoriamente sujetos a CI.
 1. CI portable, quality y producto completos verdes en el mismo SHA.
 2. Resolver Windows OpenGL #17 y obtener launch/close real.
 3. Scan/load/save/reopen y editor-closed runtime en REAPER, Ableton y Logic.
-4. Art-Net conectado con preflight, ownership, offline inhibit y watchdog.
+4. Art-Net con nodo real, offline inhibit y watchdog/reachability de nodo.
 5. Nodo/PAR reales, disconnect/reconnect, blackout y DMX byte a byte.
 6. Soak mínimo 8 horas y tres ensayos completos del show.

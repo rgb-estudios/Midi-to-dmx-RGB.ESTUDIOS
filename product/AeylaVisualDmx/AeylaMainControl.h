@@ -457,7 +457,12 @@ private:
                      mSources.R - 12.0F, mSources.B - 12.0F);
     g.FillRoundRect(IColor(255, 12, 13, 17), info, 8.0F);
     g.FillCircle(kAmber, info.L + 17.0F, info.MH(), 4.0F);
-    g.DrawText(caption, "PREVIEW ONLY  /  NO PHYSICAL DMX",
+    const char* outputState = mPlug.OutputArmed()
+                                  ? "LIVE ART-NET OUTPUT ARMED"
+                                  : (mPlug.BackendReady()
+                                         ? "ART-NET READY  /  OUTPUT DISARMED"
+                                         : "PREVIEW  /  OUTPUT OFF");
+    g.DrawText(caption, outputState,
                IRECT(info.L + 28.0F, info.T + 4.0F,
                      info.R - 10.0F, info.B - 4.0F));
   }

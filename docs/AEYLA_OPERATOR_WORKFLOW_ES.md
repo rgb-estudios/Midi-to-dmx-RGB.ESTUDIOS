@@ -1,4 +1,4 @@
-# AEYLA — flujo operativo disponible en CP-AEYLA-0.3.2
+# AEYLA — flujo operativo disponible en CP-AEYLA-0.3.3
 
 Estado: **Scaffolded** para programación controlada; no es Show Candidate.
 Alcance: una instancia, hasta 15 Songs, Rig 10/14, preview visual/DMX interno.
@@ -27,6 +27,11 @@ y control: no se necesitan para crear un Cue desde la UI.
    El Song se extiende automáticamente si el playhead está más allá de su final
    inicial.
 11. Repite los cambios de Look y `STORE CUE` necesarios. Guarda con `SAVE AS`.
+12. Para una prueba de red controlada, pulsa `OUTPUT SETUP` e introduce la IP
+    numérica del nodo y el universo como `IPv4@universo`, por ejemplo
+    `2.0.0.20@0`. Escribe `OFF` para deshabilitar el backend.
+13. Confirma `BACKEND READY`, quita Blackout y pulsa `ARM OUTPUT`. La
+    configuración nunca rearma automáticamente la salida.
 
 Cada cambio artístico/estructural o selección de Look/Song fuerza
 `DISARMED + BLACKOUT`. El
@@ -44,12 +49,13 @@ operador debe salir de Blackout y solicitar ARM otra vez de forma explícita.
 
 ## Lo que aún no debe intentarse como show
 
-- No hay Art-Net conectado, output preflight, watchdog de nodo ni hardware
-  validado.
+- Art-Net está conectado en software con preflight de configuración/socket y
+  fail-closed ante error de envío, pero no hay watchdog de recepción del nodo
+  ni hardware validado.
 - No hay Show Mode, edición de Cue, MOMENTARY visible, rename/delete/reorder,
   undo/redo ni timeline gráfica.
 - Windows standalone mantiene el P0 de OpenGL nulo; REAPER/Ableton/Logic y el
   cierre de ventana deben revalidarse en máquinas/hosts reales.
 
-Por lo tanto este flujo sirve para probar coherencia de autoría y persistencia,
-no para operar luminarias en ensayo o función.
+Por lo tanto este flujo sirve para programación y prueba Art-Net controlada en
+laboratorio, no para operar una función.

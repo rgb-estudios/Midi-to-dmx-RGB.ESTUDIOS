@@ -160,6 +160,30 @@ int main() {
   using namespace aeyla;
   using namespace aeyla::output;
 
+  {
+    ArtNetOutputConfig candidate;
+    candidate.target_ipv4 = "127.0.0.1";
+    std::string preflight_error;
+    check(validate_artnet_output_config(candidate, preflight_error),
+          "numeric loopback unicast must pass pure Art-Net preflight");
+
+    candidate.target_ipv4 = "node.local";
+    check(!validate_artnet_output_config(candidate, preflight_error),
+          "DNS names must fail deterministic Art-Net preflight");
+    candidate.target_ipv4 = "239.1.2.3";
+    check(!validate_artnet_output_config(candidate, preflight_error),
+          "multicast targets must fail Alpha v1 Art-Net preflight");
+    candidate.target_ipv4 = "255.255.255.255";
+    check(!validate_artnet_output_config(candidate, preflight_error),
+          "limited broadcast must fail Alpha v1 Art-Net preflight");
+    candidate.target_ipv4 = "0.1.2.3";
+    check(!validate_artnet_output_config(candidate, preflight_error),
+          "this-network 0/8 targets must fail Alpha v1 Art-Net preflight");
+    candidate.target_ipv4 = "240.1.2.3";
+    check(!validate_artnet_output_config(candidate, preflight_error),
+          "reserved high IPv4 targets must fail Alpha v1 Art-Net preflight");
+  }
+
   UdpReceiver receiver;
   check(open_receiver(receiver), "loopback UDP receiver must open");
   if (receiver.socket == kInvalidSocket || receiver.port == 0U)

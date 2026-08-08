@@ -120,6 +120,9 @@ class ApplicationModel final {
       bool secondary) const noexcept;
   [[nodiscard]] bool set_active_look_intensity(float intensity);
   [[nodiscard]] float active_look_intensity() const noexcept;
+  [[nodiscard]] AuthoringResult configure_artnet_output(
+      std::string target_ipv4, std::uint16_t port_address);
+  [[nodiscard]] AuthoringResult disable_output_backend();
 
   // Active song is runtime/session state, not authored show data. Switching it
   // never mutates `.aeylashow` but always forces output safe before playback.
