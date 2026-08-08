@@ -12,8 +12,8 @@
   packet/error counters and send-error fail-closed disarm + blackout.
 - Added application-model tests for persisted Art-Net configuration and
   transport tests for strict numeric unicast target validation.
-- Changed the REAPER gate to execute its smoke ReaScript through REAPER's
-  supported `Scripts/__startup.lua` lifecycle.
+- Changed the REAPER gate to use the host's supported command-line ReaScript
+  dispatch without the incompatible isolated-instance flag.
 
 ### Safety boundary — CP-AEYLA-0.3.3
 

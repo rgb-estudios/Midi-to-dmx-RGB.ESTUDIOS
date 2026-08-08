@@ -95,10 +95,6 @@ jobs:
         run: |
           $script = (Resolve-Path "tests/reaper_host_smoke.lua").Path
           $resourceRoot = Join-Path $env:APPDATA "REAPER"
-          $scriptsRoot = Join-Path $resourceRoot "Scripts"
-          $startupScript = Join-Path $scriptsRoot "__startup.lua"
-          New-Item -ItemType Directory -Force $scriptsRoot | Out-Null
-          Copy-Item -Force $script $startupScript
           $result = Join-Path $resourceRoot "AEYLA_REAPER_HOST_SMOKE.txt"
           Remove-Item -Force $result -ErrorAction SilentlyContinue
 
@@ -134,10 +130,10 @@ jobs:
             return $false
           }
 
-          # REAPER explicitly runs Scripts/__startup.lua at application startup.
-          # This remains deterministic even while the first-launch evaluation
-          # dialog temporarily blocks ordinary command-line file dispatch.
-          $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList @("-newinst", "-nosplash") -PassThru
+          # REAPER supports a ReaScript path as a command-line argument. Do not
+          # combine it with -newinst: that flag starts an isolated instance but
+          # prevents file dispatch on the hosted Windows runner.
+          $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList @("-nosplash", $script) -PassThru
           $deadline = (Get-Date).AddSeconds(120)
           $terminalEvidence = $false
           while ((Get-Date) -lt $deadline -and -not $terminalEvidence) {
@@ -300,11 +296,10 @@ jobs:
         timeout-minutes: 3
         run: |
           resource_root="$HOME/Library/Application Support/REAPER"
-          mkdir -p "$resource_root/Scripts"
-          cp "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" "$resource_root/Scripts/__startup.lua"
           result="$resource_root/AEYLA_REAPER_HOST_SMOKE.txt"
           rm -f "$result"
-          /Applications/REAPER.app/Contents/MacOS/REAPER -newinst -nosplash &
+          /Applications/REAPER.app/Contents/MacOS/REAPER -nosplash \
+            "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" &
           pid=$!
           for i in {1..240}; do
             test -f "$result" && grep -Eq '^RESULT=(PASS|FAIL)$' "$result" && break
@@ -328,12 +323,11 @@ jobs:
         run: |
           mv "$HOME/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" "$RUNNER_TEMP/AeylaVisualDmx.vst3"
           resource_root="$HOME/Library/Application Support/REAPER"
-          mkdir -p "$resource_root/Scripts"
-          cp "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" "$resource_root/Scripts/__startup.lua"
           result="$resource_root/AEYLA_REAPER_HOST_SMOKE.txt"
           rm -f "$result"
           rm -f "$resource_root/reaper-vstplugins64.ini"
-          /Applications/REAPER.app/Contents/MacOS/REAPER -newinst -nosplash &
+          /Applications/REAPER.app/Contents/MacOS/REAPER -nosplash \
+            "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" &
           pid=$!
           for i in {1..240}; do
             test -f "$result" && grep -Eq '^RESULT=(PASS|FAIL)$' "$result" && break

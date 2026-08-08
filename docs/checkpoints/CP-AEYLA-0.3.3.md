@@ -18,9 +18,9 @@
 - Dos instancias no pueden reclamar silenciosamente el mismo
   destino/puerto/universo dentro del mismo proceso.
 - La UI muestra estado de backend y contadores de paquetes/errores.
-- El smoke de REAPER se instala como `Scripts/__startup.lua`, ruta soportada
-  por el host, para probar scan, instantiate, editor, save/reopen y editor
-  restaurado.
+- El smoke de REAPER usa el despacho ReaScript por línea de comandos soportado
+  por el host, sin el flag de instancia aislada que impedía ejecutar el script,
+  para probar scan, instantiate, editor, save/reopen y editor restaurado.
 
 ## Validación local
 
