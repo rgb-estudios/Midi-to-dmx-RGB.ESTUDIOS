@@ -16,7 +16,7 @@ echo y retira SOLO la entrada AEYLA del cache VST de REAPER, con backup.
 echo No elimina .aeylashow, .RPP ni otros plugins.
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%SCRIPT%','-Action','Clean','-ResetReaperCache')"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%SCRIPT%','-Action','Clean','-ResetReaperCache'); exit $p.ExitCode"
 if errorlevel 1 (
   echo ERROR: mantenimiento AEYLA no completado.
   pause
