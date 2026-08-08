@@ -44,11 +44,14 @@
   evidencia aunque el proceso falle antes de crear ventana.
 - WER del runner no produjo el primer dump; se añadió ProcDump oficial como
   capturador determinista y símbolos PDB para el siguiente intento.
+- Dump completo obtenido: execute access violation a `RIP=0` desde la llamada
+  indirecta a `glCreateProgram()` en NanoVG después de que `gladLoadGL()` no
+  cargara la función. Seguimiento P0: GitHub issue #17.
 - Hardware Art-Net/nodo/PAR: NOT CONNECTED.
 
 ## Próximo bloque
 
-1. Resolver Windows standalone desde crash dump/PDB, sin suavizar el gate.
+1. Resolver #17 con preflight/fallback gráfico; nunca continuar NanoVG con GL incompleto.
 2. Resolver host smoke REAPER y exigir un archivo de resultado verificable.
 3. Sustituir dependencia de `OnIdle` si el editor cerrado detiene runtime.
 4. Implementar show-level bindings y authoring transaccional Store Look/Cue.

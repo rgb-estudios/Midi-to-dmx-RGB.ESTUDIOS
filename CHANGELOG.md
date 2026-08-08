@@ -23,6 +23,8 @@
   PDB, executable and textual evidence even when startup fails early.
 - Added Microsoft ProcDump as the deterministic crash-capture fallback because
   hosted Windows runners may suppress WER LocalDumps.
+- Root-caused the Windows startup crash to NanoVG calling a null
+  `glCreateProgram` pointer after incomplete OpenGL loading; tracked as P0 #17.
 - Fixed the host-transport seqlock read barrier so weakly ordered CPUs cannot
   combine sample/PPQ/tempo fields from different host publications.
 - Scoped GCC's known ThreadSanitizer fence warning out of `-Werror`; all other

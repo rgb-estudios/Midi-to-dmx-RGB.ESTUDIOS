@@ -10,7 +10,7 @@ Fuente: PR #14, HEAD previo `ebce96470c615cc550b9d4a0482e71e0e4d37c85`.
 | Windows VST3 build | build PASS | CI-BUILT |
 | Steinberg Validator Windows | PASS en HEAD previo | SIMULATED / CI |
 | REAPER Windows 7.78 | proceso quedó abierto sin evidencia final | FAILED |
-| Windows standalone | acceso inválido `0xC0000005` antes de ventana; ProcDump+PDB habilitados para stack siguiente | FAILED / DIAGNOSTIC |
+| Windows standalone | dump: `RIP=0` en `glCreateProgram()` nulo tras fallo de GL loader; issue #17 | FAILED P0 / DIAGNOSED |
 | macOS VST3/AUv2 universal | build arm64+x86_64 PASS; corrección del gate `lipo` pendiente de reejecución | CI-BUILT / REVALIDATE |
 | VST3/standalone proof Windows+macOS | PASS en `8c6a916` | IMPLEMENTED / CI |
 | REAPER macOS | host smoke del nuevo SHA en ejecución | REVALIDATE |
