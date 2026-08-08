@@ -274,6 +274,7 @@ jobs:
           killall -9 AudioComponentRegistrar 2>/dev/null || true
 
       - name: Install REAPER 7.78 evaluation
+        timeout-minutes: 3
         run: |
           curl -fL "https://www.reaper.fm/files/7.x/reaper778_universal.dmg" -o "$RUNNER_TEMP/reaper.dmg"
           # REAPER's DMG carries a software-license agreement. `hdiutil attach`
@@ -286,8 +287,9 @@ jobs:
           test -n "$app"
           rm -rf /Applications/REAPER.app
           cp -R "$app" /Applications/REAPER.app
-          hdiutil detach "$mount"
-          /Applications/REAPER.app/Contents/MacOS/REAPER -version || true
+          hdiutil detach "$mount" -force
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            /Applications/REAPER.app/Contents/Info.plist
 
       - name: Run REAPER VST3 host smoke
         timeout-minutes: 3

@@ -20,7 +20,9 @@ end
 local result = {
   "AEYLA REAPER HOST SMOKE",
   "REAPER_VERSION=" .. reaper.GetAppVersion(),
+  "STAGE=STARTUP_SCRIPT",
 }
+write_result(result)
 
 local found_name = nil
 local found_ident = nil
@@ -47,6 +49,8 @@ end
 
 table.insert(result, "ENUM_NAME=" .. tostring(found_name))
 table.insert(result, "ENUM_IDENT=" .. tostring(found_ident))
+table.insert(result, "STAGE=ENUMERATED")
+write_result(result)
 
 reaper.InsertTrackAtIndex(0, true)
 local track = reaper.GetTrack(0, 0)
@@ -78,6 +82,8 @@ local ok_fx_name, instantiated_name = reaper.TrackFX_GetFXName(track, fx_index)
 if not ok_fx_name then instantiated_name = "<unknown>" end
 table.insert(result, "INSTANTIATED_NAME=" .. tostring(instantiated_name))
 table.insert(result, "FX_COUNT_BEFORE_SAVE=" .. tostring(reaper.TrackFX_GetCount(track)))
+table.insert(result, "STAGE=INSTANTIATED")
+write_result(result)
 
 -- Exercise the actual plug-in editor, not only the processing component.
 -- TrackFX_Show(..., 3) requests a floating editor window. TrackFX_GetOpen
@@ -85,6 +91,8 @@ table.insert(result, "FX_COUNT_BEFORE_SAVE=" .. tostring(reaper.TrackFX_GetCount
 -- this script from reaching PASS.
 reaper.TrackFX_Show(track, fx_index, 3)
 reaper.UpdateArrange()
+table.insert(result, "STAGE=EDITOR_OPEN_REQUESTED")
+write_result(result)
 if not reaper.TrackFX_GetOpen(track, fx_index) then
   fail(result, "AEYLA instantiated but its editor did not open")
   return
@@ -92,14 +100,20 @@ end
 local editor_hwnd = reaper.TrackFX_GetFloatingWindow(track, fx_index)
 table.insert(result, "EDITOR_OPEN=1")
 table.insert(result, "EDITOR_FLOATING_WINDOW=" .. tostring(editor_hwnd ~= nil and editor_hwnd ~= 0))
+table.insert(result, "STAGE=EDITOR_OPEN")
+write_result(result)
 reaper.TrackFX_Show(track, fx_index, 2)
 
 local project_path = reaper.GetResourcePath() .. "/AEYLA_REAPER_HOST_SMOKE.rpp"
 reaper.Main_SaveProjectEx(0, project_path, false)
+table.insert(result, "STAGE=PROJECT_SAVED")
+write_result(result)
 
 -- Reopen the project from disk so the test exercises the host serialization
 -- path, not merely the in-memory instance.
 reaper.Main_openProject(project_path)
+table.insert(result, "STAGE=PROJECT_REOPENED")
+write_result(result)
 local reopened_track = reaper.GetTrack(0, 0)
 if not reopened_track then
   fail(result, "Saved project reopened without the AEYLA test track")
@@ -120,6 +134,7 @@ if not ok_reopened_name or not string.find(string.lower(reopened_name or ""), "a
 end
 
 table.insert(result, "REOPENED_NAME=" .. tostring(reopened_name))
+write_result(result)
 
 -- Open the restored editor too. This catches projects that deserialize the
 -- processing component but leave the graphical/editor side broken.
@@ -130,6 +145,7 @@ if not reaper.TrackFX_GetOpen(reopened_track, 0) then
   return
 end
 table.insert(result, "EDITOR_REOPEN=1")
+table.insert(result, "STAGE=EDITOR_REOPENED")
 reaper.TrackFX_Show(reopened_track, 0, 2)
 
 table.insert(result, "RESULT=PASS")
