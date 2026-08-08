@@ -268,7 +268,9 @@ jobs:
       - name: Install REAPER 7.78 evaluation
         run: |
           curl -fL "https://www.reaper.fm/files/7.x/reaper778_universal.dmg" -o "$RUNNER_TEMP/reaper.dmg"
-          mount="$(hdiutil attach "$RUNNER_TEMP/reaper.dmg" -nobrowse | tail -n 1 | awk '{$1=$2=""; sub(/^  */, ""); print}')"
+          # REAPER's DMG carries a software-license agreement. Headless
+          # hdiutil cancels instead of mounting unless acceptance is explicit.
+          mount="$(hdiutil attach "$RUNNER_TEMP/reaper.dmg" -nobrowse -readonly -acceptlicense | tail -n 1 | awk '{$1=$2=""; sub(/^  */, ""); print}')"
           app="$(find "$mount" -maxdepth 2 -type d -name 'REAPER.app' | head -n 1)"
           test -n "$app"
           rm -rf /Applications/REAPER.app

@@ -91,7 +91,13 @@ class HostTransportMailbox final {
       result.tempo_bpm = std::bit_cast<double>(
           tempo_bits_.load(std::memory_order_relaxed));
 
-      const std::uint64_t after = sequence_.load(std::memory_order_acquire);
+      // The acquire fence must be sequenced *after* every payload load and
+      // before the closing sequence observation. An acquire load used only for
+      // `after` does not stop earlier relaxed payload loads from moving past it
+      // on weakly ordered CPUs, which can produce a logically torn snapshot.
+      // This is the canonical read-side ordering for a single-writer seqlock.
+      std::atomic_thread_fence(std::memory_order_acquire);
+      const std::uint64_t after = sequence_.load(std::memory_order_relaxed);
       if (before == after && (after & 1U) == 0U) {
         result.revision = after / 2U;
         return result;

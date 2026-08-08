@@ -21,6 +21,10 @@
   misparsed as an architecture name.
 - Made the Windows native-window gate preserve a full WER crash dump, matching
   PDB, executable and textual evidence even when startup fails early.
+- Fixed the host-transport seqlock read barrier so weakly ordered CPUs cannot
+  combine sample/PPQ/tempo fields from different host publications.
+- Made the headless macOS REAPER smoke test explicitly accept the official DMG
+  software-license agreement instead of cancelling during mount.
 
 ### Added
 

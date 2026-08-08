@@ -27,6 +27,10 @@
 - GitHub `vst3-and-standalone-proof`: PASS Windows/macOS en `8c6a916`.
 - VST3 y AUv2 macOS: build universal arm64+x86_64 PASS; el gate falló por
   orden incorrecto de argumentos de `lipo`, ya corregido para revalidación.
+- `core-ci` expuso en macOS un snapshot rasgado del mailbox de transporte;
+  barrera seqlock corregida y campaña local optimizada 201 veces PASS.
+- REAPER macOS construyó ambos formatos, pero `hdiutil` canceló por licencia
+  del DMG; el mount headless ahora usa aceptación explícita.
 - Búsqueda de wall-clock artístico en producto: PASS; solo permanece
   `steady_clock` en el scheduler de refresh del worker Art-Net, donde corresponde.
 

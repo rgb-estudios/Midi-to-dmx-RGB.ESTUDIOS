@@ -5,7 +5,7 @@ Fuente: PR #14, HEAD previo `ebce96470c615cc550b9d4a0482e71e0e4d37c85`.
 
 | Área | Evidencia actual | Estado |
 |---|---|---|
-| Core Linux/Windows/macOS | suite completa PASS en `83f4cd2` | IMPLEMENTED / CI |
+| Core Linux/Windows/macOS | suite PASS en `83f4cd2`; macOS detectó luego tear de transporte, corregido y en revalidación | IMPLEMENTED / REVALIDATE |
 | ASan/UBSan/TSan | suite completa PASS en `83f4cd2` | IMPLEMENTED / CI |
 | Windows VST3 build | build PASS | CI-BUILT |
 | Steinberg Validator Windows | PASS en HEAD previo | SIMULATED / CI |
@@ -16,7 +16,7 @@ Fuente: PR #14, HEAD previo `ebce96470c615cc550b9d4a0482e71e0e4d37c85`.
 | REAPER macOS | host smoke del nuevo SHA en ejecución | REVALIDATE |
 | Ableton Windows/macOS | sin prueba real actual | NOT STARTED |
 | Logic Pro AUv2 | sin prueba real actual | NOT STARTED |
-| Host PPQ determinista | prueba local compilada PASS | UNIT-TESTED |
+| Host PPQ determinista | binding PASS; mailbox seqlock corregido, 201 campañas locales optimizadas PASS | UNIT-TESTED / REVALIDATE |
 | UI con ventana cerrada | falta demostrar que runtime no depende de `OnIdle` del editor | BLOCKED P0 |
 | Art-Net worker | unit/loopback software; no integrado al producto físico | SIMULATED / NOT CONNECTED |
 | Nodo + PAR físicos | sin evidencia | NOT STARTED |
