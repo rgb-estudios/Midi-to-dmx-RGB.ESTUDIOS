@@ -21,6 +21,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate AEYLA maintenance tools
+        shell: pwsh
+        run: |
+          $script = (Resolve-Path "tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $script, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "AEYLA maintenance PowerShell syntax validation failed"
+          }
+          & $script -Action Audit
+
       - name: Fetch pinned plugin dependencies
         shell: pwsh
         run: |
