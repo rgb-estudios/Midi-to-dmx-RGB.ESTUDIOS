@@ -17,6 +17,10 @@
   for pause, seek/pre-roll wrapping and invalid host state.
 - Completed standalone safety-reason reporting for `show_not_ready` so strict
   Clang/macOS builds cannot silently omit a safety state.
+- Corrected the macOS universal-binary `lipo` gate so the input path is not
+  misparsed as an architecture name.
+- Made the Windows native-window gate preserve a full WER crash dump, matching
+  PDB, executable and textual evidence even when startup fails early.
 
 ### Added
 

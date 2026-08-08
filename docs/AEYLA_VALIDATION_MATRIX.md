@@ -11,8 +11,9 @@ Fuente: PR #14, HEAD previo `ebce96470c615cc550b9d4a0482e71e0e4d37c85`.
 | Steinberg Validator Windows | PASS en HEAD previo | SIMULATED / CI |
 | REAPER Windows 7.78 | proceso quedó abierto sin evidencia final | FAILED |
 | Windows standalone | acceso inválido `0xC0000005` antes de ventana | FAILED |
-| macOS VST3/AUv2 universal | miniz arm64-only en slice Intel; corrección pendiente de CI | IMPLEMENTED / REVALIDATE |
-| REAPER macOS | bloqueado por build universal | BLOCKED |
+| macOS VST3/AUv2 universal | build arm64+x86_64 PASS; corrección del gate `lipo` pendiente de reejecución | CI-BUILT / REVALIDATE |
+| VST3/standalone proof Windows+macOS | PASS en `8c6a916` | IMPLEMENTED / CI |
+| REAPER macOS | host smoke del nuevo SHA en ejecución | REVALIDATE |
 | Ableton Windows/macOS | sin prueba real actual | NOT STARTED |
 | Logic Pro AUv2 | sin prueba real actual | NOT STARTED |
 | Host PPQ determinista | prueba local compilada PASS | UNIT-TESTED |

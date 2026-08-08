@@ -104,8 +104,11 @@ jobs:
           vst3="$(find build-product -type f -path '*AeylaVisualDmx.vst3/Contents/MacOS/*' | head -n 1)"
           au="$(find build-product -type f -path '*AeylaVisualDmx.component/Contents/MacOS/*' | head -n 1)"
           test -n "$vst3" && test -n "$au"
-          lipo -verify_arch x86_64 arm64 "$vst3"
-          lipo -verify_arch x86_64 arm64 "$au"
+          # `-verify_arch` consumes every following argument as an architecture.
+          # Put the input file before the operation or lipo mistakes the path for
+          # a third architecture and reports a false failure.
+          lipo "$vst3" -verify_arch x86_64 arm64
+          lipo "$au" -verify_arch x86_64 arm64
           file "$vst3"
           file "$au"
 

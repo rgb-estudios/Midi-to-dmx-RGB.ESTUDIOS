@@ -73,6 +73,15 @@ jobs:
           $evidenceDir = Join-Path (Resolve-Path build-native-window) "evidence"
           New-Item -ItemType Directory -Force $evidenceDir | Out-Null
           $evidence = Join-Path $evidenceDir "WINDOW_CREATION.txt"
+          $dumpDir = Join-Path $evidenceDir "dumps"
+          New-Item -ItemType Directory -Force $dumpDir | Out-Null
+
+          # Preserve a full user-mode dump for every startup crash. A numeric
+          # exit code alone cannot identify the failing module or stack frame.
+          $localDumps = "HKCU:\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\AeylaVisualDmx.exe"
+          New-Item -Path $localDumps -Force | Out-Null
+          New-ItemProperty -Path $localDumps -Name DumpFolder -PropertyType ExpandString -Value $dumpDir -Force | Out-Null
+          New-ItemProperty -Path $localDumps -Name DumpType -PropertyType DWord -Value 2 -Force | Out-Null
 
           $process = Start-Process -FilePath $app.FullName -ArgumentList "--no-io" -PassThru
           $windowCreated = $false
@@ -83,11 +92,17 @@ jobs:
             $process.Refresh()
 
             if ($process.HasExited) {
+              # Windows Error Reporting writes asynchronously after process
+              # termination; allow the dump to finish before preserving paths.
+              Start-Sleep -Seconds 2
+              $dumpPaths = @(Get-ChildItem -Path $dumpDir -File -Filter "*.dmp" -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.FullName })
               @(
                 "RESULT: FAILED - source-built process exited before creating a window"
                 "ExitCode: $($process.ExitCode)"
                 "Commit: $env:GITHUB_SHA"
                 "Executable: $($app.FullName)"
+                "CrashDumps: $($dumpPaths -join ', ')"
               ) | Set-Content -Encoding UTF8 $evidence
               throw "Source-built graphical APP exited with code $($process.ExitCode)"
             }
@@ -123,19 +138,32 @@ jobs:
           Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
 
       - name: Collect validated source build
+        if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force package/Standalone | Out-Null
           New-Item -ItemType Directory -Force package/Evidence | Out-Null
 
           $app = Get-ChildItem -Path build-native-window -Recurse -File -Filter "AeylaVisualDmx.exe" | Select-Object -First 1
-          Copy-Item -Force $app.FullName package/Standalone/
-          Copy-Item -Force build-native-window/evidence/WINDOW_CREATION.txt package/Evidence/
+          if ($app) { Copy-Item -Force $app.FullName package/Standalone/ }
 
-          $hash = (Get-FileHash package/Standalone/AeylaVisualDmx.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  Standalone/AeylaVisualDmx.exe" | Set-Content -Encoding ASCII package/SHA256SUMS.txt
+          $pdb = Get-ChildItem -Path build-native-window -Recurse -File -Filter "AeylaVisualDmx.pdb" | Select-Object -First 1
+          if ($pdb) { Copy-Item -Force $pdb.FullName package/Evidence/ }
+
+          if (Test-Path build-native-window/evidence/WINDOW_CREATION.txt) {
+            Copy-Item -Force build-native-window/evidence/WINDOW_CREATION.txt package/Evidence/
+          }
+          if (Test-Path build-native-window/evidence/dumps) {
+            Copy-Item -Recurse -Force build-native-window/evidence/dumps package/Evidence/
+          }
+
+          if (Test-Path package/Standalone/AeylaVisualDmx.exe) {
+            $hash = (Get-FileHash package/Standalone/AeylaVisualDmx.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  Standalone/AeylaVisualDmx.exe" | Set-Content -Encoding ASCII package/SHA256SUMS.txt
+          }
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: AEYLA-0.3-alpha.1-Windows-source-native-window
           path: package/**
