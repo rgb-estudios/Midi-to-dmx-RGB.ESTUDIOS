@@ -95,10 +95,13 @@ class Programmer final {
   void clear_selection() noexcept { select_all(false); }
 
   // Writes one semantic lighting attribute to every selected fixture. Returns
-  // false when no fixture is selected so a MIDI/UI gesture can detect a no-op.
+  // false when no fixture is selected or the sentinel Attribute::Count is passed,
+  // so a MIDI/UI gesture can detect a safe no-op.
   [[nodiscard]] bool set_selected(Attribute attribute, float value) noexcept {
-    bool changed = false;
     const auto index = static_cast<std::size_t>(attribute);
+    if (index >= attribute_count) return false;
+
+    bool changed = false;
     const float normalized = clamp_normalized(value);
     for (auto& fixture : fixtures_) {
       if (!fixture.selected) continue;
@@ -112,8 +115,10 @@ class Programmer final {
   // Releases one attribute from the Programmer for selected fixtures. The next
   // preview/capture therefore inherits that attribute from the current/base Look.
   [[nodiscard]] bool clear_selected_attribute(Attribute attribute) noexcept {
-    bool changed = false;
     const auto index = static_cast<std::size_t>(attribute);
+    if (index >= attribute_count) return false;
+
+    bool changed = false;
     for (auto& fixture : fixtures_) {
       if (!fixture.selected || !fixture.touched.test(index)) continue;
       fixture.touched.reset(index);
