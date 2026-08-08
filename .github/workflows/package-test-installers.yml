@@ -16,6 +16,7 @@ permissions:
 env:
   AEYLA_VERSION: 0.3.3-alpha
   AEYLA_VERSION_NUMERIC: 0.3.3.0
+  AEYLA_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
   VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
   INNO_SETUP_VERSION: 6.7.1
@@ -28,6 +29,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
 
       - name: Fetch pinned iPlug2 and Steinberg SDK
         shell: pwsh
@@ -94,7 +97,7 @@ jobs:
             product = 'AEYLA Visual DMX'
             version = $env:AEYLA_VERSION
             channel = 'alpha-test-candidate-unsigned'
-            commit = $env:GITHUB_SHA
+            commit = $env:AEYLA_SOURCE_SHA
             platform = 'windows-x64'
             format = 'VST3'
             plugin_sha256 = $hash
@@ -129,7 +132,7 @@ jobs:
             "/DOutputDir=$output",
             "/DAppVersion=$env:AEYLA_VERSION",
             "/DAppVersionNumeric=$env:AEYLA_VERSION_NUMERIC",
-            "/DBuildSha=$env:GITHUB_SHA",
+            "/DBuildSha=$env:AEYLA_SOURCE_SHA",
             'tools/packaging/windows/AEYLA_VST3_SETUP.iss'
           )
           & $iscc $args
@@ -189,6 +192,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
 
       - name: Fetch pinned iPlug2 and Steinberg SDK
         shell: bash
@@ -281,7 +286,7 @@ jobs:
             '  "product": "AEYLA Visual DMX",' \
             "  \"version\": \"$AEYLA_VERSION\"," \
             '  "channel": "alpha-test-candidate-unsigned",' \
-            "  \"commit\": \"$GITHUB_SHA\"," \
+            "  \"commit\": \"$AEYLA_SOURCE_SHA\"," \
             '  "platform": "macos-universal",' \
             '  "formats": ["VST3", "AUv2"],' \
             "  \"vst3_sha256\": \"$vst3_hash\"," \
@@ -343,6 +348,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -387,7 +394,7 @@ jobs:
             shasum -a 256 "$mac_au_binary"
           } | sed "s#$root/##" > "$root/SHA256SUMS.txt"
           printf 'AEYLA_VERSION=%s\nGIT_SHA=%s\nCHANNEL=alpha-test-candidate-unsigned\n' \
-            "$AEYLA_VERSION" "$GITHUB_SHA" > "$root/BUILD_ID.txt"
+            "$AEYLA_VERSION" "$AEYLA_SOURCE_SHA" > "$root/BUILD_ID.txt"
 
           zip_path="$dist/AEYLA-$AEYLA_VERSION-VST3-Manual-Pack.zip"
           ditto -c -k --sequesterRsrc --keepParent "$root" "$zip_path"

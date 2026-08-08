@@ -13,6 +13,9 @@
 - Added a third cross-platform manual pack with Windows/macOS VST3 bundles,
   the Logic AUv2, selective maintenance tools, build identity and SHA-256
   checksums generated from the same commit.
+- Made packaging jobs checkout and record the PR branch HEAD explicitly instead
+  of GitHub's temporary pull-request merge commit, so every manifest and
+  delivered artifact resolves to the canonical source revision.
 - Deliberately excluded the Windows standalone from installers while the
   OpenGL startup P0 tracked in issue #17 remains unresolved.
 
