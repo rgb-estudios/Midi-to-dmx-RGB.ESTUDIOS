@@ -280,7 +280,7 @@ jobs:
           -DIPLUG2_UNIVERSAL=ON
           -DIPLUG_DEPLOY_PLUGINS=OFF
           -DIGRAPHICS_BACKEND=NANOVG
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 
       - name: Build macOS APP and VST3
         shell: bash

@@ -94,10 +94,13 @@ int main() {
   note_on.value = 1.0F;
   model.handle_host_event(note_on);
 
-  check(model.snapshot().active_executor == 0,
-        "MIDI note 36 must activate executor 1 in the shared model");
+  check(model.snapshot().active_executor == -1,
+        "authored Show MIDI must not leak into the diagnostic executor path");
+  check(model.snapshot().active_scene_id == "scene-main" &&
+            model.snapshot().active_scene_name == "Main",
+        "MIDI note 36 must resolve the authored Cue when a Show is loaded");
   check(!all_zero(model.snapshot().dmx),
-        "active executor with blackout off must compile a non-zero DMX frame");
+        "authored Cue with blackout off must compile a non-zero DMX frame");
   check(model.snapshot().dmx[0] == 255,
         "first reference fixture dimmer must be full at velocity 127");
   check(model.snapshot().dmx[1] == 255,
@@ -110,15 +113,24 @@ int main() {
   second_model.set_backend_ready(true);
   second_model.set_blackout(false);
   second_model.handle_host_event(note_on);
-  check(second_model.snapshot().dmx == golden,
-        "identical standalone/VST3 preview commands must produce byte-identical DMX");
+  check(second_model.snapshot().active_executor == 0 &&
+            second_model.snapshot().active_scene_id.empty(),
+        "without an authored Show, note 36 must remain a diagnostic executor");
+  check(!all_zero(second_model.snapshot().dmx),
+        "diagnostic executor must remain usable before a Show is authored");
 
   HostEvent note_off = note_on;
   note_off.type = HostEventType::note_off;
   note_off.value = 0.0F;
   model.handle_host_event(note_off);
-  check(model.snapshot().active_executor == -1,
-        "matching Note Off must release the active executor");
+  check(model.snapshot().active_scene_id == "scene-main",
+        "Note Off must not release an authored LATCH Cue");
+  check(model.snapshot().dmx == golden,
+        "LATCH Cue output must remain deterministic after Note Off");
+
+  second_model.handle_host_event(note_off);
+  check(second_model.snapshot().active_executor == -1,
+        "matching Note Off must release the diagnostic executor");
 
   model.set_rig14(true);
   check(active_fixture_count(model.snapshot()) == 14,

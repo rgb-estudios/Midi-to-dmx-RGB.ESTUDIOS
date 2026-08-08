@@ -30,6 +30,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/core/rig.cpp
     ../../src/runtime/plugin_state.cpp
     ../../src/runtime/runtime_safety_state.cpp
+    ../../src/runtime/host_song_binding.cpp
     ../../src/project/project_document.cpp
     ../../src/project/project_package.cpp
     ../../src/project/project_state_store.cpp

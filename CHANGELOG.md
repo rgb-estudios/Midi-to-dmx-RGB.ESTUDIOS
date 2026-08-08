@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed — CP-AEYLA-0.3.1
+
+- Corrected the obsolete application-model regression that expected diagnostic
+  executor behaviour after an authored Show had taken ownership of MIDI.
+- Normalized every macOS build/product metadata path to the supported macOS 11
+  floor required by `std::filesystem`.
+- Ensured universal macOS dependencies build both arm64 and x86_64 slices,
+  preventing the Intel plugin slice from linking an arm64-only miniz archive.
+- Removed the duplicate visual-only executor and lower ARM implementations from
+  the native UI.
+- Removed model mutation and wall-clock animation from UI drawing.
+- Derived animation phase deterministically from absolute host PPQ, with tests
+  for pause, seek/pre-roll wrapping and invalid host state.
+
 ### Added
 
 - Concrete VST3 platform architecture for a silent MIDI instrument/generator with a stereo silent output bus, native VST3 note events, process-context handling and strict realtime callback boundaries.

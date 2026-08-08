@@ -3,10 +3,10 @@
 #include "AeylaMainControl.h"
 #include "AeylaRuntimeStatusControl.h"
 #include "IPlug_include_in_plug_src.h"
+#include "runtime/host_song_binding.h"
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -328,10 +328,13 @@ void AeylaVisualDmx::OnIdle()
   ApplyPendingParameterState();
   DrainHostEvents();
 
-  const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
-  const double seconds = std::chrono::duration<double>(elapsed).count();
-  const double speed = 0.20 + (GetParam(kParamSpeed)->Value() / 100.0) * 2.80;
-  mModel.set_phase(static_cast<float>(std::fmod(seconds * speed, 1.0)));
+  const auto host = mHostTransport.latest();
+  const double normalizedSpeed =
+      std::clamp(GetParam(kParamSpeed)->Value() / 100.0, 0.0, 1.0);
+  const double cyclesPerQuarter = 0.125 + normalizedSpeed * 1.875;
+  const auto phase = aeyla::runtime::phase_from_host_ppq(
+      host, cyclesPerQuarter);
+  mModel.set_phase(phase.value_or(0.0F));
   SyncSnapshotToAtomics();
   RefreshHostStateCache();
 
@@ -517,6 +520,7 @@ void AeylaVisualDmx::SyncSnapshotToAtomics() noexcept
   mProjectValid.store(snapshot.project_valid, std::memory_order_release);
   mActiveExecutor.store(snapshot.active_executor, std::memory_order_relaxed);
   mDmxGeneration.store(snapshot.generation, std::memory_order_relaxed);
+  mVisualPhase.store(snapshot.phase, std::memory_order_relaxed);
 
   const int nonZero = static_cast<int>(std::count_if(
       snapshot.dmx.begin(), snapshot.dmx.end(),

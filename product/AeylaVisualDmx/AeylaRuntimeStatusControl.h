@@ -20,7 +20,6 @@ public:
 
   void Draw(IGraphics& g) override
   {
-    mPlug.RefreshVisualSpeedFromUI();
     BuildButtons();
 
     const IRECT footer(mRECT.L, mRECT.B - 42.0F, mRECT.R, mRECT.B);

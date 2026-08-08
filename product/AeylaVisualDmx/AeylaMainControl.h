@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -29,31 +28,19 @@ public:
   void Draw(IGraphics& g) override
   {
     BuildLayout();
-    const auto now = std::chrono::steady_clock::now().time_since_epoch();
-    const double seconds = std::chrono::duration<double>(now).count();
-    const double speed = 0.2 + GetValue(kValSpeed) * 2.8;
-    mPhase = std::fmod(seconds * speed, 1.0);
+    mPhase = static_cast<double>(mPlug.VisualPhase());
 
     g.FillRect(kBackground, mRECT);
     DrawHeader(g);
     DrawSourcePanel(g);
     DrawCanvas(g);
     DrawInspector(g);
-    DrawExecutors(g);
-    DrawFooter(g);
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
     (void) mod;
     BuildLayout();
-
-    if(Contains(mArmButton, x, y))
-    {
-      mPlug.ToggleOutputArmFromUI();
-      SetDirty(false);
-      return;
-    }
 
     if(Contains(mBlackoutButton, x, y))
     {
@@ -81,16 +68,6 @@ public:
       if(Contains(mFixtureButtons[static_cast<std::size_t>(i)], x, y))
       {
         mSelectedFixture = i;
-        SetDirty(false);
-        return;
-      }
-    }
-
-    for(int i = 0; i < static_cast<int>(mExecutorButtons.size()); ++i)
-    {
-      if(Contains(mExecutorButtons[static_cast<std::size_t>(i)], x, y))
-      {
-        mManualExecutor = i;
         SetDirty(false);
         return;
       }
@@ -218,8 +195,6 @@ private:
                     mInspector.L - 10.0F,
                     contentBottom);
 
-    mArmButton = IRECT(mHeader.R - 292.0F, mHeader.T + 16.0F,
-                       mHeader.R - 164.0F, mHeader.B - 16.0F);
     mBlackoutButton = IRECT(mHeader.R - 152.0F, mHeader.T + 16.0F,
                             mHeader.R - 16.0F, mHeader.B - 16.0F);
 
@@ -247,17 +222,6 @@ private:
     mAmberSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
     sliderTop += 67.0F;
     mUVSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-
-    const IRECT executorArea(mExecutors.L + 12.0F, mExecutors.T + 42.0F,
-                             mExecutors.R - 12.0F, mExecutors.B - 12.0F);
-    const float gap = 8.0F;
-    const float executorW = (executorArea.W() - gap * 7.0F) / 8.0F;
-    for(int i = 0; i < 8; ++i)
-    {
-      const float left = executorArea.L + static_cast<float>(i) * (executorW + gap);
-      mExecutorButtons[static_cast<std::size_t>(i)] =
-          IRECT(left, executorArea.T, left + executorW, executorArea.B);
-    }
 
     const IRECT mapArea(mCanvas.L + 38.0F, mCanvas.T + 88.0F,
                         mCanvas.R - 38.0F, mCanvas.B - 44.0F);
@@ -297,11 +261,6 @@ private:
     g.DrawText(smallText, midiLabel,
                IRECT(mHeader.L + 512.0F, mHeader.T + 16.0F,
                      mHeader.L + 760.0F, mHeader.T + 47.0F));
-
-    DrawButton(g, mArmButton,
-               mPlug.OutputArmed() ? "OUTPUT ARMED" : "ARM OUTPUT",
-               mPlug.OutputArmed() ? kGreen : kPanelRaised,
-               mPlug.OutputArmed() ? IColor(255, 7, 30, 20) : kText);
 
     const bool blackout = GetValue(kValBlackout) > 0.5;
     DrawButton(g, mBlackoutButton,
@@ -365,8 +324,7 @@ private:
                        mCanvas.R - 18.0F, mCanvas.B - 18.0F);
     DrawVisualTexture(g, visual);
 
-    const int activeExecutor = mPlug.ActiveExecutor() >= 0 ?
-        mPlug.ActiveExecutor() : mManualExecutor;
+    const int activeExecutor = mPlug.ActiveExecutor();
 
     for(int i = 0; i < 14; ++i)
     {
@@ -548,48 +506,6 @@ private:
     DrawSlider(g, mUVSlider, "UV MANUAL", GetValue(kValUV), kUV, valueText);
   }
 
-  void DrawExecutors(IGraphics& g)
-  {
-    DrawPanel(g, mExecutors);
-    const IText section(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IText caption(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    g.DrawText(section, "EXECUTORS  /  MIDI NOTES 36–43",
-               IRECT(mExecutors.L + 14.0F, mExecutors.T + 8.0F,
-                     mExecutors.R - 14.0F, mExecutors.T + 31.0F));
-
-    const int midiExecutor = mPlug.ActiveExecutor();
-    const int active = midiExecutor >= 0 ? midiExecutor : mManualExecutor;
-    static constexpr const char* labels[] = {
-        "BASE RED", "COLD WAVE", "PULSE", "CHASE",
-        "FLASH", "UV LIFT", "STROBE", "RELEASE"};
-
-    for(int i = 0; i < 8; ++i)
-    {
-      const IRECT& r = mExecutorButtons[static_cast<std::size_t>(i)];
-      const bool selected = i == active;
-      g.FillRoundRect(selected ? kRedDark : IColor(255, 21, 23, 29), r, 8.0F);
-      g.DrawRoundRect(selected ? kRed : kLine, r, 8.0F, nullptr, selected ? 2.0F : 1.0F);
-      char noteLabel[64];
-      std::snprintf(noteLabel, sizeof(noteLabel), "%02d\n%s", 36 + i, labels[i]);
-      g.DrawText(IText(10.0F, selected ? kText : kMuted,
-                       "AeylaUI", EAlign::Center, EVAlign::Middle),
-                 noteLabel, r.GetPadded(-5.0F));
-    }
-  }
-
-  void DrawFooter(IGraphics& g)
-  {
-    g.FillRect(IColor(255, 10, 11, 14), mFooter);
-    const IText caption(10.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IText right(10.0F, kMuted, "AeylaUI", EAlign::Far, EVAlign::Middle);
-    g.DrawText(caption,
-               "ALPHA 0.2  ·  VISUAL INTERFACE PROOF  ·  NOT SHOW READY",
-               IRECT(mFooter.L + 16.0F, mFooter.T, mFooter.MW(), mFooter.B));
-    g.DrawText(right,
-               "WINDOWS / macOS / ABLETON VST3",
-               IRECT(mFooter.MW(), mFooter.T, mFooter.R - 16.0F, mFooter.B));
-  }
-
   void DrawPanel(IGraphics& g, const IRECT& r)
   {
     g.FillRoundRect(kPanel, r, 10.0F);
@@ -647,7 +563,6 @@ private:
   AeylaVisualDmx& mPlug;
   double mPhase{0.0};
   int mSelectedFixture{0};
-  int mManualExecutor{-1};
 
   IRECT mHeader{};
   IRECT mFooter{};
@@ -655,7 +570,6 @@ private:
   IRECT mCanvas{};
   IRECT mInspector{};
   IRECT mExecutors{};
-  IRECT mArmButton{};
   IRECT mBlackoutButton{};
   IRECT mRigButton{};
   IRECT mGrandMasterSlider{};
@@ -665,5 +579,4 @@ private:
   IRECT mUVSlider{};
   std::array<IRECT, 5> mSourceButtons{};
   std::array<IRECT, 14> mFixtureButtons{};
-  std::array<IRECT, 8> mExecutorButtons{};
 };

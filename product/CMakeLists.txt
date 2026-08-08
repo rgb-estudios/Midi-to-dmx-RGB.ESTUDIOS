@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.25)
-project(AeylaVisualDmxProduct VERSION 0.3.0 LANGUAGES C CXX)
 
 # The product persistence layer uses C++17 filesystem, which Apple exposes from
 # macOS 10.15. Our supported DAW matrix starts at macOS 11 (Live 12's current
@@ -11,7 +10,17 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING
         "Minimum macOS version supported by AEYLA Visual DMX" FORCE)
   endif()
+
+  # iPlug2 creates universal plug-in targets when IPLUG2_UNIVERSAL is enabled,
+  # but ordinary dependency targets still follow CMAKE_OSX_ARCHITECTURES. Keep
+  # miniz universal too or the Intel slice links against an arm64-only archive.
+  if(IPLUG2_UNIVERSAL)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING
+        "Architectures for AEYLA universal macOS products" FORCE)
+  endif()
 endif()
+
+project(AeylaVisualDmxProduct VERSION 0.3.0 LANGUAGES C CXX)
 
 include(FetchContent)
 

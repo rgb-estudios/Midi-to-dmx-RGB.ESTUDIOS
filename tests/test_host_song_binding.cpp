@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 
 namespace {
@@ -106,6 +107,32 @@ int main() {
   projected = project_host_transport_to_song(host, binding, song);
   check(projected.rendering_offline,
         "offline-render state must survive projection so network output can be inhibited");
+
+  // Animation phase is transport-derived, never wall-clock/UI-derived.
+  host.rendering_offline = false;
+  host.ppq_position = 4.25;
+  const auto phase = phase_from_host_ppq(host, 0.5);
+  check(phase.has_value() && std::fabs(*phase - 0.125F) < 1e-6F,
+        "host PPQ must deterministically resolve normalized animation phase");
+
+  host.running = false;
+  const auto paused_phase = phase_from_host_ppq(host, 0.5);
+  check(paused_phase == phase,
+        "Pause at the same playhead must preserve the identical phase");
+
+  host.ppq_position = -0.5;
+  const auto negative_phase = phase_from_host_ppq(host, 0.5);
+  check(negative_phase.has_value() &&
+            std::fabs(*negative_phase - 0.75F) < 1e-6F,
+        "pre-roll PPQ must wrap to a stable normalized phase");
+
+  host.ppq_position_valid = false;
+  check(!phase_from_host_ppq(host, 0.5).has_value(),
+        "invalid host PPQ must not fall back to wall-clock animation");
+  host.ppq_position_valid = true;
+  check(!phase_from_host_ppq(host,
+                             std::numeric_limits<double>::infinity()).has_value(),
+        "non-finite animation rate must fail closed");
 
   if (failures == 0) {
     std::cout << "All AEYLA host-song binding tests passed.\n";

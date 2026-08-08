@@ -123,13 +123,6 @@ class ApplicationModel final {
   void set_rig14(bool enabled);
   void set_visual_source(VisualSource source);
   void set_visual_speed(float value);
-  void update_visual_speed_from_ui(float value) {
-    const float next = std::clamp(value, 0.0F, 1.0F);
-    if (project_.visual.speed == next) return;
-    project_.visual.speed = next;
-    project_dirty_ = true;
-    rebuild();
-  }
   void set_phase(float normalized_phase);
   void set_white_extraction(float value);
   void set_amber_extraction(float value);

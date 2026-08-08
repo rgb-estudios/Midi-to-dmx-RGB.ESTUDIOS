@@ -59,4 +59,24 @@ SongTransportProjection project_host_transport_to_song(
   return result;
 }
 
+std::optional<float> phase_from_host_ppq(
+    const HostTransportSnapshot& host,
+    double cycles_per_quarter_note) noexcept {
+  if (host.revision == 0U || !host.ppq_position_valid ||
+      !std::isfinite(host.ppq_position) ||
+      !std::isfinite(cycles_per_quarter_note) ||
+      cycles_per_quarter_note < 0.0 || cycles_per_quarter_note > 64.0) {
+    return std::nullopt;
+  }
+
+  const long double unwrapped =
+      static_cast<long double>(host.ppq_position) *
+      static_cast<long double>(cycles_per_quarter_note);
+  if (!std::isfinite(static_cast<double>(unwrapped))) return std::nullopt;
+
+  long double phase = std::fmod(unwrapped, 1.0L);
+  if (phase < 0.0L) phase += 1.0L;
+  return static_cast<float>(phase);
+}
+
 }  // namespace aeyla::runtime

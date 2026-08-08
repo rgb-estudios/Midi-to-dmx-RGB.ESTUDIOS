@@ -2,6 +2,8 @@
 
 ## Product and design
 
+0. [`AEYLA_OPERATOR_WORKFLOW_ES.md`](AEYLA_OPERATOR_WORKFLOW_ES.md) — flujo
+   humano objetivo Look → Cue → Song → Show y frontera del build actual.
 1. [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md) — complete product definition and boundaries.
 2. [`USER_WORKFLOWS.md`](USER_WORKFLOWS.md) — editor, corrections, runtime and emergency workflows.
 3. [`VISUAL_DESIGN_SYSTEM.md`](VISUAL_DESIGN_SYSTEM.md) — mandatory visual and interaction direction.
@@ -22,6 +24,10 @@
 
 ## Validation, build and release
 
+14a. [`AEYLA_VALIDATION_MATRIX.md`](AEYLA_VALIDATION_MATRIX.md) — estado de
+     evidencia actual por host/plataforma y gates de Show Candidate.
+14b. [`AEYLA_UI_FUNCTIONAL_MATRIX.md`](AEYLA_UI_FUNCTIONAL_MATRIX.md) — cadena
+     control → handler → runtime → persistencia y bloqueos P0.
 15. [`ABLETON_HOST_TEST_MATRIX.md`](ABLETON_HOST_TEST_MATRIX.md) — real Windows/macOS Ableton acceptance matrix.
 16. [`CROSS_PLATFORM_BUILD_RELEASE.md`](CROSS_PLATFORM_BUILD_RELEASE.md) — builds, installers, signing, notarization and artifacts.
 17. [`BUG_PREVENTION_AND_QA.md`](BUG_PREVENTION_AND_QA.md) — defect prevention, realtime audit and quality gates.

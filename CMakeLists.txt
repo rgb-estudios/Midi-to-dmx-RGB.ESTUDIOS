@@ -1,4 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
+
+# AEYLA's persistence layer uses std::filesystem, which libc++ only exposes
+# from macOS 10.15. The supported DAW/product floor is macOS 11, so normalize
+# the target before project() performs compiler and linker feature checks.
+if(APPLE AND
+   (NOT CMAKE_OSX_DEPLOYMENT_TARGET OR
+    CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "11.0"))
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING
+      "Minimum macOS version supported by AEYLA Visual DMX" FORCE)
+endif()
+
 project(aeyla_visual_dmx_core VERSION 0.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)

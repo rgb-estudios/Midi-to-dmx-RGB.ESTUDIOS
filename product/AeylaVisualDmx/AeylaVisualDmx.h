@@ -120,13 +120,6 @@ public:
     return mModel.snapshot().project_dirty;
   }
 
-  void RefreshVisualSpeedFromUI()
-  {
-    mModel.update_visual_speed_from_ui(
-        static_cast<float>(GetParam(kParamSpeed)->Value() / 100.0));
-    SyncSnapshotToAtomics();
-  }
-
   [[nodiscard]] const std::string& ProjectName() const noexcept
   {
     return mModel.snapshot().project_name;
@@ -185,6 +178,11 @@ public:
   [[nodiscard]] int DmxNonZeroChannels() const noexcept
   {
     return mDmxNonZeroChannels.load(std::memory_order_relaxed);
+  }
+
+  [[nodiscard]] float VisualPhase() const noexcept
+  {
+    return mVisualPhase.load(std::memory_order_relaxed);
   }
 
 private:
@@ -269,4 +267,5 @@ private:
   std::atomic<std::uint64_t> mHostStateRestoreErrors{0};
   std::atomic<std::uint64_t> mDmxGeneration{0};
   std::atomic<int> mDmxNonZeroChannels{0};
+  std::atomic<float> mVisualPhase{0.0F};
 };

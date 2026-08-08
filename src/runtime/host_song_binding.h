@@ -4,6 +4,7 @@
 #include "show/show_program.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace aeyla::runtime {
@@ -44,5 +45,14 @@ SongTransportProjection project_host_transport_to_song(
     const HostTransportSnapshot& host,
     const HostSongBinding& binding,
     const show::SongProgram& song) noexcept;
+
+// Deterministic animation phase derived only from absolute DAW transport.
+// The result is stable across Play/Pause/Seek/Loop and does not depend on UI
+// repaint rate or wall-clock time. Offline state is intentionally not rejected:
+// artistic state may still be reconstructed while the output layer separately
+// enforces the hard offline-render network inhibit.
+[[nodiscard]] std::optional<float> phase_from_host_ppq(
+    const HostTransportSnapshot& host,
+    double cycles_per_quarter_note) noexcept;
 
 }  // namespace aeyla::runtime
