@@ -268,9 +268,12 @@ jobs:
       - name: Install REAPER 7.78 evaluation
         run: |
           curl -fL "https://www.reaper.fm/files/7.x/reaper778_universal.dmg" -o "$RUNNER_TEMP/reaper.dmg"
-          # REAPER's DMG carries a software-license agreement. Headless
-          # hdiutil cancels instead of mounting unless acceptance is explicit.
-          mount="$(hdiutil attach "$RUNNER_TEMP/reaper.dmg" -nobrowse -readonly -acceptlicense | tail -n 1 | awk '{$1=$2=""; sub(/^  */, ""); print}')"
+          # REAPER's DMG carries a software-license agreement. `hdiutil attach`
+          # on macOS 15 has no -acceptlicense option; its headless agreement is
+          # read from stdin. Preserve the complete mount transcript as evidence.
+          mount_log="$RUNNER_TEMP/reaper-mount.txt"
+          printf 'Y\n' | hdiutil attach "$RUNNER_TEMP/reaper.dmg" -nobrowse -readonly | tee "$mount_log"
+          mount="$(awk '/\/Volumes\// {$1=$2=""; sub(/^  */, ""); print; exit}' "$mount_log")"
           app="$(find "$mount" -maxdepth 2 -type d -name 'REAPER.app' | head -n 1)"
           test -n "$app"
           rm -rf /Applications/REAPER.app
@@ -334,6 +337,7 @@ jobs:
           for name in AEYLA_REAPER_HOST_SMOKE.txt AEYLA_REAPER_HOST_SMOKE.rpp reaper-vstplugins64.ini reaper-auplugins64.ini reaper.ini; do
             test -f "$root/$name" && cp "$root/$name" evidence/ || true
           done
+          test -f "$RUNNER_TEMP/reaper-mount.txt" && cp "$RUNNER_TEMP/reaper-mount.txt" evidence/ || true
           system_profiler SPSoftwareDataType > evidence/macos-system.txt
 
       - uses: actions/upload-artifact@v4

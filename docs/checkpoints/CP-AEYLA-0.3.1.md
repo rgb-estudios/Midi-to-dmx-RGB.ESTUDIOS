@@ -29,8 +29,8 @@
   orden incorrecto de argumentos de `lipo`, ya corregido para revalidación.
 - `core-ci` expuso en macOS un snapshot rasgado del mailbox de transporte;
   barrera seqlock corregida y campaña local optimizada 201 veces PASS.
-- REAPER macOS construyó ambos formatos, pero `hdiutil` canceló por licencia
-  del DMG; el mount headless ahora usa aceptación explícita.
+- REAPER macOS construyó ambos formatos; el mount del DMG se corrigió para
+  macOS 15 enviando la aceptación por stdin y guardando transcript.
 - Búsqueda de wall-clock artístico en producto: PASS; solo permanece
   `steady_clock` en el scheduler de refresh del worker Art-Net, donde corresponde.
 

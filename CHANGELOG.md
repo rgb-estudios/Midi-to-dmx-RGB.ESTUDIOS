@@ -29,8 +29,9 @@
   combine sample/PPQ/tempo fields from different host publications.
 - Scoped GCC's known ThreadSanitizer fence warning out of `-Werror`; all other
   warnings remain errors and the mailbox concurrency test still runs.
-- Made the headless macOS REAPER smoke test explicitly accept the official DMG
-  software-license agreement instead of cancelling during mount.
+- Made the headless macOS REAPER smoke test feed the official DMG license
+  response through stdin (macOS 15 exposes no `-acceptlicense` attach option)
+  and retain its mount transcript.
 
 ### Added
 
