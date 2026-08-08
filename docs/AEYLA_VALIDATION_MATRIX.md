@@ -5,8 +5,8 @@ Fuente: PR #14, HEAD previo `ebce96470c615cc550b9d4a0482e71e0e4d37c85`.
 
 | Área | Evidencia actual | Estado |
 |---|---|---|
-| Core Linux/Windows/macOS | 15/16 PASS; test MIDI obsoleto corregido localmente | IMPLEMENTED / REVALIDATE |
-| ASan/UBSan/TSan | mismo test obsoleto bloqueaba jobs | IMPLEMENTED / REVALIDATE |
+| Core Linux/Windows/macOS | suite completa PASS en `83f4cd2` | IMPLEMENTED / CI |
+| ASan/UBSan/TSan | suite completa PASS en `83f4cd2` | IMPLEMENTED / CI |
 | Windows VST3 build | build PASS | CI-BUILT |
 | Steinberg Validator Windows | PASS en HEAD previo | SIMULATED / CI |
 | REAPER Windows 7.78 | proceso quedó abierto sin evidencia final | FAILED |

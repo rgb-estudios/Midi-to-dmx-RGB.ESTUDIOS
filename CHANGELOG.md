@@ -15,6 +15,8 @@
 - Removed model mutation and wall-clock animation from UI drawing.
 - Derived animation phase deterministically from absolute host PPQ, with tests
   for pause, seek/pre-roll wrapping and invalid host state.
+- Completed standalone safety-reason reporting for `show_not_ready` so strict
+  Clang/macOS builds cannot silently omit a safety state.
 
 ### Added
 

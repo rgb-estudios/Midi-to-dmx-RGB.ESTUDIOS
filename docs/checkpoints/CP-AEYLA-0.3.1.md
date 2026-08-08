@@ -4,6 +4,7 @@
 - Repositorio: `rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS`
 - PR: #14
 - Base inspeccionada: `ebce96470c615cc550b9d4a0482e71e0e4d37c85`
+- Commit publicado: `83f4cd23acdc54661e926a52f8b1f43abbb96568`
 - Estado PCB/hardware: no aplica; Art-Net físico **NOT CONNECTED**
 
 ## Cambios
@@ -20,12 +21,15 @@
 - `git diff --check`: PASS.
 - `aeyla_application_model_tests` compilado manualmente con GCC 13.3: PASS.
 - `aeyla_host_song_binding_tests` compilado manualmente con GCC 13.3: PASS.
+- GitHub `quality-ci` (ASan/UBSan/TSan): PASS en commit publicado.
+- GitHub `core-ci` (Linux/Windows/macOS): PASS en commit publicado.
 - Búsqueda de wall-clock artístico en producto: PASS; solo permanece
   `steady_clock` en el scheduler de refresh del worker Art-Net, donde corresponde.
 
 ## No validado
 
-- Suite CTest completa local: BLOCKED porque el entorno no incluye CMake.
+- Suite CTest completa local: BLOCKED porque el entorno no incluye CMake; la
+  matriz equivalente de `core-ci` sí pasó en Linux/Windows/macOS.
 - APP/VST3/AUv2 nativos: requieren CI Windows/macOS del nuevo SHA.
 - Windows standalone crash y REAPER timeout: siguen FAILED hasta diagnóstico.
 - Hardware Art-Net/nodo/PAR: NOT CONNECTED.
