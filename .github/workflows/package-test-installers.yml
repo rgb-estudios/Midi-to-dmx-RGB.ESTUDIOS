@@ -110,7 +110,9 @@ jobs:
           choco install innosetup --version=$env:INNO_SETUP_VERSION --allow-downgrade -y --no-progress
           $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
           if (-not (Test-Path $iscc)) { throw 'Pinned Inno Setup compiler was not installed' }
-          & $iscc /?
+          $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($iscc).ProductVersion
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Unable to read Inno Setup compiler version' }
+          Write-Host "Inno Setup compiler: $version"
 
       - name: Build unsigned Windows installer
         shell: pwsh
