@@ -139,17 +139,22 @@ jobs:
           # dialog temporarily blocks ordinary command-line file dispatch.
           $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList @("-newinst", "-nosplash") -PassThru
           $deadline = (Get-Date).AddSeconds(120)
-          while ((Get-Date) -lt $deadline -and -not (Test-Path $result)) {
+          $terminalEvidence = $false
+          while ((Get-Date) -lt $deadline -and -not $terminalEvidence) {
             if ($process.HasExited) { break }
             Invoke-ReaperEvaluationAcknowledgement | Out-Null
             Start-Sleep -Milliseconds 500
             $process.Refresh()
+            if (Test-Path $result) {
+              $terminalEvidence = Select-String -Path $result -Pattern '^RESULT=(PASS|FAIL)$' -Quiet
+            }
           }
 
-          if (-not (Test-Path $result)) {
+          if (-not $terminalEvidence) {
             $exitText = if ($process.HasExited) { "exit=$($process.ExitCode)" } else { "still-running" }
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-            throw "REAPER did not produce AEYLA host evidence ($exitText)"
+            $stage = if (Test-Path $result) { (Get-Content $result | Select-Object -Last 1) } else { "NO_EVIDENCE" }
+            throw "REAPER did not finish AEYLA host evidence ($exitText, last=$stage)"
           }
 
           Get-Content $result
@@ -302,13 +307,14 @@ jobs:
           /Applications/REAPER.app/Contents/MacOS/REAPER -newinst -nosplash &
           pid=$!
           for i in {1..240}; do
-            test -f "$result" && break
+            test -f "$result" && grep -Eq '^RESULT=(PASS|FAIL)$' "$result" && break
             if ! kill -0 "$pid" 2>/dev/null; then break; fi
             sleep 0.5
           done
-          if [ ! -f "$result" ]; then
+          if [ ! -f "$result" ] || ! grep -Eq '^RESULT=(PASS|FAIL)$' "$result"; then
             kill -9 "$pid" 2>/dev/null || true
-            echo "REAPER did not produce AEYLA VST3 host evidence"
+            echo "REAPER did not finish AEYLA VST3 host evidence"
+            test -f "$result" && tail -n 5 "$result" || true
             exit 1
           fi
           cat "$result"
@@ -330,13 +336,14 @@ jobs:
           /Applications/REAPER.app/Contents/MacOS/REAPER -newinst -nosplash &
           pid=$!
           for i in {1..240}; do
-            test -f "$result" && break
+            test -f "$result" && grep -Eq '^RESULT=(PASS|FAIL)$' "$result" && break
             if ! kill -0 "$pid" 2>/dev/null; then break; fi
             sleep 0.5
           done
-          if [ ! -f "$result" ]; then
+          if [ ! -f "$result" ] || ! grep -Eq '^RESULT=(PASS|FAIL)$' "$result"; then
             kill -9 "$pid" 2>/dev/null || true
-            echo "REAPER did not produce AEYLA AU host evidence"
+            echo "REAPER did not finish AEYLA AU host evidence"
+            test -f "$result" && tail -n 5 "$result" || true
             exit 1
           fi
           cat "$result"
