@@ -1,0 +1,400 @@
+name: package-test-installers
+
+on:
+  pull_request:
+    paths:
+      - "product/**"
+      - "src/**"
+      - "tools/maintenance/**"
+      - "tools/packaging/**"
+      - ".github/workflows/package-test-installers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AEYLA_VERSION: 0.3.3-alpha
+  AEYLA_VERSION_NUMERIC: 0.3.3.0
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+  INNO_SETUP_VERSION: 6.7.1
+
+jobs:
+  windows-installer:
+    name: Windows x64 VST3 installer / install-uninstall smoke
+    runs-on: windows-2025
+    timeout-minutes: 50
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = 'external/iPlug2/Dependencies/IPlug/VST3_SDK'
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Configure and build AEYLA VST3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S product -B build-product `
+            -DIPLUG2_DIR="$env:GITHUB_WORKSPACE/external/iPlug2" `
+            -DIPLUG_DEPLOY_PLUGINS=OFF `
+            -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Build and run Steinberg Validator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK `
+            -B build-validator `
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF `
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF `
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $validator = Get-ChildItem build-validator -Recurse -File -Filter 'validator.exe' | Select-Object -First 1
+          if (-not $bundle -or -not $validator) { throw 'Missing VST3 bundle or validator' }
+          & $validator.FullName $bundle.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Steinberg Validator failed: $LASTEXITCODE" }
+
+      - name: Stage Windows bundle and build manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter 'AeylaVisualDmx.vst3' |
+            Where-Object { $_.FullName -match 'x86_64-win' } | Select-Object -First 1
+          if (-not $bundle -or -not $binary) { throw 'Integrated Windows VST3 was not produced' }
+          if ($binary.Length -lt 1MB) { throw 'Windows VST3 binary is unexpectedly small' }
+          $bytes = [System.IO.File]::ReadAllBytes($binary.FullName)
+          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Windows VST3 lacks PE/MZ header' }
+
+          $stage = Join-Path $env:GITHUB_WORKSPACE 'stage-windows'
+          New-Item -ItemType Directory -Force "$stage/VST3" | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName "$stage/VST3/AeylaVisualDmx.vst3"
+          Copy-Item tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1 $stage
+          Copy-Item tools/maintenance/windows/AUDIT_AEYLA.cmd $stage
+          Copy-Item tools/maintenance/windows/CLEAN_AEYLA.cmd $stage
+          Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $stage
+          Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $stage
+          Copy-Item tools/packaging/README_INSTALLERS_ES.txt $stage
+
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            product = 'AEYLA Visual DMX'
+            version = $env:AEYLA_VERSION
+            channel = 'alpha-test-candidate-unsigned'
+            commit = $env:GITHUB_SHA
+            platform = 'windows-x64'
+            format = 'VST3'
+            plugin_sha256 = $hash
+            standalone_included = $false
+            standalone_exclusion = 'P0 #17: Windows OpenGL startup crash'
+          }
+          $manifest | ConvertTo-Json | Set-Content -Encoding utf8 "$stage/BUILD_MANIFEST.json"
+
+      - name: Install pinned Inno Setup compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=$env:INNO_SETUP_VERSION --allow-downgrade -y --no-progress
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw 'Pinned Inno Setup compiler was not installed' }
+          & $iscc /?
+
+      - name: Build unsigned Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = (Resolve-Path stage-windows).Path
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist-windows'
+          New-Item -ItemType Directory -Force $output | Out-Null
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          $args = @(
+            "/DSourceVST3=$stage/VST3/AeylaVisualDmx.vst3",
+            "/DReadmePath=$stage/README_INSTALLERS_ES.txt",
+            "/DManifestPath=$stage/BUILD_MANIFEST.json",
+            "/DOutputDir=$output",
+            "/DAppVersion=$env:AEYLA_VERSION",
+            "/DAppVersionNumeric=$env:AEYLA_VERSION_NUMERIC",
+            "/DBuildSha=$env:GITHUB_SHA",
+            'tools/packaging/windows/AEYLA_VST3_SETUP.iss'
+          )
+          & $iscc $args
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          $installer = Get-ChildItem $output -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer -or $installer.Length -lt 1MB) { throw 'Windows installer missing or unexpectedly small' }
+          $bytes = [System.IO.File]::ReadAllBytes($installer.FullName)
+          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Windows installer lacks PE/MZ header' }
+          (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -Encoding ascii "$($installer.FullName).sha256"
+
+      - name: Smoke clean install and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem dist-windows -File -Filter '*.exe' | Select-Object -First 1
+          $log = Join-Path $env:RUNNER_TEMP 'aeyla-install.log'
+          $process = Start-Process $installer.FullName -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/SP-', '/NORESTART', "/LOG=$log"
+          )
+          if ($process.ExitCode -ne 0) { Get-Content $log; throw "Installer failed: $($process.ExitCode)" }
+
+          $installedBundle = Join-Path $env:ProgramFiles 'Common Files/VST3/AeylaVisualDmx.vst3'
+          $installedBinary = Get-ChildItem $installedBundle -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $sourceBinary = Get-ChildItem stage-windows/VST3 -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          if (-not $installedBinary -or -not $sourceBinary) { throw 'Installed or source VST3 binary missing' }
+          $installedHash = (Get-FileHash $installedBinary.FullName -Algorithm SHA256).Hash
+          $sourceHash = (Get-FileHash $sourceBinary.FullName -Algorithm SHA256).Hash
+          if ($installedHash -ne $sourceHash) { throw 'Installed Windows VST3 hash differs from staged source' }
+
+          $uninstaller = Join-Path $env:ProgramFiles 'RGB Estudios/AEYLA Visual DMX/unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Inno uninstaller missing' }
+          $uninstall = Start-Process $uninstaller -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          )
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed: $($uninstall.ExitCode)" }
+          if (Test-Path $installedBundle) { throw 'Windows VST3 remains after uninstall' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-0.3.3-alpha-Windows-x64-Setup-UNSIGNED
+          path: dist-windows/AEYLA-0.3.3-alpha-Windows-x64-Setup-UNSIGNED.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-internal-Windows-VST3-stage
+          path: stage-windows
+          if-no-files-found: error
+          retention-days: 2
+
+  macos-installer:
+    name: macOS universal VST3+AUv2 pkg / install-uninstall smoke
+    runs-on: macos-15
+    timeout-minutes: 55
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Configure and build universal VST3 and AUv2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode \
+            -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" \
+            -DIPLUG2_UNIVERSAL=ON \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release \
+            --target AeylaVisualDmx-vst3 AeylaVisualDmx-au --parallel 2
+
+      - name: Verify architectures and ad-hoc sign bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          au="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
+          test -n "$vst3" && test -n "$au"
+          vst3_binary="$(find "$vst3/Contents/MacOS" -type f | head -n 1)"
+          au_binary="$(find "$au/Contents/MacOS" -type f | head -n 1)"
+          lipo "$vst3_binary" -verify_arch x86_64 arm64
+          lipo "$au_binary" -verify_arch x86_64 arm64
+          codesign --force --deep --sign - "$vst3"
+          codesign --force --deep --sign - "$au"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$au"
+
+      - name: Build and run Steinberg Validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK \
+            -B build-validator -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          test -n "$vst3" && test -n "$validator"
+          "$validator" "$vst3"
+
+      - name: Stage payload and create unsigned pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          au="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
+          stage="$GITHUB_WORKSPACE/stage-macos"
+          payload="$GITHUB_WORKSPACE/pkg-payload"
+          dist="$GITHUB_WORKSPACE/dist-macos"
+          mkdir -p "$stage/VST3" "$stage/AUv2" \
+            "$payload/Library/Audio/Plug-Ins/VST3" \
+            "$payload/Library/Audio/Plug-Ins/Components" \
+            "$payload/Library/Application Support/RGB Estudios/AEYLA Visual DMX" \
+            "$dist"
+          ditto "$vst3" "$stage/VST3/AeylaVisualDmx.vst3"
+          ditto "$au" "$stage/AUv2/AeylaVisualDmx.component"
+          ditto "$vst3" "$payload/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          ditto "$au" "$payload/Library/Audio/Plug-Ins/Components/AeylaVisualDmx.component"
+          cp tools/maintenance/macos/AEYLA_PLUGIN_MAINTENANCE.sh "$stage/"
+          cp tools/packaging/macos/INSTALL_AEYLA.command "$stage/"
+          cp tools/packaging/macos/UNINSTALL_AEYLA.command "$stage/"
+          cp tools/packaging/macos/AUDIT_AEYLA.command "$stage/"
+          cp tools/packaging/README_INSTALLERS_ES.txt "$stage/"
+          cp tools/packaging/README_INSTALLERS_ES.txt \
+            "$payload/Library/Application Support/RGB Estudios/AEYLA Visual DMX/LEEME_AEYLA.txt"
+          chmod +x "$stage"/*.command "$stage/AEYLA_PLUGIN_MAINTENANCE.sh"
+
+          vst3_hash="$(shasum -a 256 "$stage/VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx" | awk '{print $1}')"
+          au_hash="$(shasum -a 256 "$stage/AUv2/AeylaVisualDmx.component/Contents/MacOS/AeylaVisualDmx" | awk '{print $1}')"
+          printf '%s\n' \
+            '{' \
+            '  "product": "AEYLA Visual DMX",' \
+            "  \"version\": \"$AEYLA_VERSION\"," \
+            '  "channel": "alpha-test-candidate-unsigned",' \
+            "  \"commit\": \"$GITHUB_SHA\"," \
+            '  "platform": "macos-universal",' \
+            '  "formats": ["VST3", "AUv2"],' \
+            "  \"vst3_sha256\": \"$vst3_hash\"," \
+            "  \"auv2_sha256\": \"$au_hash\"," \
+            '  "standalone_included": false' \
+            '}' > "$stage/BUILD_MANIFEST.json"
+          cp "$stage/BUILD_MANIFEST.json" \
+            "$payload/Library/Application Support/RGB Estudios/AEYLA Visual DMX/BUILD_MANIFEST.json"
+
+          pkgbuild --root "$payload" \
+            --identifier cl.rgbestudios.aeyla.plugins \
+            --version 0.3.3 \
+            --install-location / \
+            --ownership recommended \
+            "$dist/AEYLA-$AEYLA_VERSION-macOS-Universal-UNSIGNED.pkg"
+          pkgutil --payload-files "$dist/AEYLA-$AEYLA_VERSION-macOS-Universal-UNSIGNED.pkg" |
+            tee "$dist/pkg-payload-files.txt"
+          shasum -a 256 "$dist/AEYLA-$AEYLA_VERSION-macOS-Universal-UNSIGNED.pkg" |
+            awk '{print $1}' > "$dist/AEYLA-$AEYLA_VERSION-macOS-Universal-UNSIGNED.pkg.sha256"
+
+      - name: Smoke install, validate AUv2, and uninstall exact bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="dist-macos/AEYLA-$AEYLA_VERSION-macOS-Universal-UNSIGNED.pkg"
+          sudo installer -pkg "$pkg" -target /
+          installed_vst3='/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3'
+          installed_au='/Library/Audio/Plug-Ins/Components/AeylaVisualDmx.component'
+          test -d "$installed_vst3" && test -d "$installed_au"
+          codesign --verify --deep --strict --verbose=2 "$installed_vst3"
+          codesign --verify --deep --strict --verbose=2 "$installed_au"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -v aumu AyVD RGBE
+          sudo rm -rf -- "$installed_vst3" "$installed_au"
+          test ! -e "$installed_vst3" && test ! -e "$installed_au"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-0.3.3-alpha-macOS-Universal-UNSIGNED
+          path: dist-macos/AEYLA-0.3.3-alpha-macOS-Universal-UNSIGNED.pkg
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-internal-macOS-plugin-stage
+          path: stage-macos
+          if-no-files-found: error
+          retention-days: 2
+
+  vst3-manual-pack:
+    name: Cross-platform VST3 manual pack
+    runs-on: macos-15
+    timeout-minutes: 15
+    needs:
+      - windows-installer
+      - macos-installer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: AEYLA-internal-Windows-VST3-stage
+          path: downloaded/windows
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: AEYLA-internal-macOS-plugin-stage
+          path: downloaded/macos
+
+      - name: Assemble and verify complete manual pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/AEYLA-$AEYLA_VERSION-VST3-Manual-Pack"
+          dist="$GITHUB_WORKSPACE/dist-portable"
+          mkdir -p "$root/Windows" "$root/macOS" "$dist"
+          ditto downloaded/windows "$root/Windows"
+          ditto downloaded/macos "$root/macOS"
+          cp tools/packaging/README_INSTALLERS_ES.txt "$root/LEEME_PRIMERO.txt"
+
+          chmod +x "$root/macOS"/*.command "$root/macOS/AEYLA_PLUGIN_MAINTENANCE.sh"
+          chmod +x "$root/macOS/VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx"
+          chmod +x "$root/macOS/AUv2/AeylaVisualDmx.component/Contents/MacOS/AeylaVisualDmx"
+          codesign --force --deep --sign - "$root/macOS/VST3/AeylaVisualDmx.vst3"
+          codesign --force --deep --sign - "$root/macOS/AUv2/AeylaVisualDmx.component"
+          codesign --verify --deep --strict --verbose=2 "$root/macOS/VST3/AeylaVisualDmx.vst3"
+          codesign --verify --deep --strict --verbose=2 "$root/macOS/AUv2/AeylaVisualDmx.component"
+
+          windows_binary="$(find "$root/Windows/VST3" -type f -path '*x86_64-win/AeylaVisualDmx.vst3' | head -n 1)"
+          mac_vst3_binary="$root/macOS/VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx"
+          mac_au_binary="$root/macOS/AUv2/AeylaVisualDmx.component/Contents/MacOS/AeylaVisualDmx"
+          test -n "$windows_binary" && test -f "$mac_vst3_binary" && test -f "$mac_au_binary"
+          test "$(xxd -p -l 2 "$windows_binary")" = '4d5a'
+          lipo "$mac_vst3_binary" -verify_arch x86_64 arm64
+          lipo "$mac_au_binary" -verify_arch x86_64 arm64
+
+          {
+            shasum -a 256 "$windows_binary"
+            shasum -a 256 "$mac_vst3_binary"
+            shasum -a 256 "$mac_au_binary"
+          } | sed "s#$root/##" > "$root/SHA256SUMS.txt"
+          printf 'AEYLA_VERSION=%s\nGIT_SHA=%s\nCHANNEL=alpha-test-candidate-unsigned\n' \
+            "$AEYLA_VERSION" "$GITHUB_SHA" > "$root/BUILD_ID.txt"
+
+          zip_path="$dist/AEYLA-$AEYLA_VERSION-VST3-Manual-Pack.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$root" "$zip_path"
+          unzip -t "$zip_path"
+          shasum -a 256 "$zip_path" | awk '{print $1}' > "$zip_path.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-0.3.3-alpha-VST3-Manual-Pack
+          path: dist-portable/AEYLA-0.3.3-alpha-VST3-Manual-Pack.zip
+          if-no-files-found: error
+          retention-days: 30

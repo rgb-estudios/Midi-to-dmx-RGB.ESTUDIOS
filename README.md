@@ -44,6 +44,21 @@ monitored, the Windows standalone OpenGL startup P0 is unresolved, host
 save/reopen and editor-closed behavior require real REAPER/Ableton/Logic
 evidence, and no hardware or full-show soak has been performed.
 
+## Alpha installer outputs
+
+The native packaging lane produces exactly three user-facing files from one
+commit:
+
+1. Windows x64 `.exe` installer for the VST3 used by REAPER and Ableton.
+2. macOS 11+ universal `.pkg` installer for VST3 and Logic AUv2.
+3. Cross-platform manual VST3 pack with selective install, audit and uninstall
+   tools.
+
+Alpha installers are unsigned and explicitly labeled `UNSIGNED`. They are test
+candidates, not rehearsal or show releases. The Windows standalone is excluded
+while OpenGL issue #17 remains unresolved; packaging never waives a failed
+runtime gate.
+
 ## First test
 
 ### Core

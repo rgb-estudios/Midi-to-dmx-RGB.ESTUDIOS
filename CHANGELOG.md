@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — native installer delivery
+
+- Added a reproducible Windows x64 Inno Setup installer for the integrated
+  VST3, including clean install/uninstall smoke validation and exact bundle
+  hash comparison on the native Windows runner.
+- Added a macOS 11+ universal installer package containing the VST3 and AUv2,
+  with architecture, code-signature, install, `auval` and exact uninstall
+  checks on the native macOS runner.
+- Added a third cross-platform manual pack with Windows/macOS VST3 bundles,
+  the Logic AUv2, selective maintenance tools, build identity and SHA-256
+  checksums generated from the same commit.
+- Deliberately excluded the Windows standalone from installers while the
+  OpenGL startup P0 tracked in issue #17 remains unresolved.
+
 ### Added — CP-AEYLA-0.3.3
 
 - Connected the graphical product to the dedicated latest-frame-only Art-Net

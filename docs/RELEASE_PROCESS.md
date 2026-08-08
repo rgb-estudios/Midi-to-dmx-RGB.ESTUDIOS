@@ -19,8 +19,10 @@
 
 ## Artefacts
 
-- `AEYLA-Visual-DMX-Editor-<version>-win64.exe`
-- `AEYLA Visual DMX Runtime.vst3`
+- `AEYLA-<version>-Windows-x64-Setup-UNSIGNED.exe` for internal alpha only;
+- `AEYLA-<version>-macOS-Universal-UNSIGNED.pkg` for internal alpha only;
+- `AEYLA-<version>-VST3-Manual-Pack.zip` with Windows/macOS VST3 and macOS
+  AUv2;
 - checksums file;
 - release notes;
 - fixture profile pack;
@@ -33,6 +35,11 @@
 - `alpha`: editor/developer testing.
 - `rehearsal`: target hardware and session testing.
 - `show`: only after full rehearsal soak and recovery drills.
+
+Unsigned Windows/macOS packages are never promoted beyond `alpha`. The
+Windows installer omits the standalone while issue #17 remains open. A public
+or rehearsal installer requires platform signing, macOS notarization and the
+real-host gates defined in `CROSS_PLATFORM_BUILD_RELEASE.md`.
 
 ## Rollback
 
