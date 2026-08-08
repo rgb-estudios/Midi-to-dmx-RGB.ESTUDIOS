@@ -22,7 +22,7 @@ echo de cache REAPER, y se instalara el bundle incluido en este paquete.
 echo No se eliminan .aeylashow, .RPP ni otros plugins.
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%SCRIPT%','-Action','CleanInstall','-SourceVst3','%SOURCE%','-ResetReaperCache')"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%SCRIPT%','-Action','CleanInstall','-SourceVst3','%SOURCE%','-ResetReaperCache'); exit $p.ExitCode"
 if errorlevel 1 (
   echo ERROR: clean install AEYLA no completado.
   pause
