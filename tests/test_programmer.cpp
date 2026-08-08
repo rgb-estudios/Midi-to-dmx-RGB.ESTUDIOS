@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -60,6 +61,10 @@ int main() {
 
   check(programmer.set_selected(Attribute::Dimmer, 0.80F),
         "selected fixtures must accept programmer attributes");
+  check(!programmer.set_selected(Attribute::Count, 1.0F),
+        "Attribute::Count sentinel must be rejected without out-of-bounds access");
+  check(!programmer.clear_selected_attribute(Attribute::Count),
+        "Attribute::Count sentinel clear must be rejected safely");
   check(programmer.has_programmed_values(), "programmer must report touched values");
 
   const auto base = make_base();
