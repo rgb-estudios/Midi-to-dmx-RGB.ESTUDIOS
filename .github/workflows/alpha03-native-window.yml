@@ -83,6 +83,20 @@ jobs:
           New-ItemProperty -Path $localDumps -Name DumpFolder -PropertyType ExpandString -Value $dumpDir -Force | Out-Null
           New-ItemProperty -Path $localDumps -Name DumpType -PropertyType DWord -Value 2 -Force | Out-Null
 
+          # Hosted runners may disable WER dump generation. ProcDump is the
+          # deterministic fallback: wait for this exact image and capture the
+          # unhandled exception with full process memory.
+          $procDumpZip = Join-Path $env:RUNNER_TEMP "procdump.zip"
+          $procDumpRoot = Join-Path $env:RUNNER_TEMP "procdump"
+          Invoke-WebRequest -Uri "https://download.sysinternals.com/files/Procdump.zip" -OutFile $procDumpZip
+          Expand-Archive -Path $procDumpZip -DestinationPath $procDumpRoot -Force
+          $procDump = Join-Path $procDumpRoot "procdump64.exe"
+          if (-not (Test-Path $procDump)) { throw "Microsoft ProcDump x64 was not found" }
+          $dumpMonitor = Start-Process -FilePath $procDump -ArgumentList @(
+            "-accepteula", "-ma", "-e", "-w", "AeylaVisualDmx.exe", $dumpDir
+          ) -PassThru -WindowStyle Hidden
+          Start-Sleep -Milliseconds 500
+
           $process = Start-Process -FilePath $app.FullName -ArgumentList "--no-io" -PassThru
           $windowCreated = $false
           $handle = 0
@@ -92,9 +106,15 @@ jobs:
             $process.Refresh()
 
             if ($process.HasExited) {
-              # Windows Error Reporting writes asynchronously after process
-              # termination; allow the dump to finish before preserving paths.
-              Start-Sleep -Seconds 2
+              # ProcDump/WER write asynchronously after process termination;
+              # allow the full dump to finish before preserving paths.
+              for ($dumpAttempt = 0; $dumpAttempt -lt 20; $dumpAttempt++) {
+                if (Get-ChildItem -Path $dumpDir -File -Filter "*.dmp" -ErrorAction SilentlyContinue) { break }
+                Start-Sleep -Milliseconds 500
+              }
+              if (-not $dumpMonitor.HasExited) {
+                Stop-Process -Id $dumpMonitor.Id -Force -ErrorAction SilentlyContinue
+              }
               $dumpPaths = @(Get-ChildItem -Path $dumpDir -File -Filter "*.dmp" -ErrorAction SilentlyContinue |
                 ForEach-Object { $_.FullName })
               @(
@@ -122,6 +142,9 @@ jobs:
               "Executable: $($app.FullName)"
             ) | Set-Content -Encoding UTF8 $evidence
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            if (-not $dumpMonitor.HasExited) {
+              Stop-Process -Id $dumpMonitor.Id -Force -ErrorAction SilentlyContinue
+            }
             throw "Source-built graphical APP created no native window in 20 seconds"
           }
 
@@ -136,6 +159,9 @@ jobs:
 
           Get-Content $evidence
           Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          if (-not $dumpMonitor.HasExited) {
+            Stop-Process -Id $dumpMonitor.Id -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Collect validated source build
         if: always()

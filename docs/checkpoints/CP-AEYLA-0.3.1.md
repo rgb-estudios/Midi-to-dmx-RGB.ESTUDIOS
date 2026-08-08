@@ -42,6 +42,8 @@
 - Windows standalone crash y REAPER timeout: siguen FAILED hasta diagnóstico.
 - El workflow standalone ahora preserva full crash dump, PDB, ejecutable y
   evidencia aunque el proceso falle antes de crear ventana.
+- WER del runner no produjo el primer dump; se añadió ProcDump oficial como
+  capturador determinista y símbolos PDB para el siguiente intento.
 - Hardware Art-Net/nodo/PAR: NOT CONNECTED.
 
 ## Próximo bloque

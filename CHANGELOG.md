@@ -21,6 +21,8 @@
   misparsed as an architecture name.
 - Made the Windows native-window gate preserve a full WER crash dump, matching
   PDB, executable and textual evidence even when startup fails early.
+- Added Microsoft ProcDump as the deterministic crash-capture fallback because
+  hosted Windows runners may suppress WER LocalDumps.
 - Fixed the host-transport seqlock read barrier so weakly ordered CPUs cannot
   combine sample/PPQ/tempo fields from different host publications.
 - Scoped GCC's known ThreadSanitizer fence warning out of `-Werror`; all other

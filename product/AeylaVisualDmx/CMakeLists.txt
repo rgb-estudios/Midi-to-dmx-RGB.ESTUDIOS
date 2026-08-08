@@ -67,6 +67,10 @@ foreach(target_name
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     if(MSVC)
       target_compile_options(${target_name} PRIVATE /W4 /permissive-)
+      # Keep optimized Windows alpha binaries symbolizable. The native-window
+      # gate packages the matching PDB only as crash evidence; it is not part of
+      # the user-facing plug-in bundle.
+      target_link_options(${target_name} PRIVATE /DEBUG:FULL)
     else()
       target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
