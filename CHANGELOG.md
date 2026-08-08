@@ -23,6 +23,8 @@
   PDB, executable and textual evidence even when startup fails early.
 - Fixed the host-transport seqlock read barrier so weakly ordered CPUs cannot
   combine sample/PPQ/tempo fields from different host publications.
+- Scoped GCC's known ThreadSanitizer fence warning out of `-Werror`; all other
+  warnings remain errors and the mailbox concurrency test still runs.
 - Made the headless macOS REAPER smoke test explicitly accept the official DMG
   software-license agreement instead of cancelling during mount.
 
