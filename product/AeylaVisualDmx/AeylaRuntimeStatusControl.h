@@ -33,6 +33,12 @@ public:
     const IColor valid(255, 57, 211, 132);
     const IColor danger(255, 231, 45, 55);
 
+    // The top-most status control owns the ARM interaction as well as the
+    // footer. This removes an ambiguous state where the lower visual control
+    // looked clickable but an ARM request could be rejected silently by the
+    // safety model. A visible control must either work or explain why it cannot.
+    DrawArmState(g, raised, line, text, muted, warning, valid, danger);
+
     g.FillRect(background, footer);
     g.DrawLine(line, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
@@ -96,19 +102,23 @@ public:
 
   bool IsHit(float x, float y) const override
   {
-    // This control draws the runtime/file footer but its draw RECT spans the
-    // complete editor. iPlug2 searches controls from front to back, so using
-    // the default full-window hit test makes this overlay swallow every click
-    // intended for the main editor and executor controls underneath it.
-    // Restrict mouse ownership to the footer only; the rest must pass through.
+    // The control is visually full-window but must never swallow the editor.
+    // It owns only the file/runtime footer and the ARM button for explicit
+    // safety feedback. Everything else passes through to the actual editor.
     const IRECT footer(mRECT.L, mRECT.B - 42.0F, mRECT.R, mRECT.B);
-    return footer.Contains(x, y);
+    return footer.Contains(x, y) || ArmButton().Contains(x, y);
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
     (void) mod;
     BuildButtons();
+
+    if(Contains(ArmButton(), x, y))
+    {
+      HandleArmClick();
+      return;
+    }
 
     if(Contains(mButtons[0], x, y))
     {
@@ -146,6 +156,101 @@ private:
   {
     return x >= rectangle.L && x <= rectangle.R &&
            y >= rectangle.T && y <= rectangle.B;
+  }
+
+  [[nodiscard]] IRECT ArmButton() const noexcept
+  {
+    constexpr float headerHeight = 70.0F;
+    const IRECT header(mRECT.L, mRECT.T, mRECT.R, mRECT.T + headerHeight);
+    return IRECT(header.R - 292.0F, header.T + 16.0F,
+                 header.R - 164.0F, header.B - 16.0F);
+  }
+
+  void DrawArmState(IGraphics& g,
+                    const IColor& raised,
+                    const IColor& line,
+                    const IColor& text,
+                    const IColor& muted,
+                    const IColor& warning,
+                    const IColor& valid,
+                    const IColor& danger)
+  {
+    const IRECT arm = ArmButton();
+    const bool armed = mPlug.OutputArmed();
+    const bool projectValid = mPlug.ProjectValid();
+    const bool backendReady = mPlug.BackendReady();
+
+    const char* label = "ARM OUTPUT";
+    IColor fill = raised;
+    IColor labelColor = text;
+
+    if(armed)
+    {
+      label = "OUTPUT ARMED";
+      fill = valid;
+      labelColor = IColor(255, 7, 30, 20);
+    }
+    else if(!projectValid)
+    {
+      label = "ARM LOCKED · PROJECT";
+      fill = IColor(255, 35, 30, 24);
+      labelColor = warning;
+    }
+    else if(!backendReady)
+    {
+      label = "ARM LOCKED · BACKEND";
+      fill = IColor(255, 30, 30, 34);
+      labelColor = muted;
+    }
+
+    g.FillRoundRect(fill, arm, 7.0F);
+    g.DrawRoundRect(armed ? danger : line, arm, 7.0F, nullptr,
+                    armed ? 2.0F : 1.0F);
+    g.DrawText(IText(9.0F, labelColor, "AeylaUI", EAlign::Center, EVAlign::Middle),
+               label, arm.GetPadded(-4.0F));
+  }
+
+  void HandleArmClick()
+  {
+    if(mPlug.OutputArmed())
+    {
+      mPlug.ForceDisarmFromUI();
+      SetDirty(false);
+      return;
+    }
+
+    if(!mPlug.ProjectValid())
+    {
+      GetUI()->ShowMessageBox(
+          "ARM is locked because the current AEYLA project is invalid.\n\n"
+          "Open or repair a valid .aeylashow before enabling physical output.",
+          "AEYLA · ARM LOCKED",
+          kMB_OK);
+      return;
+    }
+
+    if(!mPlug.BackendReady())
+    {
+      GetUI()->ShowMessageBox(
+          "ARM is locked because the physical output backend is not connected yet.\n\n"
+          "This build is intentionally PREVIEW / NO DMX. Art-Net will only become "
+          "armable after backend preflight and safety integration pass.",
+          "AEYLA · ARM LOCKED",
+          kMB_OK);
+      return;
+    }
+
+    mPlug.ToggleOutputArmFromUI();
+    if(!mPlug.OutputArmed())
+    {
+      GetUI()->ShowMessageBox(
+          "ARM request was rejected by the runtime safety gate.\n\n"
+          "The lighting show is not performance-ready yet (for example, no valid "
+          "lighting sequence/cue program is loaded).",
+          "AEYLA · SHOW NOT READY",
+          kMB_OK);
+    }
+    SetDirty(false);
   }
 
   static bool Empty(const WDL_String& value) noexcept
