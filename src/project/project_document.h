@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -9,8 +11,10 @@
 
 namespace aeyla::project {
 
+inline constexpr std::size_t kMaximumLooks = 2048U;
+
 struct SchemaVersion {
-  std::uint16_t major{1};
+  std::uint16_t major{2};
   std::uint16_t minor{0};
   bool operator==(const SchemaVersion&) const = default;
 };
@@ -48,6 +52,16 @@ struct LookDocument {
   std::string look_id;
   std::string name;
   std::string source{"gradient"};
+  std::array<float, 3> primary_color{0.92F, 0.03F, 0.07F};
+  std::array<float, 3> secondary_color{1.0F, 0.42F, 0.04F};
+  float intensity{1.0F};
+  float speed{0.35F};
+  float white_extraction{0.20F};
+  float amber_extraction{0.15F};
+  float uv_manual{0.0F};
+  std::array<bool, 14> fixture_mask{
+      true, true, true, true, true, true, true,
+      true, true, true, true, true, true, true};
   bool operator==(const LookDocument&) const = default;
 };
 
@@ -88,7 +102,7 @@ struct AssetDocument {
 
 struct ProjectDocument {
   SchemaVersion schema_version{};
-  std::string app_version{"0.3.0-alpha.1"};
+  std::string app_version{"0.3.0-alpha.2"};
   std::string project_id;
   std::string created_at;
   std::string modified_at;

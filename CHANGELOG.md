@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Added — CP-AEYLA-0.3.2
+
+- Added a 4 ms independent control/runtime worker so Cue, transport, MIDI and
+  safety updates no longer depend on the editor receiving `OnIdle`.
+- Added persistent per-Song DAW start-PPQ bindings to plugin state, with a
+  visible `SET SONG START` workflow and safe handling for unbound Songs.
+- Added source-level Look → Cue → Song authoring: complete Look storage,
+  primary/secondary palette, Look intensity, fixture mask, up to 15 Songs,
+  stored-Look/Song navigation and Cue placement at the DAW playhead.
+- Added authoring projection beyond a Song's initial end; storing a Cue extends
+  the Song within bounded tick limits.
+- Added explicit offline-render disarm/blackout and latched runtime-fault ARM
+  inhibition.
+
+### Changed — CP-AEYLA-0.3.2
+
+- Bumped project schema to 2.0 so each Look owns colors, intensity, speed,
+  white/amber extraction, UV and fourteen fixture-participation flags; schema
+  1.x migrates deterministically.
+- Bumped `show.bin` to 1.1 and made Scene/Cue own MIDI Learn mapping. Legacy
+  1.0 clips migrate only when their mapping is unambiguous.
+- Split editable Look Intensity from operator Grand Master.
+- Made every Programmer/Rig edit force disarm + blackout; Grand Master and
+  explicit Blackout remain operator controls.
+- Made timeline playback reconstruct continuously from absolute DAW PPQ while
+  preserving live overrides only during continuous forward playback.
+- Documented the real two-entry `.aeylashow` package instead of the obsolete
+  foundation-era conceptual archive layout.
+
+### Validation boundary — CP-AEYLA-0.3.2
+
+- Eight affected strict GCC test executables pass locally; full CTest, iPlug2
+  product build, platform CI and real-host evidence remain pending on the new
+  SHA.
+- Physical Art-Net remains disconnected; Windows OpenGL issue #17, REAPER
+  evidence, hardware validation and show soak remain open.
+
 ### Fixed — CP-AEYLA-0.3.1
 
 - Corrected the obsolete application-model regression that expected diagnostic

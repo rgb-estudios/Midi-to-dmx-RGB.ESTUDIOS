@@ -48,6 +48,8 @@ aeyla::show::ShowProgram make_show(
       {"clip-hit", "scene-hit", 4U * song.ppq, song.ppq / 4U,
        37U, 127U, 1U},
   };
+  song.scenes[0].midi_binding = MidiBinding{36U, 1U};
+  song.scenes[1].midi_binding = MidiBinding{37U, 1U};
   program.songs.push_back(std::move(song));
   return program;
 }

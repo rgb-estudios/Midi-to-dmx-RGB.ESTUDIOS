@@ -41,7 +41,8 @@ public:
     g.FillRect(background, footer);
     g.DrawLine(line, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
-    static constexpr const char* labels[] = {"NEW", "OPEN", "SAVE", "SAVE AS"};
+    static constexpr const char* labels[] = {
+        "NEW", "OPEN", "SAVE", "SAVE AS", "SET SONG START"};
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
       g.FillRoundRect(raised, mButtons[index], 5.0F);
@@ -66,7 +67,7 @@ public:
 
     g.DrawText(IText(9.0F, projectColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
                projectLabel.c_str(),
-               IRECT(footer.L + 264.0F, footer.T, footer.L + 550.0F, footer.B));
+               IRECT(footer.L + 390.0F, footer.T, footer.L + 620.0F, footer.B));
 
     char runtime[160];
     std::snprintf(runtime, sizeof(runtime),
@@ -77,25 +78,29 @@ public:
                   static_cast<unsigned long long>(mPlug.HostStateRestoreErrors()));
     g.DrawText(IText(9.0F, muted, "AeylaUI", EAlign::Center, EVAlign::Middle),
                runtime,
-               IRECT(footer.L + 535.0F, footer.T,
-                     footer.L + footer.W() * 0.73F, footer.B));
+               IRECT(footer.L + 620.0F, footer.T,
+                     footer.L + 850.0F, footer.B));
 
-    char state[170];
+    char state[220];
     const char* project = mPlug.ProjectValid() ? "PROJECT VALID" : "PROJECT INVALID";
     const char* backend = mPlug.BackendReady() ? "BACKEND READY" : "BACKEND OFF";
     const char* output = mPlug.OutputArmed() ? "ARMED" : "DISARMED";
     const char* blackout = mPlug.EffectiveBlackout() ? "BLACKOUT" : "PREVIEW";
-    std::snprintf(state, sizeof(state), "%s  ·  %s  ·  %s  ·  %s",
-                  project, backend, output, blackout);
+    const char* binding = mPlug.ActiveSongBound() ? "START SET" : "START UNSET";
+    const char* offline = !mPlug.RuntimeHealthy() ? "RUNTIME FAULT" :
+        (mPlug.RenderingOffline() ? "OFFLINE INHIBIT" : "REALTIME");
+    std::snprintf(state, sizeof(state), "%s  ·  %s  ·  %s  ·  %s  ·  %s  ·  %s",
+                  project, backend, output, blackout, binding, offline);
 
     IColor stateColor = mPlug.BackendReady() ? valid : warning;
-    if(mPlug.OutputArmed() || !mPlug.ProjectValid() ||
+    if(mPlug.OutputArmed() || !mPlug.ProjectValid() || !mPlug.RuntimeHealthy() ||
+       mPlug.RenderingOffline() ||
        mPlug.HostStateRestoreErrors() > 0U)
       stateColor = danger;
 
     g.DrawText(IText(9.0F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
                state,
-               IRECT(footer.L + footer.W() * 0.70F, footer.T,
+               IRECT(footer.L + 850.0F, footer.T,
                      footer.R - 14.0F, footer.B));
   }
 
@@ -147,7 +152,24 @@ public:
     }
 
     if(Contains(mButtons[3], x, y))
+    {
       PromptSaveAs();
+      return;
+    }
+
+    if(Contains(mButtons[4], x, y))
+    {
+      if(!mPlug.SetActiveSongStartFromPlayheadFromUI())
+      {
+        GetUI()->ShowMessageBox(
+            "AEYLA could not bind the active Song.\n\n"
+            "Load a programmed Song and place the DAW playhead at its exact "
+            "start before pressing SET SONG START.",
+            "AEYLA · SONG START NOT SET",
+            kMB_OK);
+      }
+      SetDirty(false);
+    }
   }
 
 private:
@@ -178,6 +200,8 @@ private:
     const bool armed = mPlug.OutputArmed();
     const bool projectValid = mPlug.ProjectValid();
     const bool backendReady = mPlug.BackendReady();
+    const bool runtimeHealthy = mPlug.RuntimeHealthy();
+    const bool renderingOffline = mPlug.RenderingOffline();
 
     const char* label = "ARM OUTPUT";
     IColor fill = raised;
@@ -194,6 +218,18 @@ private:
       label = "ARM LOCKED · PROJECT";
       fill = IColor(255, 35, 30, 24);
       labelColor = warning;
+    }
+    else if(!runtimeHealthy)
+    {
+      label = "ARM LOCKED · RUNTIME";
+      fill = IColor(255, 48, 18, 24);
+      labelColor = danger;
+    }
+    else if(renderingOffline)
+    {
+      label = "ARM LOCKED · OFFLINE";
+      fill = IColor(255, 48, 18, 24);
+      labelColor = danger;
     }
     else if(!backendReady)
     {
@@ -223,6 +259,22 @@ private:
       GetUI()->ShowMessageBox(
           "ARM is locked because the current AEYLA project is invalid.\n\n"
           "Open or repair a valid .aeylashow before enabling physical output.",
+          "AEYLA · ARM LOCKED",
+          kMB_OK);
+      return;
+    }
+
+    if(!mPlug.RuntimeHealthy() || mPlug.RenderingOffline())
+    {
+      GetUI()->ShowMessageBox(
+          mPlug.RenderingOffline()
+              ? "ARM is locked while the host is rendering offline.\n\n"
+                "AEYLA remains disarmed and blacked out; physical network "
+                "output is inhibited. Return to realtime playback and arm "
+                "again explicitly."
+              : "ARM is locked because the independent lighting runtime "
+                "reported a fault.\n\nReload the plugin before attempting "
+                "physical output.",
           "AEYLA · ARM LOCKED",
           kMB_OK);
       return;
@@ -273,7 +325,7 @@ private:
     constexpr float left = 12.0F;
     constexpr float topPad = 8.0F;
     constexpr float gap = 6.0F;
-    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F};
+    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F, 112.0F};
 
     float cursor = footer.L + left;
     for(std::size_t index = 0; index < mButtons.size(); ++index)
@@ -351,7 +403,7 @@ private:
   }
 
   AeylaVisualDmx& mPlug;
-  std::array<IRECT, 4> mButtons{};
+  std::array<IRECT, 5> mButtons{};
   WDL_String mDialogFileName;
   WDL_String mDialogPath;
 };

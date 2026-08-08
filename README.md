@@ -27,9 +27,18 @@ It currently includes:
 - DMX compiler and ArtDMX packet encoder.
 - Unit tests proving that fixture channel reordering does not alter programmed looks.
 - Native iPlug2 APP/VST3/AUv2 product surface under active integration.
+- A source-level `Look → Cue → Song` authoring slice with complete Look schema,
+  15-Song navigation and explicit DAW Song-start bindings.
+- An independent lighting runtime worker so musical state is not owned by the
+  editor's `OnIdle` callback, plus an offline-render disarm/blackout inhibit.
 - JSON schemas for projects and fixture profiles.
 - Full architecture, product, visual, QA, release and agent documentation.
 - GitHub Actions CI configuration.
+
+Current hard limits remain: physical Art-Net is not connected to the product,
+the Windows standalone OpenGL startup P0 is unresolved, host save/reopen and
+editor-closed behavior require real REAPER/Ableton/Logic evidence, and no
+hardware or full-show soak has been performed.
 
 ## First test
 

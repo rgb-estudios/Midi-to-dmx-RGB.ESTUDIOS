@@ -46,6 +46,15 @@ SongTransportProjection project_host_transport_to_song(
     const HostSongBinding& binding,
     const show::SongProgram& song) noexcept;
 
+// Projects a DAW playhead into an authoring tick without clipping to the
+// Song's current end. This lets STORE CUE extend an authoring Song while still
+// rejecting unavailable transport and positions before the explicit anchor.
+[[nodiscard]] std::optional<std::uint64_t>
+project_host_transport_to_authoring_tick(
+    const HostTransportSnapshot& host,
+    const HostSongBinding& binding,
+    const show::SongProgram& song) noexcept;
+
 // Deterministic animation phase derived only from absolute DAW transport.
 // The result is stable across Play/Pause/Seek/Loop and does not depend on UI
 // repaint rate or wall-clock time. Offline state is intentionally not rejected:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -18,6 +19,12 @@ enum class CueBehavior : std::uint8_t {
   momentary,
 };
 
+struct MidiBinding {
+  std::uint8_t note{36U};
+  std::uint8_t channel{1U};
+  bool operator==(const MidiBinding&) const = default;
+};
+
 struct SceneDefinition {
   std::string scene_id;
   std::string name;
@@ -26,6 +33,7 @@ struct SceneDefinition {
   std::uint32_t transition_out_ms{0U};
   bool blackout{false};
   CueBehavior behavior{CueBehavior::latch};
+  std::optional<MidiBinding> midi_binding{};
   bool operator==(const SceneDefinition&) const = default;
 };
 
@@ -142,6 +150,9 @@ class CueRuntime final {
   explicit CueRuntime(const SongProgram& song) : song_(song) {}
 
   void seek(std::uint64_t tick) noexcept;
+  // Continuous host playback updates timeline state without discarding a live
+  // manual latch/momentary override. Seek/Loop uses seek() and clears them.
+  void advance(std::uint64_t tick) noexcept;
   void transport_start() noexcept { transport_running_ = true; }
   void transport_stop() noexcept;
 

@@ -1,54 +1,55 @@
-# AEYLA — flujo operativo objetivo
+# AEYLA — flujo operativo disponible en CP-AEYLA-0.3.2
 
-Estado: **DESIGN LOCK / implementación parcial**  
-Versión objetivo: `0.3.x`  
-Alcance v1: 1 instancia, hasta 15 Songs, Rig 10/14, 1 universo Art-Net.
+Estado: **Scaffolded** para programación controlada; no es Show Candidate.
+Alcance: una instancia, hasta 15 Songs, Rig 10/14, preview visual/DMX interno.
 
-## La idea simple
+## Idea simple
 
-El DAW reproduce el audio. AEYLA agrega la secuencia de luces sobre la misma
-línea de tiempo. El operador piensa en `Look → Cue → Song → Show`; las notas
-MIDI quedan ocultas salvo diagnóstico o MIDI Learn.
+El DAW reproduce el audio. AEYLA programa luces como
+`Look → Cue → Song → Show`. Las notas MIDI son un detalle interno de transporte
+y control: no se necesitan para crear un Cue desde la UI.
 
-## Preparación de la sesión
+## Crear una programación mínima
 
-1. Crear una pista única llamada `AEYLA CONTROL`.
-2. Insertar una única instancia VST3/AUv2.
-3. Crear o abrir el `.aeylashow` del show completo.
-4. Crear entre 1 y 15 Songs dentro de esa instancia.
-5. Para cada Song, ubicar el playhead del DAW en su inicio y ejecutar
-   `SET START FROM PLAYHEAD`.
-6. La referencia de audio/waveform es opcional y solo ayuda a programar; el
-   playback real nunca sale desde AEYLA.
+1. Inserta una sola instancia en una pista `AEYLA CONTROL`.
+2. Pulsa `NEW` o abre un `.aeylashow`.
+3. Elige `RIG 10` o `RIG 14` y una fuente visual.
+4. Edita color primario/secundario, Look Intensity, Speed y extracción W/A/UV.
+5. Selecciona cada fixture requerido y usa `FIXTURE INCLUDED/EXCLUDED` para la
+   máscara del Look.
+6. Pulsa `STORE LOOK`. En este checkpoint el nombre se asigna automáticamente.
+7. Usa los `<` y `>` del selector LOOK para recuperar Looks guardados.
+8. Pulsa `NEW SONG`. Usa los `<` y `>` del selector SONG para moverte entre
+   Songs existentes.
+9. Coloca el playhead del DAW exactamente en el comienzo musical de esa Song y
+   pulsa `SET SONG START`.
+10. Mueve el playhead al momento deseado y pulsa `STORE CUE @ PLAYHEAD`.
+   El Song se extiende automáticamente si el playhead está más allá de su final
+   inicial.
+11. Repite los cambios de Look y `STORE CUE` necesarios. Guarda con `SAVE AS`.
 
-## Programación de una canción
+Cada cambio artístico/estructural o selección de Look/Song fuerza
+`DISARMED + BLACKOUT`. El
+operador debe salir de Blackout y solicitar ARM otra vez de forma explícita.
 
-1. Seleccionar la Song.
-2. Seleccionar fixtures o grupo.
-3. Diseñar el estado visual en Programmer: intensidad, color, fuente/efecto,
-   velocidad y extracción RGBW correspondiente.
-4. Ejecutar `STORE LOOK` y asignar un nombre musical, por ejemplo `INTRO RED`.
-5. Ejecutar `STORE CUE @ PLAYHEAD` para ubicar la Cue en la timeline interna.
-6. Elegir comportamiento:
-   - `LATCH`: permanece hasta otra Cue.
-   - `MOMENTARY`: override mientras dura el golpe/bump.
-7. Opcionalmente seleccionar la Cue, activar `MIDI LEARN` y tocar un pad/tecla.
-8. Repetir Play, Stop, Seek y Loop desde distintos puntos. La misma posición
-   debe reconstruir siempre el mismo Look/DMX.
+## Playback y reconstrucción
 
-## Ensayo y show
+- Play/Seek/Loop se proyectan desde PPQ absoluto del host al tick relativo del
+  Song seleccionado.
+- Un Song sin `SET SONG START` no supone PPQ cero: resuelve a estado seguro.
+- Stop libera overrides transitorios.
+- El runtime musical continúa en un worker propio aunque el editor no reciba
+  `OnIdle`; esta propiedad todavía requiere evidencia de host real.
+- Un bounce/render offline fuerza disarm y blackout y nunca se rearma solo.
 
-1. Validar todas las Songs y bindings.
-2. Configurar adaptador, IP del nodo, universo y FPS Art-Net.
-3. Ejecutar preflight de red y prueba controlada de output.
-4. Confirmar arranque `DISARMED + BLACKOUT`.
-5. Entrar a Show Mode, donde la edición peligrosa queda bloqueada.
-6. ARM solo queda disponible si proyecto, Show, backend, red y condiciones de
-   seguridad pasan.
+## Lo que aún no debe intentarse como show
 
-## Estado del build actual
+- No hay Art-Net conectado, output preflight, watchdog de nodo ni hardware
+  validado.
+- No hay Show Mode, edición de Cue, MOMENTARY visible, rename/delete/reorder,
+  undo/redo ni timeline gráfica.
+- Windows standalone mantiene el P0 de OpenGL nulo; REAPER/Ableton/Logic y el
+  cierre de ventana deben revalidarse en máquinas/hosts reales.
 
-El HEAD `ebce964` anterior a `CP-AEYLA-0.3.1` todavía no ofrece este flujo
-completo en la UI. Guardar/abrir y controles de preview existen; Song Library,
-Store Look, Store Cue, MIDI Learn, bindings de todas las Songs y Art-Net físico
-siguen bloqueados. No usar el PRETEST actual como sistema de show.
+Por lo tanto este flujo sirve para probar coherencia de autoría y persistencia,
+no para operar luminarias en ensayo o función.

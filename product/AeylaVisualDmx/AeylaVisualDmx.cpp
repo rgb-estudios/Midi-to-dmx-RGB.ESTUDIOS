@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <string_view>
@@ -102,8 +104,9 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   // The application model starts with a valid development document but a
   // disconnected diagnostic backend. Preview is available; real output cannot
   // be armed until a named backend is configured and healthy.
-  SyncSnapshotToAtomics();
-  RefreshHostStateCache();
+  CaptureAllParameterValuesFromHost();
+  SyncSnapshotToAtomicsLocked();
+  RefreshHostStateCacheLocked();
 
 #if IPLUG_EDITOR
   mMakeGraphicsFunc = [&]() {
@@ -146,6 +149,13 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
                              kCtrlTagRuntimeStatus);
   };
 #endif
+
+  StartRuntimeWorker();
+}
+
+AeylaVisualDmx::~AeylaVisualDmx()
+{
+  StopRuntimeWorker();
 }
 
 #if IPLUG_DSP
@@ -227,9 +237,10 @@ void AeylaVisualDmx::OnActivate(bool active)
 
 void AeylaVisualDmx::OnParamChange(int paramIdx)
 {
-  (void) paramIdx;
-  // Parameter callbacks may originate from host processing. Only publish a
-  // compact atomic flag here; the non-realtime idle path updates the model.
+  // Parameter callbacks may originate from host processing. Only mirror the
+  // changed scalar into lock-free atomics; the independent runtime worker
+  // applies it to the model outside the audio callback and outside UI OnIdle.
+  CaptureParameterValueFromHost(paramIdx);
   mParameterUpdatePending.store(true, std::memory_order_release);
 }
 #endif
@@ -315,29 +326,26 @@ int AeylaVisualDmx::UnserializeState(const IByteChunk& chunk, int startPos)
 
 void AeylaVisualDmx::OnIdle()
 {
-  ApplyPendingHostState();
+  // Functional runtime work intentionally does not live here. Hosts are free
+  // to suspend UI idle callbacks when the editor is closed; OnIdle only asks
+  // visible controls to redraw snapshots already published by RuntimeLoop().
+  const bool blackout = mParamBlackout.load(std::memory_order_acquire);
+  if(GetParam(kParamBlackout)->Bool() != blackout)
+    GetParam(kParamBlackout)->Set(blackout ? 1.0 : 0.0);
 
-  if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
+  if(mLookParameterUiSyncPending.exchange(false, std::memory_order_acq_rel))
   {
-    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
-    mModel.set_blackout(true);
-    GetParam(kParamBlackout)->Set(1.0);
-    mParameterUpdatePending.store(true, std::memory_order_release);
+    GetParam(kParamSource)->Set(
+        static_cast<double>(mParamSource.load(std::memory_order_acquire)));
+    GetParam(kParamSpeed)->Set(
+        static_cast<double>(mParamSpeed.load(std::memory_order_acquire)) * 100.0);
+    GetParam(kParamWhiteExtract)->Set(static_cast<double>(
+        mParamWhiteExtract.load(std::memory_order_acquire)) * 100.0);
+    GetParam(kParamAmberExtract)->Set(static_cast<double>(
+        mParamAmberExtract.load(std::memory_order_acquire)) * 100.0);
+    GetParam(kParamUV)->Set(
+        static_cast<double>(mParamUv.load(std::memory_order_acquire)) * 100.0);
   }
-
-  ApplyPendingParameterState();
-  DrainHostEvents();
-
-  const auto host = mHostTransport.latest();
-  const double normalizedSpeed =
-      std::clamp(GetParam(kParamSpeed)->Value() / 100.0, 0.0, 1.0);
-  const double cyclesPerQuarter = 0.125 + normalizedSpeed * 1.875;
-  const auto phase = aeyla::runtime::phase_from_host_ppq(
-      host, cyclesPerQuarter);
-  mModel.set_phase(phase.value_or(0.0F));
-  SyncSnapshotToAtomics();
-  RefreshHostStateCache();
-
 #if IPLUG_EDITOR
   if(auto* ui = GetUI())
   {
@@ -351,14 +359,248 @@ void AeylaVisualDmx::OnIdle()
 #endif
 }
 
-void AeylaVisualDmx::ApplyPendingHostState()
+void AeylaVisualDmx::StartRuntimeWorker()
+{
+  mRuntimeStopRequested.store(false, std::memory_order_release);
+  mRuntimeExited.store(false, std::memory_order_release);
+  mRuntimeFaulted.store(false, std::memory_order_release);
+  try
+  {
+    mRuntimeThread = std::thread([this]() { RuntimeLoop(); });
+  }
+  catch(...)
+  {
+    mRuntimeExited.store(true, std::memory_order_release);
+    mRuntimeFaulted.store(true, std::memory_order_release);
+    mParamBlackout.store(true, std::memory_order_release);
+    mOutputArmed.store(false, std::memory_order_release);
+    mEffectiveBlackout.store(true, std::memory_order_release);
+    mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
+    try
+    {
+      mModel.release_transients();
+      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::runtime_fault);
+      mModel.set_blackout(true);
+      SyncSnapshotToAtomicsLocked();
+    }
+    catch(...)
+    {
+    }
+  }
+}
+
+void AeylaVisualDmx::StopRuntimeWorker() noexcept
+{
+  mRuntimeStopRequested.store(true, std::memory_order_release);
+  if(mRuntimeThread.joinable())
+    mRuntimeThread.join();
+
+  mParamBlackout.store(true, std::memory_order_release);
+  mOutputArmed.store(false, std::memory_order_release);
+  mEffectiveBlackout.store(true, std::memory_order_release);
+  mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
+  try
+  {
+    const std::scoped_lock lock(mModelMutex);
+    mModel.release_transients();
+    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::shutdown);
+    mModel.set_blackout(true);
+    SyncSnapshotToAtomicsLocked();
+  }
+  catch(...)
+  {
+  }
+}
+
+void AeylaVisualDmx::RuntimeLoop() noexcept
+{
+  using Clock = std::chrono::steady_clock;
+  constexpr auto kRuntimePeriod = std::chrono::milliseconds(4);
+  auto next = Clock::now();
+
+  while(!mRuntimeStopRequested.load(std::memory_order_acquire))
+  {
+    RuntimeTick();
+    next += kRuntimePeriod;
+    const auto now = Clock::now();
+    if(next <= now)
+      next = now + kRuntimePeriod;
+    std::this_thread::sleep_until(next);
+  }
+  mRuntimeExited.store(true, std::memory_order_release);
+}
+
+void AeylaVisualDmx::RuntimeTick() noexcept
+{
+  try
+  {
+    const std::scoped_lock lock(mModelMutex);
+    if(mRuntimeFaulted.load(std::memory_order_acquire))
+    {
+      mModel.release_transients();
+      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::runtime_fault);
+      mModel.set_blackout(true);
+      mParamBlackout.store(true, std::memory_order_release);
+      SyncSnapshotToAtomicsLocked();
+      return;
+    }
+    ApplyPendingHostStateLocked();
+
+    if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
+    {
+      mModel.release_transients();
+      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
+      mModel.set_blackout(true);
+      mParamBlackout.store(true, std::memory_order_release);
+    }
+
+    ApplyPendingParameterStateLocked();
+
+    const auto host = mHostTransport.latest();
+    const bool wasOffline = mRenderingOffline.exchange(
+        host.rendering_offline, std::memory_order_acq_rel);
+    if(host.rendering_offline)
+    {
+      if(!wasOffline)
+        mModel.release_transients();
+      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::offline_render);
+      mModel.set_blackout(true);
+      mParamBlackout.store(true, std::memory_order_release);
+    }
+
+    const auto& snapshotBeforeTransport = mModel.snapshot();
+    const auto& show = mModel.show_program();
+    const bool hasActiveSong = snapshotBeforeTransport.active_song_index <
+                               show.songs.size();
+    const aeyla::show::SongProgram* activeSong = hasActiveSong
+        ? &show.songs[snapshotBeforeTransport.active_song_index]
+        : nullptr;
+
+    std::optional<double> hostStartPpq;
+    if(activeSong != nullptr)
+    {
+      const std::scoped_lock stateLock(mHostStateMutex);
+      const auto binding = std::find_if(
+          mHostStateCache.song_bindings.begin(),
+          mHostStateCache.song_bindings.end(),
+          [&](const aeyla::runtime::SessionSongBinding& candidate) {
+            return candidate.song_id == activeSong->song_id;
+          });
+      if(binding != mHostStateCache.song_bindings.end())
+        hostStartPpq = binding->host_start_ppq;
+    }
+    mActiveSongBound.store(hostStartPpq.has_value(), std::memory_order_release);
+
+    bool hostSongPositionSafe = false;
+    if(host.running && activeSong != nullptr)
+    {
+      aeyla::runtime::HostEvent transportEvent{};
+      if(!mLastHostRunning)
+      {
+        transportEvent.type = aeyla::runtime::HostEventType::transport_started;
+        mModel.handle_host_event(transportEvent);
+      }
+
+      if(hostStartPpq.has_value())
+      {
+        const aeyla::runtime::HostSongBinding binding{
+            activeSong->song_id, *hostStartPpq};
+        const auto projection = aeyla::runtime::project_host_transport_to_song(
+            host, binding, *activeSong);
+        if(projection.state == aeyla::runtime::SongProjectionState::in_song)
+        {
+          hostSongPositionSafe = true;
+          const bool discontinuity = !mLastHostRunning ||
+              mLastProjectedSongId != activeSong->song_id ||
+              projection.tick < mLastProjectedTick;
+          if(discontinuity)
+            mModel.seek_active_song_tick(projection.tick);
+          else if(projection.tick != mLastProjectedTick)
+            mModel.advance_active_song_tick(projection.tick);
+          mLastProjectedSongId = activeSong->song_id;
+          mLastProjectedTick = projection.tick;
+        }
+        else
+        {
+          // Missing/out-of-range timing cannot inherit an old cue. Seeking to
+          // the explicit song end resolves to no scene and therefore black.
+          mModel.seek_active_song_tick(activeSong->length_ticks);
+          mLastProjectedSongId = activeSong->song_id;
+          mLastProjectedTick = activeSong->length_ticks;
+        }
+      }
+      else if(!mLastHostRunning || mLastProjectedSongId != activeSong->song_id)
+      {
+        // ADR 0002 forbids silently assuming host PPQ zero. A running unbound
+        // Song is a deterministic safe state until SET SONG START is used.
+        mModel.seek_active_song_tick(activeSong->length_ticks);
+        mLastProjectedSongId = activeSong->song_id;
+        mLastProjectedTick = activeSong->length_ticks;
+      }
+    }
+    else if(mLastHostRunning)
+    {
+      aeyla::runtime::HostEvent transportEvent{};
+      transportEvent.type = aeyla::runtime::HostEventType::transport_stopped;
+      mModel.handle_host_event(transportEvent);
+      mLastProjectedSongId.clear();
+      mLastProjectedTick = 0U;
+    }
+    mLastHostRunning = host.running;
+
+    // Discrete live MIDI is applied after absolute Play/Seek/Loop
+    // reconstruction so a note arriving in the first running block is not
+    // erased by the same tick's authoritative transport transition.
+    DrainHostEventsLocked();
+    if(host.running && activeSong != nullptr && !hostSongPositionSafe)
+    {
+      // A running but unbound/before/after Song is a hard non-output state.
+      // Discard any live latch that arrived in this tick so missing placement
+      // data can never produce a short artistic flash between worker frames.
+      mModel.seek_active_song_tick(activeSong->length_ticks);
+    }
+
+    const double normalizedSpeed = std::clamp(
+        static_cast<double>(mParamSpeed.load(std::memory_order_acquire)),
+        0.0, 1.0);
+    const double cyclesPerQuarter = 0.125 + normalizedSpeed * 1.875;
+    const auto phase = aeyla::runtime::phase_from_host_ppq(
+        host, cyclesPerQuarter);
+    mModel.set_phase(phase.value_or(0.0F));
+    SyncSnapshotToAtomicsLocked();
+    RefreshHostStateCacheLocked();
+  }
+  catch(...)
+  {
+    // Runtime exceptions latch safe. The worker stays alive only to keep
+    // publishing blackout; plugin reload is required before ARM can recover.
+    mRuntimeFaulted.store(true, std::memory_order_release);
+    mParamBlackout.store(true, std::memory_order_release);
+    mOutputArmed.store(false, std::memory_order_release);
+    mEffectiveBlackout.store(true, std::memory_order_release);
+    mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
+    try
+    {
+      const std::scoped_lock lock(mModelMutex);
+      mModel.release_transients();
+      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::runtime_fault);
+      mModel.set_blackout(true);
+      SyncSnapshotToAtomicsLocked();
+    }
+    catch(...)
+    {
+    }
+  }
+}
+
+void AeylaVisualDmx::ApplyPendingHostStateLocked()
 {
   if(mHostStateRestoreRejected.exchange(false, std::memory_order_acq_rel))
   {
     mModel.release_transients();
     mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
     mModel.set_blackout(true);
-    GetParam(kParamBlackout)->Set(1.0);
+    mParamBlackout.store(true, std::memory_order_release);
     mParameterUpdatePending.store(true, std::memory_order_release);
   }
 
@@ -380,8 +622,13 @@ void AeylaVisualDmx::ApplyPendingHostState()
   const bool savedHasIdentity = !IsZero(pending->project_uuid);
   const bool uuidMismatch = savedHasIdentity &&
                             (!currentUuidValid || pending->project_uuid != currentUuid);
+  const auto currentSchemaMajor =
+      mModel.project_document().schema_version.major;
+  const bool supportedLegacyMigration =
+      pending->project_schema_major == 1U && currentSchemaMajor == 2U;
   const bool schemaMismatch = pending->project_schema_major !=
-                              mModel.project_document().schema_version.major;
+                                  currentSchemaMajor &&
+                              !supportedLegacyMigration;
 
   aeyla::runtime::PluginComponentState previousCache;
   {
@@ -399,8 +646,10 @@ void AeylaVisualDmx::ApplyPendingHostState()
     // invalid project and publish only the safe frame.
     mModel.set_project_valid(false);
     mModel.set_blackout(true);
-    GetParam(kParamBlackout)->Set(1.0);
+    mParamBlackout.store(true, std::memory_order_release);
     mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);
+    const std::scoped_lock stateLock(mHostStateMutex);
+    mHostStateCache.song_bindings.clear();
   }
 
   // UnserializeParams already restored host-visible preferences. Applying them
@@ -409,25 +658,43 @@ void AeylaVisualDmx::ApplyPendingHostState()
   mParameterUpdatePending.store(true, std::memory_order_release);
 }
 
-void AeylaVisualDmx::ApplyPendingParameterState()
+void AeylaVisualDmx::ApplyPendingParameterStateLocked()
 {
   if(!mParameterUpdatePending.exchange(false, std::memory_order_acq_rel))
     return;
 
-  mModel.set_blackout(GetParam(kParamBlackout)->Bool());
-  mModel.set_grand_master(static_cast<float>(GetParam(kParamGrandMaster)->Value() / 100.0));
-  mModel.set_rig14(GetParam(kParamRigMode)->Int() == 1);
+  const auto visualBefore = mModel.project_document().visual;
+  const bool rig14Before = mModel.snapshot().rig14;
+  mModel.set_blackout(mParamBlackout.load(std::memory_order_acquire));
+  mModel.set_grand_master(mParamGrandMaster.load(std::memory_order_acquire));
+  mModel.set_rig14(mParamRig14.load(std::memory_order_acquire));
 
-  const int source = std::clamp(GetParam(kParamSource)->Int(), 0, 4);
+  const int source = std::clamp(mParamSource.load(std::memory_order_acquire), 0, 4);
+  const bool sourceChanged = source != mLastAppliedSource;
   mModel.set_visual_source(static_cast<aeyla::product::VisualSource>(source));
-  mModel.set_white_extraction(
-      static_cast<float>(GetParam(kParamWhiteExtract)->Value() / 100.0));
-  mModel.set_amber_extraction(
-      static_cast<float>(GetParam(kParamAmberExtract)->Value() / 100.0));
-  mModel.set_uv_manual(static_cast<float>(GetParam(kParamUV)->Value() / 100.0));
+  mLastAppliedSource = source;
+  if(sourceChanged)
+  {
+    const auto& visual = mModel.project_document().visual;
+    mParamSpeed.store(visual.speed, std::memory_order_release);
+    mParamWhiteExtract.store(visual.white_extraction, std::memory_order_release);
+    mParamAmberExtract.store(visual.amber_extraction, std::memory_order_release);
+    mParamUv.store(visual.uv_manual, std::memory_order_release);
+    mLookParameterUiSyncPending.store(true, std::memory_order_release);
+  }
+  else
+  {
+    mModel.set_visual_speed(mParamSpeed.load(std::memory_order_acquire));
+    mModel.set_white_extraction(mParamWhiteExtract.load(std::memory_order_acquire));
+    mModel.set_amber_extraction(mParamAmberExtract.load(std::memory_order_acquire));
+    mModel.set_uv_manual(mParamUv.load(std::memory_order_acquire));
+  }
+  if(visualBefore != mModel.project_document().visual ||
+     rig14Before != mModel.snapshot().rig14)
+    mParamBlackout.store(true, std::memory_order_release);
 }
 
-void AeylaVisualDmx::DrainHostEvents()
+void AeylaVisualDmx::DrainHostEventsLocked()
 {
   if(mHostIngress.consume_transient_release_request())
     mModel.release_transients();
@@ -437,7 +704,7 @@ void AeylaVisualDmx::DrainHostEvents()
     mModel.handle_host_event(event);
 }
 
-void AeylaVisualDmx::RefreshHostStateCache()
+void AeylaVisualDmx::RefreshHostStateCacheLocked()
 {
   const auto& snapshot = mModel.snapshot();
   if(!snapshot.project_valid)
@@ -453,6 +720,7 @@ void AeylaVisualDmx::RefreshHostStateCache()
     mHostStateCache.project_checksum.fill(0U);
     mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
     mHostStateCache.project_locator.clear();
+    mHostStateCache.song_bindings.clear();
   }
   mHostStateCache.project_uuid = uuid;
   mHostStateCache.project_schema_major =
@@ -461,6 +729,56 @@ void AeylaVisualDmx::RefreshHostStateCache()
       mModel.project_document().schema_version.minor;
   mHostStateCache.grand_master = snapshot.grand_master;
   mHostStateCache.blackout = snapshot.blackout;
+}
+
+void AeylaVisualDmx::CaptureParameterValueFromHost(int paramIdx) noexcept
+{
+  switch(paramIdx)
+  {
+    case kParamBlackout:
+      mParamBlackout.store(GetParam(kParamBlackout)->Bool(),
+                           std::memory_order_release);
+      break;
+    case kParamGrandMaster:
+      mParamGrandMaster.store(static_cast<float>(
+          GetParam(kParamGrandMaster)->Value() / 100.0),
+          std::memory_order_release);
+      break;
+    case kParamRigMode:
+      mParamRig14.store(GetParam(kParamRigMode)->Int() == 1,
+                        std::memory_order_release);
+      break;
+    case kParamSource:
+      mParamSource.store(std::clamp(GetParam(kParamSource)->Int(), 0, 4),
+                         std::memory_order_release);
+      break;
+    case kParamSpeed:
+      mParamSpeed.store(static_cast<float>(GetParam(kParamSpeed)->Value() / 100.0),
+                        std::memory_order_release);
+      break;
+    case kParamWhiteExtract:
+      mParamWhiteExtract.store(static_cast<float>(
+          GetParam(kParamWhiteExtract)->Value() / 100.0),
+          std::memory_order_release);
+      break;
+    case kParamAmberExtract:
+      mParamAmberExtract.store(static_cast<float>(
+          GetParam(kParamAmberExtract)->Value() / 100.0),
+          std::memory_order_release);
+      break;
+    case kParamUV:
+      mParamUv.store(static_cast<float>(GetParam(kParamUV)->Value() / 100.0),
+                     std::memory_order_release);
+      break;
+    default:
+      break;
+  }
+}
+
+void AeylaVisualDmx::CaptureAllParameterValuesFromHost() noexcept
+{
+  for(int param = 0; param < kNumParams; ++param)
+    CaptureParameterValueFromHost(param);
 }
 
 void AeylaVisualDmx::ToggleOutputArmFromUI()
@@ -483,8 +801,9 @@ void AeylaVisualDmx::TriggerExecutorFromUI(int executorIndex, float velocity)
   event.channel = 1U;
   event.note = static_cast<std::uint8_t>(36 + executorIndex);
   event.value = std::clamp(velocity, 0.0F, 1.0F);
+  const std::scoped_lock lock(mModelMutex);
   mModel.handle_host_event(event);
-  SyncSnapshotToAtomics();
+  SyncSnapshotToAtomicsLocked();
 }
 
 void AeylaVisualDmx::ReleaseExecutorFromUI(int executorIndex)
@@ -497,21 +816,306 @@ void AeylaVisualDmx::ReleaseExecutorFromUI(int executorIndex)
   event.channel = 1U;
   event.note = static_cast<std::uint8_t>(36 + executorIndex);
   event.value = 0.0F;
+  const std::scoped_lock lock(mModelMutex);
   mModel.handle_host_event(event);
-  SyncSnapshotToAtomics();
+  SyncSnapshotToAtomicsLocked();
+}
+
+bool AeylaVisualDmx::SetActiveSongStartFromPlayheadFromUI()
+{
+  const auto host = mHostTransport.latest();
+  if(host.revision == 0U || !host.ppq_position_valid ||
+     !std::isfinite(host.ppq_position))
+    return false;
+
+  const std::scoped_lock lock(mModelMutex);
+  const auto& snapshot = mModel.snapshot();
+  if(snapshot.active_song_id.empty())
+    return false;
+
+  {
+    const std::scoped_lock stateLock(mHostStateMutex);
+    auto binding = std::find_if(
+        mHostStateCache.song_bindings.begin(),
+        mHostStateCache.song_bindings.end(),
+        [&](const aeyla::runtime::SessionSongBinding& candidate) {
+          return candidate.song_id == snapshot.active_song_id;
+        });
+    if(binding == mHostStateCache.song_bindings.end())
+    {
+      if(mHostStateCache.song_bindings.size() >=
+         aeyla::runtime::kMaxSessionSongBindings)
+        return false;
+      mHostStateCache.song_bindings.push_back(
+          {snapshot.active_song_id, host.ppq_position});
+    }
+    else
+    {
+      binding->host_start_ppq = host.ppq_position;
+    }
+  }
+
+  // A placement change changes which cue owns the current DAW position. Force
+  // a safe boundary and require explicit operator recovery.
+  mModel.release_transients();
+  mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
+  mModel.set_blackout(true);
+  mParamBlackout.store(true, std::memory_order_release);
+  mActiveSongBound.store(true, std::memory_order_release);
+  mLastProjectedSongId.clear();
+  mLastProjectedTick = 0U;
+  SyncSnapshotToAtomicsLocked();
+  return true;
+}
+
+bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
+{
+  if(direction == 0)
+    return false;
+  const std::scoped_lock lock(mModelMutex);
+  const auto& snapshot = mModel.snapshot();
+  if(snapshot.song_count == 0U)
+    return false;
+
+  const std::size_t current = snapshot.active_song_index;
+  std::size_t target = current;
+  if(direction < 0 && current > 0U)
+    target = current - 1U;
+  else if(direction > 0 && current + 1U < snapshot.song_count)
+    target = current + 1U;
+  if(target == current || !mModel.select_song(target))
+    return false;
+
+  bool bound = false;
+  {
+    const std::scoped_lock stateLock(mHostStateMutex);
+    bound = std::any_of(
+        mHostStateCache.song_bindings.begin(),
+        mHostStateCache.song_bindings.end(),
+        [&](const aeyla::runtime::SessionSongBinding& candidate) {
+          return candidate.song_id == mModel.snapshot().active_song_id;
+        });
+  }
+  mActiveSongBound.store(bound, std::memory_order_release);
+  mParamBlackout.store(true, std::memory_order_release);
+  mLastProjectedSongId.clear();
+  mLastProjectedTick = 0U;
+  SyncSnapshotToAtomicsLocked();
+  return true;
+}
+
+std::string AeylaVisualDmx::ActiveSongStatus() const
+{
+  const std::scoped_lock lock(mModelMutex);
+  const auto& snapshot = mModel.snapshot();
+  if(snapshot.song_count == 0U)
+    return "NO SONG";
+  return "SONG " + std::to_string(snapshot.active_song_index + 1U) + "/" +
+         std::to_string(snapshot.song_count) + " · " + snapshot.active_song_name;
+}
+
+bool AeylaVisualDmx::SelectAdjacentLookFromUI(int direction)
+{
+  if(direction == 0)
+    return false;
+  const std::scoped_lock lock(mModelMutex);
+  const auto& document = mModel.project_document();
+  const auto current = std::find_if(
+      document.looks.begin(), document.looks.end(),
+      [&](const aeyla::project::LookDocument& look) {
+        return look.look_id == document.visual.active_look_id;
+      });
+  if(current == document.looks.end())
+    return false;
+  const std::size_t currentIndex = static_cast<std::size_t>(
+      std::distance(document.looks.begin(), current));
+  std::size_t target = currentIndex;
+  if(direction < 0 && currentIndex > 0U)
+    target = currentIndex - 1U;
+  else if(direction > 0 && currentIndex + 1U < document.looks.size())
+    target = currentIndex + 1U;
+  if(target == currentIndex || !mModel.select_look(target))
+    return false;
+
+  const auto& selected = mModel.project_document().looks[target];
+  int source = 1;
+  if(selected.source == "solid") source = 0;
+  else if(selected.source == "wave") source = 2;
+  else if(selected.source == "noise") source = 3;
+  else if(selected.source == "chase") source = 4;
+  mParamSource.store(source, std::memory_order_release);
+  mLastAppliedSource = source;
+  mParamSpeed.store(selected.speed, std::memory_order_release);
+  mParamWhiteExtract.store(selected.white_extraction, std::memory_order_release);
+  mParamAmberExtract.store(selected.amber_extraction, std::memory_order_release);
+  mParamUv.store(selected.uv_manual, std::memory_order_release);
+  mParamBlackout.store(true, std::memory_order_release);
+  mLookParameterUiSyncPending.store(true, std::memory_order_release);
+  SyncSnapshotToAtomicsLocked();
+  return true;
+}
+
+std::string AeylaVisualDmx::ActiveLookStatus() const
+{
+  const std::scoped_lock lock(mModelMutex);
+  const auto& document = mModel.project_document();
+  const auto current = std::find_if(
+      document.looks.begin(), document.looks.end(),
+      [&](const aeyla::project::LookDocument& look) {
+        return look.look_id == document.visual.active_look_id;
+      });
+  if(current == document.looks.end())
+    return "NO LOOK";
+  const auto index = static_cast<std::size_t>(
+      std::distance(document.looks.begin(), current));
+  return "LOOK " + std::to_string(index + 1U) + "/" +
+         std::to_string(document.looks.size()) + " · " + current->name;
+}
+
+aeyla::product::AuthoringResult AeylaVisualDmx::StoreLookFromUI()
+{
+  CaptureAllParameterValuesFromHost();
+  const std::scoped_lock lock(mModelMutex);
+  ApplyPendingParameterStateLocked();
+  auto result = mModel.store_current_look();
+  if(result.succeeded)
+    mParamBlackout.store(true, std::memory_order_release);
+  SyncSnapshotToAtomicsLocked();
+  return result;
+}
+
+aeyla::product::AuthoringResult AeylaVisualDmx::CreateSongFromUI()
+{
+  const std::scoped_lock lock(mModelMutex);
+  auto result = mModel.create_song();
+  if(result.succeeded)
+  {
+    mParamBlackout.store(true, std::memory_order_release);
+    mActiveSongBound.store(false, std::memory_order_release);
+    mLastProjectedSongId.clear();
+    mLastProjectedTick = 0U;
+  }
+  SyncSnapshotToAtomicsLocked();
+  return result;
+}
+
+aeyla::product::AuthoringResult AeylaVisualDmx::StoreCueAtPlayheadFromUI()
+{
+  const auto host = mHostTransport.latest();
+  if(host.revision == 0U || !host.ppq_position_valid ||
+     !std::isfinite(host.ppq_position))
+    return {false, {}, "DAW playhead position is unavailable"};
+
+  const std::scoped_lock lock(mModelMutex);
+  const auto& snapshot = mModel.snapshot();
+  const auto& show = mModel.show_program();
+  if(snapshot.active_song_index >= show.songs.size())
+    return {false, {}, "Create a Song before storing a Cue"};
+  const auto& song = show.songs[snapshot.active_song_index];
+
+  std::optional<double> hostStartPpq;
+  {
+    const std::scoped_lock stateLock(mHostStateMutex);
+    const auto binding = std::find_if(
+        mHostStateCache.song_bindings.begin(),
+        mHostStateCache.song_bindings.end(),
+        [&](const aeyla::runtime::SessionSongBinding& candidate) {
+          return candidate.song_id == song.song_id;
+        });
+    if(binding != mHostStateCache.song_bindings.end())
+      hostStartPpq = binding->host_start_ppq;
+  }
+  if(!hostStartPpq.has_value())
+    return {false, {}, "Set the active Song start from the DAW playhead first"};
+
+  const aeyla::runtime::HostSongBinding binding{song.song_id, *hostStartPpq};
+  const auto authoringTick =
+      aeyla::runtime::project_host_transport_to_authoring_tick(
+          host, binding, song);
+  if(!authoringTick.has_value())
+    return {false, {}, "DAW playhead is before the active Song start or unavailable"};
+
+  auto result = mModel.store_cue_at_tick(*authoringTick);
+  if(result.succeeded)
+    mParamBlackout.store(true, std::memory_order_release);
+  SyncSnapshotToAtomicsLocked();
+  return result;
+}
+
+bool AeylaVisualDmx::ToggleFixtureInActiveLookFromUI(int fixtureIndex)
+{
+  if(fixtureIndex < 0 || fixtureIndex >= 14)
+    return false;
+  const std::scoped_lock lock(mModelMutex);
+  const bool changed = mModel.toggle_active_look_fixture(
+      static_cast<std::size_t>(fixtureIndex));
+  if(changed)
+    mParamBlackout.store(true, std::memory_order_release);
+  SyncSnapshotToAtomicsLocked();
+  return changed;
+}
+
+bool AeylaVisualDmx::FixtureIncludedInActiveLook(int fixtureIndex) const
+{
+  if(fixtureIndex < 0 || fixtureIndex >= 14)
+    return false;
+  const std::scoped_lock lock(mModelMutex);
+  return mModel.active_look_fixture_enabled(
+      static_cast<std::size_t>(fixtureIndex));
+}
+
+bool AeylaVisualDmx::SetActiveLookColorFromUI(bool secondary,
+                                              float red, float green,
+                                              float blue)
+{
+  const std::scoped_lock lock(mModelMutex);
+  const bool changed = mModel.set_active_look_color(
+      secondary, {red, green, blue});
+  if(changed)
+    mParamBlackout.store(true, std::memory_order_release);
+  SyncSnapshotToAtomicsLocked();
+  return changed;
+}
+
+std::array<float, 3> AeylaVisualDmx::ActiveLookColor(bool secondary) const
+{
+  const std::scoped_lock lock(mModelMutex);
+  return mModel.active_look_color(secondary);
+}
+
+bool AeylaVisualDmx::SetActiveLookIntensityFromUI(float intensity)
+{
+  const std::scoped_lock lock(mModelMutex);
+  const bool changed = mModel.set_active_look_intensity(intensity);
+  if(changed)
+    mParamBlackout.store(true, std::memory_order_release);
+  SyncSnapshotToAtomicsLocked();
+  return changed;
+}
+
+float AeylaVisualDmx::ActiveLookIntensity() const
+{
+  const std::scoped_lock lock(mModelMutex);
+  return mModel.active_look_intensity();
 }
 
 void AeylaVisualDmx::SetOutputArmed(bool armed)
 {
-  if(armed)
+  const std::scoped_lock lock(mModelMutex);
+  if(armed && RuntimeHealthy() &&
+     !mRenderingOffline.load(std::memory_order_acquire))
     (void) mModel.request_arm();
+  else if(armed)
+    mModel.disarm(mRenderingOffline.load(std::memory_order_acquire)
+                      ? aeyla::runtime::RuntimeSafetyReason::offline_render
+                      : aeyla::runtime::RuntimeSafetyReason::runtime_fault);
   else
     mModel.disarm();
 
-  SyncSnapshotToAtomics();
+  SyncSnapshotToAtomicsLocked();
 }
 
-void AeylaVisualDmx::SyncSnapshotToAtomics() noexcept
+void AeylaVisualDmx::SyncSnapshotToAtomicsLocked() noexcept
 {
   const auto& snapshot = mModel.snapshot();
   mOutputArmed.store(snapshot.output_armed, std::memory_order_release);

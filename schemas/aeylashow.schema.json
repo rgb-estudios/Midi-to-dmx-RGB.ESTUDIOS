@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rgb-estudios.cl/schemas/aeyla/show-1.0.0.json",
   "title": "AEYLA Show Project",
+  "description": "Legacy foundation-era conceptual example. This is not the Alpha 0.3 runtime project.json contract; see docs/PROJECT_FILE_FORMAT.md.",
   "type": "object",
   "required": ["schemaVersion", "project", "rig", "output", "executors"],
   "properties": {

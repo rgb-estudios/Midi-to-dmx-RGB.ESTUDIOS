@@ -37,9 +37,9 @@ pueden mantener versiones distintas del show.
 - Crear looks reutilizables sin escribir slots DMX directamente.
 - Crear escenas con nombre, look, blackout y tiempos de entrada/salida.
 - Organizar hasta 15 canciones en orden de show.
-- Dibujar bloques MIDI en una grilla musical con compás, tempo, PPQ, zoom,
-  snapping, duración, nota, canal y velocity.
-- Visualizar claramente qué escena produce cada nota.
+- Dibujar Cue placements en una grilla musical con compás, tempo, PPQ, zoom,
+  snapping y duración. Nota/canal son metadatos secundarios de MIDI Learn.
+- Visualizar claramente qué Look produce cada Cue.
 - Permitir editar, duplicar, mover, redimensionar y borrar bloques.
 - Importar y exportar archivos MIDI estándar para trabajar con REAPER,
   Ableton y Logic.
@@ -75,7 +75,8 @@ por canción:
 - una escena activa a la vez;
 - los bloques pueden tocarse, pero no solaparse;
 - Note Off se procesa antes que Note On cuando comparten tick;
-- la duración del bloque MIDI define la duración artística de la escena;
+- una Cue LATCH permanece hasta la siguiente Cue; la duración es semántica para
+  MOMENTARY y metadato/editor para LATCH;
 - las transiciones pertenecen a la escena y no a un slot DMX;
 - cada escena referencia un look existente o es un blackout explícito.
 
@@ -104,8 +105,8 @@ explícitas. No se permitirá que la superposición accidental decida el show.
 - [x] New/Open/Save/Save As en la arquitectura del producto.
 - [x] Modelo determinista de canciones, escenas y bloques MIDI.
 - [x] Límite de 15 canciones aplicado en el modelo y cubierto por regresión.
-- [ ] Persistencia del programa de show dentro de `.aeylashow`.
-- [ ] Editor de canciones y escenas.
+- [x] Persistencia del programa de show dentro de `.aeylashow` (`show.bin`).
+- [ ] Editor completo de canciones y Cues; el slice Store/Navigate está **Scaffolded**.
 - [ ] Piano roll/grilla MIDI con creación y edición de bloques.
 - [ ] Importación/exportación MIDI tipo 0/1 con validación.
 - [ ] Undo/redo y autosave de recuperación.
@@ -113,11 +114,13 @@ explícitas. No se permitirá que la superposición accidental decida el show.
 ### G2 — Reproducción y transporte DAW
 
 - [ ] Transporte standalone estable: play, pause, stop, seek y loop de ensayo.
-- [ ] Seguimiento del transporte de REAPER, Ableton y Logic y reposicionamiento seguro.
+- [ ] Seguimiento de transporte implementado en fuente; falta Host-tested en
+      REAPER, Ableton y Logic con reposicionamiento seguro.
 - [ ] Scene engine con transiciones deterministas.
 - [ ] Sin notas colgadas después de stop, seek, loop o cierre de editor.
 - [ ] Reapertura del proyecto DAW recupera el `.aeylashow` correcto en blackout/disarmed.
-- [ ] El comportamiento temporal no depende de reloj de pared cuando debe seguir el DAW.
+- [x] La fase/timeline artística en fuente deriva de PPQ, no de reloj de pared;
+      falta revalidación de host en el SHA actual.
 - [ ] Prueba completa del set de Aeyla con audios y clips definitivos.
 
 ### G3 — Salida física

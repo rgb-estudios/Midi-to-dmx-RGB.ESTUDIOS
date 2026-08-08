@@ -59,6 +59,36 @@ SongTransportProjection project_host_transport_to_song(
   return result;
 }
 
+std::optional<std::uint64_t> project_host_transport_to_authoring_tick(
+    const HostTransportSnapshot& host,
+    const HostSongBinding& binding,
+    const show::SongProgram& song) noexcept {
+  if (host.revision == 0U || !host.ppq_position_valid ||
+      !std::isfinite(host.ppq_position) ||
+      !std::isfinite(binding.host_start_ppq) || binding.song_id.empty() ||
+      binding.song_id != song.song_id || song.ppq == 0U) {
+    return std::nullopt;
+  }
+
+  constexpr double kBoundaryEpsilonPpq = 1e-10;
+  const double relative = host.ppq_position - binding.host_start_ppq;
+  if (relative < -kBoundaryEpsilonPpq) return std::nullopt;
+
+  const long double scaled =
+      static_cast<long double>(std::max(0.0, relative)) *
+      static_cast<long double>(song.ppq);
+  if (!std::isfinite(static_cast<double>(scaled)) || scaled < 0.0L)
+    return std::nullopt;
+
+  constexpr long double kBoundaryEpsilonTicks = 1e-7L;
+  const long double floored = std::floor(scaled + kBoundaryEpsilonTicks);
+  if (floored > static_cast<long double>(
+                    std::numeric_limits<std::uint64_t>::max())) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint64_t>(floored);
+}
+
 std::optional<float> phase_from_host_ppq(
     const HostTransportSnapshot& host,
     double cycles_per_quarter_note) noexcept {

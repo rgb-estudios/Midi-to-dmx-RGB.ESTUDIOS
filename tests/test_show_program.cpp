@@ -43,6 +43,10 @@ aeyla::show::SongProgram make_song() {
       {"clip-white-hit", "scene-white-hit", 5U * song.ppq, song.ppq / 2U,
        39U, 127U, 1U},
   };
+  song.scenes[0].midi_binding = MidiBinding{36U, 1U};
+  song.scenes[1].midi_binding = MidiBinding{37U, 1U};
+  song.scenes[2].midi_binding = MidiBinding{38U, 1U};
+  song.scenes[3].midi_binding = MidiBinding{39U, 1U};
   return song;
 }
 
@@ -187,6 +191,11 @@ int main() {
   check(runtime.effective_scene() != nullptr &&
             runtime.effective_scene()->scene_id == "scene-red",
         "latch Note Off must not cancel a persistent cue");
+
+  runtime.advance(2U * program.songs.front().ppq + 100U);
+  check(runtime.effective_scene() != nullptr &&
+            runtime.effective_scene()->scene_id == "scene-red",
+        "continuous timeline advance must preserve a live latch override");
 
   runtime.note_on(39U, 127U, 1U);
   check(runtime.effective_scene() != nullptr &&

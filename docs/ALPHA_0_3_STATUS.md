@@ -1,5 +1,8 @@
 # Alpha 0.3 implementation status
 
+> Historical document-driven-runtime snapshot. It is superseded by
+> `docs/checkpoints/CP-AEYLA-0.3.2.md`; retained to preserve milestone history.
+
 ## Implemented in source
 
 ### Shared product runtime

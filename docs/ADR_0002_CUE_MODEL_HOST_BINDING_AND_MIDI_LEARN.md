@@ -48,7 +48,9 @@ Consequences:
 - Timeline playback never requires MIDI events to reconstruct state.
 - MIDI export/fallback is compiled *from* Cue placements plus Scene mappings; it is not the source of truth.
 
-The current Alpha `MidiSceneClip.note/channel/velocity` fields are therefore transitional technical debt and SHALL be migrated before the MIDI Learn UI is considered complete.
+The Alpha `MidiSceneClip.note/channel/velocity` fields remain only as portable
+placement/legacy-codec compatibility. `SceneDefinition.midi_binding` is now the
+runtime and authoring source of truth.
 
 ## Decision 2 — Timeline placement is not MIDI identity
 
@@ -95,7 +97,7 @@ DAW offline render/bounce must never become an accelerated lighting performance.
 
 A Scene references a Look. A production Look must be reproducible without relying on mutable global editor settings or hardcoded source colors.
 
-At minimum the persisted Look model must eventually own:
+The persisted project schema v2 now makes every Look own:
 
 - primary color;
 - secondary color where the source requires it;
@@ -113,15 +115,14 @@ Transition interpolation is only considered complete when it interpolates betwee
 
 ## Migration requirements
 
-Before `MIDI LEARN` / timeline UI is accepted:
+Codec/runtime migration status in CP-AEYLA-0.3.2:
 
-1. Move MIDI mapping from clip ownership to Scene ownership.
-2. Version `show.bin` codec and support existing Alpha package migration.
-3. Keep old packages readable; derive a Scene mapping from legacy clip data only when it is unambiguous.
-4. Add codec tests for ambiguous legacy mappings and fail closed when migration cannot be deterministic.
-5. Update live CueRuntime lookup to use Scene mappings.
-6. Update MIDI export compiler to derive notes from Scene mappings.
-7. Update UI so note/channel are secondary metadata, not Cue identity.
+1. Scene/Cue ownership: implemented in source and locally unit-tested.
+2. `show.bin` 1.1 plus 1.0 migration: implemented in source and locally tested.
+3. Ambiguous legacy mapping: fails closed in codec regression.
+4. CueRuntime and MIDI compiler: resolve from Scene mapping.
+5. Store Cue UI: allocates a hidden mapping without exposing note numbers.
+6. Manual `MIDI LEARN` UI and timeline editing remain **Specified**.
 
 ## Rejected alternatives
 

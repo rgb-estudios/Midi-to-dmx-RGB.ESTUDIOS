@@ -12,7 +12,7 @@
 namespace aeyla::show {
 
 constexpr std::uint16_t kShowCodecMajor = 1U;
-constexpr std::uint16_t kShowCodecMinor = 0U;
+constexpr std::uint16_t kShowCodecMinor = 1U;
 constexpr std::size_t kMaximumEncodedShowBytes = 4U * 1024U * 1024U;
 
 struct ShowCodecDiagnostic {

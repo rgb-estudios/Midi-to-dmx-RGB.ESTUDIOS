@@ -29,6 +29,8 @@ public:
   {
     BuildLayout();
     mPhase = static_cast<double>(mPlug.VisualPhase());
+    mPrimaryColor = FromNormalized(mPlug.ActiveLookColor(false));
+    mSecondaryColor = FromNormalized(mPlug.ActiveLookColor(true));
 
     g.FillRect(kBackground, mRECT);
     DrawHeader(g);
@@ -63,6 +65,49 @@ public:
       }
     }
 
+    if(Contains(mStoreLookButton, x, y))
+    {
+      ReportAuthoringResult(mPlug.StoreLookFromUI());
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mPreviousLookButton, x, y))
+    {
+      (void) mPlug.SelectAdjacentLookFromUI(-1);
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mNextLookButton, x, y))
+    {
+      (void) mPlug.SelectAdjacentLookFromUI(1);
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mNewSongButton, x, y))
+    {
+      ReportAuthoringResult(mPlug.CreateSongFromUI());
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mPreviousSongButton, x, y))
+    {
+      (void) mPlug.SelectAdjacentSongFromUI(-1);
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mNextSongButton, x, y))
+    {
+      (void) mPlug.SelectAdjacentSongFromUI(1);
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mStoreCueButton, x, y))
+    {
+      ReportAuthoringResult(mPlug.StoreCueAtPlayheadFromUI());
+      SetDirty(false);
+      return;
+    }
+
     for(int i = 0; i < static_cast<int>(mFixtureButtons.size()); ++i)
     {
       if(Contains(mFixtureButtons[static_cast<std::size_t>(i)], x, y))
@@ -76,6 +121,11 @@ public:
     if(Contains(mGrandMasterSlider, x, y))
     {
       SetSliderFromX(x, mGrandMasterSlider, kValGrandMaster);
+      return;
+    }
+    if(Contains(mLookIntensitySlider, x, y))
+    {
+      SetLookIntensityFromX(x);
       return;
     }
     if(Contains(mSpeedSlider, x, y))
@@ -98,6 +148,34 @@ public:
       SetSliderFromX(x, mUVSlider, kValUV);
       return;
     }
+    if(Contains(mFixtureMaskButton, x, y))
+    {
+      (void) mPlug.ToggleFixtureInActiveLookFromUI(mSelectedFixture);
+      SetDirty(false);
+      return;
+    }
+
+    if(Contains(mColorTargetButton, x, y))
+    {
+      mEditingSecondaryColor = !mEditingSecondaryColor;
+      SetDirty(false);
+      return;
+    }
+
+    for(std::size_t i = 0; i < mPaletteButtons.size(); ++i)
+    {
+      if(Contains(mPaletteButtons[i], x, y))
+      {
+        const auto& selected = Palette()[i];
+        (void) mPlug.SetActiveLookColorFromUI(
+            mEditingSecondaryColor,
+            static_cast<float>(selected.R) / 255.0F,
+            static_cast<float>(selected.G) / 255.0F,
+            static_cast<float>(selected.B) / 255.0F);
+        SetDirty(false);
+        return;
+      }
+    }
   }
 
   void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod) override
@@ -108,6 +186,8 @@ public:
 
     if(Contains(mGrandMasterSlider, x, y))
       SetSliderFromX(x, mGrandMasterSlider, kValGrandMaster);
+    else if(Contains(mLookIntensitySlider, x, y))
+      SetLookIntensityFromX(x);
     else if(Contains(mSpeedSlider, x, y))
       SetSliderFromX(x, mSpeedSlider, kValSpeed);
     else if(Contains(mWhiteSlider, x, y))
@@ -162,6 +242,33 @@ private:
                   mixChannel(a.B, b.B));
   }
 
+  static IColor FromNormalized(const std::array<float, 3>& color)
+  {
+    return IColor(255,
+                  static_cast<int>(std::lround(
+                      std::clamp(color[0], 0.0F, 1.0F) * 255.0F)),
+                  static_cast<int>(std::lround(
+                      std::clamp(color[1], 0.0F, 1.0F) * 255.0F)),
+                  static_cast<int>(std::lround(
+                      std::clamp(color[2], 0.0F, 1.0F) * 255.0F)));
+  }
+
+  static IColor ContrastText(const IColor& color)
+  {
+    const int luminance = color.R * 299 + color.G * 587 + color.B * 114;
+    return luminance > 150000 ? IColor(255, 8, 9, 12) : kText;
+  }
+
+  static const std::array<IColor, 8>& Palette()
+  {
+    static const std::array<IColor, 8> colors = {
+        IColor(255, 255, 255, 255), IColor(255, 232, 28, 45),
+        IColor(255, 245, 154, 43), IColor(255, 30, 88, 232),
+        IColor(255, 30, 211, 232), IColor(255, 220, 47, 196),
+        IColor(255, 44, 205, 105), IColor(255, 118, 48, 220)};
+    return colors;
+  }
+
   void BuildLayout()
   {
     const float width = mRECT.W();
@@ -200,6 +307,21 @@ private:
 
     mRigButton = IRECT(mCanvas.R - 98.0F, mCanvas.T + 14.0F,
                        mCanvas.R - 14.0F, mCanvas.T + 46.0F);
+    mColorTargetButton = IRECT(mInspector.L + 16.0F, mInspector.T + 104.0F,
+                               mInspector.R - 16.0F, mInspector.T + 130.0F);
+    const float paletteGap = 5.0F;
+    const float paletteWidth =
+        (mInspector.W() - 32.0F - paletteGap * 7.0F) / 8.0F;
+    for(std::size_t i = 0; i < mPaletteButtons.size(); ++i)
+    {
+      const float left = mInspector.L + 16.0F +
+                         static_cast<float>(i) * (paletteWidth + paletteGap);
+      mPaletteButtons[i] =
+          IRECT(left, mInspector.T + 136.0F, left + paletteWidth,
+                mInspector.T + 162.0F);
+    }
+    mFixtureMaskButton = IRECT(mInspector.L + 16.0F, mInspector.T + 169.0F,
+                               mInspector.R - 16.0F, mInspector.T + 195.0F);
 
     const IRECT sourceArea(mSources.L + 12.0F, mSources.T + 64.0F,
                            mSources.R - 12.0F, mSources.T + 294.0F);
@@ -210,17 +332,43 @@ private:
           IRECT(sourceArea.L, top, sourceArea.R, top + 34.0F);
     }
 
+    constexpr float navigationWidth = 34.0F;
+    mPreviousLookButton = IRECT(mSources.L + 12.0F, mSources.B - 264.0F,
+                                mSources.L + 12.0F + navigationWidth,
+                                mSources.B - 230.0F);
+    mNextLookButton = IRECT(mSources.R - 12.0F - navigationWidth,
+                            mSources.B - 264.0F, mSources.R - 12.0F,
+                            mSources.B - 230.0F);
+    mLookStatus = IRECT(mPreviousLookButton.R + 6.0F, mSources.B - 264.0F,
+                        mNextLookButton.L - 6.0F, mSources.B - 230.0F);
+    mStoreLookButton = IRECT(mSources.L + 12.0F, mSources.B - 222.0F,
+                             mSources.R - 12.0F, mSources.B - 188.0F);
+    mNewSongButton = IRECT(mSources.L + 12.0F, mSources.B - 180.0F,
+                           mSources.R - 12.0F, mSources.B - 146.0F);
+    mNextSongButton = IRECT(mSources.R - 12.0F - navigationWidth,
+                            mSources.B - 138.0F, mSources.R - 12.0F,
+                            mSources.B - 104.0F);
+    mPreviousSongButton = IRECT(mSources.L + 12.0F, mSources.B - 138.0F,
+                                mSources.L + 12.0F + navigationWidth,
+                                mSources.B - 104.0F);
+    mSongStatus = IRECT(mPreviousSongButton.R + 6.0F, mSources.B - 138.0F,
+                        mNextSongButton.L - 6.0F, mSources.B - 104.0F);
+    mStoreCueButton = IRECT(mSources.L + 12.0F, mSources.B - 96.0F,
+                            mSources.R - 12.0F, mSources.B - 62.0F);
+
     const float sliderL = mInspector.L + 18.0F;
     const float sliderR = mInspector.R - 18.0F;
-    float sliderTop = mInspector.T + 174.0F;
+    float sliderTop = mInspector.T + 205.0F;
     mGrandMasterSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 67.0F;
+    sliderTop += 57.0F;
+    mLookIntensitySlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
+    sliderTop += 57.0F;
     mSpeedSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 67.0F;
+    sliderTop += 57.0F;
     mWhiteSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 67.0F;
+    sliderTop += 57.0F;
     mAmberSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 67.0F;
+    sliderTop += 57.0F;
     mUVSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
 
     const IRECT mapArea(mCanvas.L + 38.0F, mCanvas.T + 88.0F,
@@ -292,16 +440,26 @@ private:
                  i == current ? kText : kMuted);
     }
 
-    const IRECT info(mSources.L + 12.0F, mSources.B - 154.0F,
+    DrawButton(g, mPreviousLookButton, "<", kPanelRaised, kText);
+    const auto lookStatus = mPlug.ActiveLookStatus();
+    DrawButton(g, mLookStatus, lookStatus.c_str(), kPanelRaised, kMuted);
+    DrawButton(g, mNextLookButton, ">", kPanelRaised, kText);
+    DrawButton(g, mStoreLookButton, "1  ·  STORE LOOK", kPanelRaised, kText);
+    DrawButton(g, mNewSongButton, "2  ·  NEW SONG", kPanelRaised, kText);
+    DrawButton(g, mPreviousSongButton, "<", kPanelRaised, kText);
+    const auto songStatus = mPlug.ActiveSongStatus();
+    DrawButton(g, mSongStatus, songStatus.c_str(), kPanelRaised, kMuted);
+    DrawButton(g, mNextSongButton, ">", kPanelRaised, kText);
+    DrawButton(g, mStoreCueButton, "3  ·  STORE CUE @ PLAYHEAD",
+               kRedDark, kText);
+
+    const IRECT info(mSources.L + 12.0F, mSources.B - 52.0F,
                      mSources.R - 12.0F, mSources.B - 12.0F);
     g.FillRoundRect(IColor(255, 12, 13, 17), info, 8.0F);
-    g.DrawText(section, "OUTPUT",
-               IRECT(info.L + 12.0F, info.T + 10.0F, info.R - 12.0F, info.T + 34.0F));
-    g.FillCircle(kAmber, info.L + 17.0F, info.T + 52.0F, 4.0F);
-    g.DrawText(caption, "SIMULATED  /  NO DMX",
-               IRECT(info.L + 28.0F, info.T + 40.0F, info.R - 10.0F, info.T + 64.0F));
-    g.DrawText(caption, "Art-Net and USB backends are not\nconnected in this graphical alpha.",
-               IRECT(info.L + 12.0F, info.T + 72.0F, info.R - 12.0F, info.B - 10.0F));
+    g.FillCircle(kAmber, info.L + 17.0F, info.MH(), 4.0F);
+    g.DrawText(caption, "PREVIEW ONLY  /  NO PHYSICAL DMX",
+               IRECT(info.L + 28.0F, info.T + 4.0F,
+                     info.R - 10.0F, info.B - 4.0F));
   }
 
   void DrawCanvas(IGraphics& g)
@@ -371,7 +529,7 @@ private:
 
     if(source == 0)
     {
-      g.FillRoundRect(IColor(255, 190, 12, 28), visual.GetPadded(-2.0F), 9.0F);
+      g.FillRoundRect(mPrimaryColor, visual.GetPadded(-2.0F), 9.0F);
       return;
     }
 
@@ -383,8 +541,7 @@ private:
         const float left = visual.L + visual.W() * static_cast<float>(t);
         const float right = visual.L + visual.W() * static_cast<float>(i + 1) /
                                            static_cast<float>(strips);
-        const IColor c = t < 0.5 ? Mix(IColor(255, 24, 38, 76), kRed, t * 2.0)
-                                 : Mix(kRed, IColor(255, 248, 118, 43), (t - 0.5) * 2.0);
+        const IColor c = Mix(mPrimaryColor, mSecondaryColor, t);
         g.FillRect(c, IRECT(left, visual.T, right + 1.0F, visual.B));
       }
       return;
@@ -396,7 +553,7 @@ private:
       {
         const double t = static_cast<double>(i) / static_cast<double>(strips - 1);
         const double wave = 0.5 + 0.5 * std::sin((t * 4.0 + mPhase * 2.0) * 3.141592653589793);
-        const IColor c = Mix(IColor(255, 7, 24, 48), IColor(255, 40, 185, 242), wave);
+        const IColor c = Mix(mPrimaryColor, mSecondaryColor, wave);
         const float left = visual.L + visual.W() * static_cast<float>(t);
         const float right = visual.L + visual.W() * static_cast<float>(i + 1) /
                                            static_cast<float>(strips);
@@ -417,7 +574,7 @@ private:
               col * 73856093U ^ row * 19349663U ^
               static_cast<int>(mPhase * 60.0) * 83492791U);
           const double n = static_cast<double>((seed >> 8U) & 255U) / 255.0;
-          const IColor c = Mix(IColor(255, 12, 8, 16), IColor(255, 208, 24, 50), n);
+          const IColor c = Mix(mPrimaryColor, mSecondaryColor, n);
           const float cellW = visual.W() / static_cast<float>(cols);
           const float cellH = visual.H() / static_cast<float>(rows);
           g.FillRect(c, IRECT(visual.L + col * cellW,
@@ -436,7 +593,8 @@ private:
     {
       const double t = static_cast<double>(i) / 35.0;
       const float left = centre - chaseW * 0.5F + chaseW * static_cast<float>(t);
-      const IColor c = Mix(IColor(20, 245, 64, 40), kRed, 1.0 - std::abs(t * 2.0 - 1.0));
+      const IColor c = Mix(mSecondaryColor, mPrimaryColor,
+                           1.0 - std::abs(t * 2.0 - 1.0));
       g.FillRect(c, IRECT(left, visual.T, left + chaseW / 35.0F + 1.0F, visual.B));
     }
   }
@@ -445,16 +603,14 @@ private:
   {
     const int source = SourceIndex();
     if(source == 0)
-      return IColor(255, 190, 12, 28);
+      return mPrimaryColor;
     if(source == 1)
-      return normalizedX < 0.5 ?
-          Mix(IColor(255, 24, 38, 76), kRed, normalizedX * 2.0) :
-          Mix(kRed, IColor(255, 248, 118, 43), (normalizedX - 0.5) * 2.0);
+      return Mix(mPrimaryColor, mSecondaryColor, normalizedX);
     if(source == 2)
     {
       const double wave = 0.5 + 0.5 * std::sin((normalizedX * 4.0 + mPhase * 2.0) *
                                                3.141592653589793);
-      return Mix(IColor(255, 7, 24, 48), IColor(255, 40, 185, 242), wave);
+      return Mix(mPrimaryColor, mSecondaryColor, wave);
     }
     if(source == 3)
     {
@@ -464,12 +620,12 @@ private:
           col * 73856093U ^ row * 19349663U ^
           static_cast<int>(mPhase * 60.0) * 83492791U);
       const double n = static_cast<double>((seed >> 8U) & 255U) / 255.0;
-      return Mix(IColor(255, 12, 8, 16), IColor(255, 208, 24, 50), n);
+      return Mix(mPrimaryColor, mSecondaryColor, n);
     }
 
     const double distance = std::abs(normalizedX - mPhase);
     const double intensity = std::clamp(1.0 - distance * 7.0, 0.0, 1.0);
-    return Mix(IColor(255, 7, 8, 11), kRed, intensity);
+    return Mix(mSecondaryColor, mPrimaryColor, intensity);
   }
 
   void DrawInspector(IGraphics& g)
@@ -495,15 +651,47 @@ private:
     g.DrawText(caption, "PROFILE  ·  RGBWALUV 13CH",
                IRECT(mInspector.L + 16.0F, mInspector.T + 78.0F,
                      mInspector.R - 16.0F, mInspector.T + 101.0F));
-    g.DrawText(caption, "D · ST · R · G · B · W · A · UV · L\nMACRO · SPEED · RESET · ZOOM",
-               IRECT(mInspector.L + 16.0F, mInspector.T + 105.0F,
-                     mInspector.R - 16.0F, mInspector.T + 151.0F));
+    DrawButton(g, mColorTargetButton,
+               mEditingSecondaryColor ? "EDITING SECONDARY COLOR"
+                                      : "EDITING PRIMARY COLOR",
+               mEditingSecondaryColor ? mSecondaryColor : mPrimaryColor,
+               ContrastText(mEditingSecondaryColor ? mSecondaryColor
+                                                   : mPrimaryColor));
+
+    const auto& palette = Palette();
+    for(std::size_t i = 0; i < mPaletteButtons.size(); ++i)
+    {
+      const IRECT& swatch = mPaletteButtons[i];
+      const auto& color = palette[i];
+      g.FillRoundRect(color, swatch, 4.0F);
+      const IColor& active = mEditingSecondaryColor ? mSecondaryColor : mPrimaryColor;
+      const bool selected = color.R == active.R && color.G == active.G &&
+                            color.B == active.B;
+      g.DrawRoundRect(selected ? ContrastText(color) : kLine, swatch, 4.0F, nullptr,
+                      selected ? 2.5F : 1.0F);
+    }
+
+    const bool included = mPlug.FixtureIncludedInActiveLook(mSelectedFixture);
+    DrawButton(g, mFixtureMaskButton,
+               included ? "FIXTURE INCLUDED IN LOOK" : "FIXTURE EXCLUDED FROM LOOK",
+               included ? kPanelRaised : kRedDark,
+               included ? kGreen : kText);
 
     DrawSlider(g, mGrandMasterSlider, "GRAND MASTER", GetValue(kValGrandMaster), kRed, valueText);
+    DrawSlider(g, mLookIntensitySlider, "LOOK INTENSITY",
+               mPlug.ActiveLookIntensity(), kGreen, valueText);
     DrawSlider(g, mSpeedSlider, "ANIMATION SPEED", GetValue(kValSpeed), kBlue, valueText);
     DrawSlider(g, mWhiteSlider, "WHITE EXTRACTION", GetValue(kValWhite), kText, valueText);
     DrawSlider(g, mAmberSlider, "AMBER EXTRACTION", GetValue(kValAmber), kAmber, valueText);
     DrawSlider(g, mUVSlider, "UV MANUAL", GetValue(kValUV), kUV, valueText);
+  }
+
+  void ReportAuthoringResult(const aeyla::product::AuthoringResult& result)
+  {
+    if(result.succeeded)
+      return;
+    if(auto* ui = GetUI())
+      ui->ShowMessageBox(result.message.c_str(), "AEYLA · AUTHORING", kMB_OK);
   }
 
   void DrawPanel(IGraphics& g, const IRECT& r)
@@ -555,6 +743,16 @@ private:
     SetValueFromUserInput(value, valueIndex);
   }
 
+  void SetLookIntensityFromX(float x)
+  {
+    const float value = std::clamp(
+        (x - mLookIntensitySlider.L) /
+            std::max(1.0F, mLookIntensitySlider.W()),
+        0.0F, 1.0F);
+    (void) mPlug.SetActiveLookIntensityFromUI(value);
+    SetDirty(false);
+  }
+
   int SourceIndex() const
   {
     return std::clamp(static_cast<int>(std::lround(GetValue(kValSource) * 4.0)), 0, 4);
@@ -572,11 +770,27 @@ private:
   IRECT mExecutors{};
   IRECT mBlackoutButton{};
   IRECT mRigButton{};
+  IRECT mColorTargetButton{};
+  std::array<IRECT, 8> mPaletteButtons{};
+  IRECT mFixtureMaskButton{};
   IRECT mGrandMasterSlider{};
+  IRECT mLookIntensitySlider{};
   IRECT mSpeedSlider{};
   IRECT mWhiteSlider{};
   IRECT mAmberSlider{};
   IRECT mUVSlider{};
   std::array<IRECT, 5> mSourceButtons{};
+  IRECT mStoreLookButton{};
+  IRECT mPreviousLookButton{};
+  IRECT mLookStatus{};
+  IRECT mNextLookButton{};
+  IRECT mNewSongButton{};
+  IRECT mPreviousSongButton{};
+  IRECT mSongStatus{};
+  IRECT mNextSongButton{};
+  IRECT mStoreCueButton{};
   std::array<IRECT, 14> mFixtureButtons{};
+  bool mEditingSecondaryColor{false};
+  IColor mPrimaryColor{255, 232, 28, 45};
+  IColor mSecondaryColor{255, 245, 154, 43};
 };

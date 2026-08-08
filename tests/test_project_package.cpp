@@ -79,6 +79,7 @@ aeyla::show::ShowProgram make_show(const aeyla::project::ProjectDocument& docume
                          250U, 250U, false, CueBehavior::latch});
   song.clips.push_back({"clip-main", "scene-main", 0U, song.length_ticks,
                         36U, 127U, 1U});
+  song.scenes.front().midi_binding = MidiBinding{36U, 1U};
   program.songs.push_back(std::move(song));
   return program;
 }

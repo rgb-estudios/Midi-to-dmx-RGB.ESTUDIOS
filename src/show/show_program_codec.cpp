@@ -188,7 +188,8 @@ class Reader final {
   std::string error_;
 };
 
-bool decode_scene(Reader& reader, SceneDefinition& scene) {
+bool decode_scene(Reader& reader, SceneDefinition& scene,
+                  std::uint16_t format_minor) {
   if (!reader.string(scene.scene_id, kMaximumIdBytes, "scene ID") ||
       !reader.string(scene.name, kMaximumNameBytes, "scene name") ||
       !reader.string(scene.look_id, kMaximumIdBytes, "look ID") ||
@@ -203,6 +204,15 @@ bool decode_scene(Reader& reader, SceneDefinition& scene) {
   if (behavior > static_cast<std::uint8_t>(CueBehavior::momentary)) return false;
   scene.blackout = blackout != 0U;
   scene.behavior = static_cast<CueBehavior>(behavior);
+  if (format_minor >= 1U) {
+    std::uint8_t has_binding = 0U;
+    if (!reader.u8(has_binding) || has_binding > 1U) return false;
+    if (has_binding != 0U) {
+      MidiBinding binding;
+      if (!reader.u8(binding.note) || !reader.u8(binding.channel)) return false;
+      scene.midi_binding = binding;
+    }
+  }
   return true;
 }
 
@@ -214,6 +224,19 @@ bool decode_clip(Reader& reader, MidiSceneClip& clip) {
          reader.u8(clip.note) &&
          reader.u8(clip.velocity) &&
          reader.u8(clip.channel);
+}
+
+std::optional<MidiBinding> effective_binding_for_scene(
+    const SongProgram& song, const SceneDefinition& scene) {
+  if (scene.midi_binding.has_value()) return scene.midi_binding;
+  std::optional<MidiBinding> result;
+  for (const auto& clip : song.clips) {
+    if (clip.scene_id != scene.scene_id) continue;
+    const MidiBinding candidate{clip.note, clip.channel};
+    if (result.has_value() && *result != candidate) return std::nullopt;
+    result = candidate;
+  }
+  return result;
 }
 
 }  // namespace
@@ -256,6 +279,12 @@ ShowEncodeResult encode_show_program(
       writer.u32(scene.transition_out_ms);
       writer.u8(scene.blackout ? 1U : 0U);
       writer.u8(static_cast<std::uint8_t>(scene.behavior));
+      const auto binding = effective_binding_for_scene(song, scene);
+      writer.u8(binding.has_value() ? 1U : 0U);
+      if (binding.has_value()) {
+        writer.u8(binding->note);
+        writer.u8(binding->channel);
+      }
     }
 
     for (const auto& clip : song.clips) {
@@ -338,7 +367,7 @@ ShowDecodeResult decode_show_program(
       result.diagnostics.push_back({reader.offset(), reader.error()});
       return result;
     }
-    if (scene_count == 0U || scene_count > kMaximumScenesPerSong) {
+    if (scene_count > kMaximumScenesPerSong) {
       result.diagnostics.push_back(
           {reader.offset(), "show.bin scene count exceeds runtime bounds"});
       return result;
@@ -353,7 +382,7 @@ ShowDecodeResult decode_show_program(
     for (std::uint32_t scene_index = 0U; scene_index < scene_count; ++scene_index) {
       SceneDefinition scene;
       const std::size_t before = reader.offset();
-      if (!decode_scene(reader, scene)) {
+      if (!decode_scene(reader, scene, minor)) {
         result.diagnostics.push_back(
             {reader.offset(), reader.ok() ? "invalid scene enum/boolean value"
                                           : reader.error()});
@@ -374,6 +403,25 @@ ShowDecodeResult decode_show_program(
         return result;
       }
       song.clips.push_back(std::move(clip));
+    }
+
+    if (minor == 0U) {
+      // Explicit 1.0 -> 1.1 migration: legacy placements owned note/channel.
+      // Derive one Cue-owned binding only when every placement agrees.
+      for (auto& scene : song.scenes) {
+        std::optional<MidiBinding> migrated;
+        for (const auto& clip : song.clips) {
+          if (clip.scene_id != scene.scene_id) continue;
+          const MidiBinding candidate{clip.note, clip.channel};
+          if (migrated.has_value() && *migrated != candidate) {
+            result.diagnostics.push_back(
+                {reader.offset(), "legacy Cue has ambiguous MIDI mappings"});
+            return result;
+          }
+          migrated = candidate;
+        }
+        scene.midi_binding = migrated;
+      }
     }
     program.songs.push_back(std::move(song));
   }

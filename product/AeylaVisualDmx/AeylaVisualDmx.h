@@ -10,11 +10,14 @@
 #include "runtime/plugin_state.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <thread>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <string_view>
 
 constexpr int kNumPresets = 1;
@@ -47,6 +50,7 @@ class AeylaVisualDmx final : public Plugin
 {
 public:
   explicit AeylaVisualDmx(const InstanceInfo& info);
+  ~AeylaVisualDmx() override;
 
 #if IPLUG_DSP
   void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
@@ -64,44 +68,66 @@ public:
   void ForceDisarmFromUI();
   void TriggerExecutorFromUI(int executorIndex, float velocity);
   void ReleaseExecutorFromUI(int executorIndex);
+  [[nodiscard]] bool SetActiveSongStartFromPlayheadFromUI();
+  [[nodiscard]] bool SelectAdjacentSongFromUI(int direction);
+  [[nodiscard]] std::string ActiveSongStatus() const;
+  [[nodiscard]] bool SelectAdjacentLookFromUI(int direction);
+  [[nodiscard]] std::string ActiveLookStatus() const;
+  [[nodiscard]] aeyla::product::AuthoringResult StoreLookFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult CreateSongFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult StoreCueAtPlayheadFromUI();
+  [[nodiscard]] bool ToggleFixtureInActiveLookFromUI(int fixtureIndex);
+  [[nodiscard]] bool FixtureIncludedInActiveLook(int fixtureIndex) const;
+  [[nodiscard]] bool SetActiveLookColorFromUI(bool secondary,
+                                               float red, float green,
+                                               float blue);
+  [[nodiscard]] std::array<float, 3> ActiveLookColor(bool secondary) const;
+  [[nodiscard]] bool SetActiveLookIntensityFromUI(float intensity);
+  [[nodiscard]] float ActiveLookIntensity() const;
 
   aeyla::product::ProjectFileStatus NewProjectFromUI()
   {
+    const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.new_project(
         aeyla::product::generate_project_uuid(),
         aeyla::product::current_utc_timestamp());
     if(status.succeeded)
       SyncParametersFromProject();
-    SyncSnapshotToAtomics();
+    SyncSnapshotToAtomicsLocked();
     return status;
   }
 
   aeyla::product::ProjectFileStatus OpenProjectFromUI(
       const std::filesystem::path& path)
   {
+    const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.open(path);
     if(status.succeeded)
       SyncParametersFromProject();
-    SyncSnapshotToAtomics();
+    SyncSnapshotToAtomicsLocked();
     return status;
   }
 
   aeyla::product::ProjectFileStatus SaveProjectFromUI()
   {
+    CaptureAllParameterValuesFromHost();
+    const std::scoped_lock lock(mModelMutex);
     PrepareProjectForSave();
     const auto status = mProjectFiles.save(
         aeyla::product::current_utc_timestamp());
-    SyncSnapshotToAtomics();
+    SyncSnapshotToAtomicsLocked();
     return status;
   }
 
   aeyla::product::ProjectFileStatus SaveProjectAsFromUI(
       const std::filesystem::path& path)
   {
+    CaptureAllParameterValuesFromHost();
+    const std::scoped_lock lock(mModelMutex);
     PrepareProjectForSave();
     const auto status = mProjectFiles.save_as(
         path, aeyla::product::current_utc_timestamp());
-    SyncSnapshotToAtomics();
+    SyncSnapshotToAtomicsLocked();
     return status;
   }
 
@@ -117,11 +143,13 @@ public:
 
   [[nodiscard]] bool ProjectDirty() const noexcept
   {
+    const std::scoped_lock lock(mModelMutex);
     return mModel.snapshot().project_dirty;
   }
 
-  [[nodiscard]] const std::string& ProjectName() const noexcept
+  [[nodiscard]] std::string ProjectName() const
   {
+    const std::scoped_lock lock(mModelMutex);
     return mModel.snapshot().project_name;
   }
 
@@ -185,26 +213,47 @@ public:
     return mVisualPhase.load(std::memory_order_relaxed);
   }
 
+  [[nodiscard]] bool ActiveSongBound() const noexcept
+  {
+    return mActiveSongBound.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] bool RenderingOffline() const noexcept
+  {
+    return mRenderingOffline.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] bool RuntimeHealthy() const noexcept
+  {
+    return !mRuntimeExited.load(std::memory_order_acquire) &&
+           !mRuntimeFaulted.load(std::memory_order_acquire);
+  }
+
 private:
-  void ApplyPendingHostState();
-  void ApplyPendingParameterState();
-  void DrainHostEvents();
-  void RefreshHostStateCache();
-  void SyncSnapshotToAtomics() noexcept;
+  void StartRuntimeWorker();
+  void StopRuntimeWorker() noexcept;
+  void RuntimeLoop() noexcept;
+  void RuntimeTick() noexcept;
+  void ApplyPendingHostStateLocked();
+  void ApplyPendingParameterStateLocked();
+  void DrainHostEventsLocked();
+  void RefreshHostStateCacheLocked();
+  void SyncSnapshotToAtomicsLocked() noexcept;
+  void CaptureParameterValueFromHost(int paramIdx) noexcept;
+  void CaptureAllParameterValuesFromHost() noexcept;
   void SetOutputArmed(bool armed);
 
   void PrepareProjectForSave()
   {
-    mModel.set_rig14(GetParam(kParamRigMode)->Int() == 1);
-    const int source = std::clamp(GetParam(kParamSource)->Int(), 0, 4);
+    mModel.set_blackout(mParamBlackout.load(std::memory_order_acquire));
+    mModel.set_grand_master(mParamGrandMaster.load(std::memory_order_acquire));
+    mModel.set_rig14(mParamRig14.load(std::memory_order_acquire));
+    const int source = std::clamp(mParamSource.load(std::memory_order_acquire), 0, 4);
     mModel.set_visual_source(static_cast<aeyla::product::VisualSource>(source));
-    mModel.set_visual_speed(
-        static_cast<float>(GetParam(kParamSpeed)->Value() / 100.0));
-    mModel.set_white_extraction(
-        static_cast<float>(GetParam(kParamWhiteExtract)->Value() / 100.0));
-    mModel.set_amber_extraction(
-        static_cast<float>(GetParam(kParamAmberExtract)->Value() / 100.0));
-    mModel.set_uv_manual(static_cast<float>(GetParam(kParamUV)->Value() / 100.0));
+    mModel.set_visual_speed(mParamSpeed.load(std::memory_order_acquire));
+    mModel.set_white_extraction(mParamWhiteExtract.load(std::memory_order_acquire));
+    mModel.set_amber_extraction(mParamAmberExtract.load(std::memory_order_acquire));
+    mModel.set_uv_manual(mParamUv.load(std::memory_order_acquire));
   }
 
   void SyncParametersFromProject()
@@ -239,6 +288,16 @@ private:
     GetParam(kParamWhiteExtract)->Set(document.visual.white_extraction * 100.0);
     GetParam(kParamAmberExtract)->Set(document.visual.amber_extraction * 100.0);
     GetParam(kParamUV)->Set(document.visual.uv_manual * 100.0);
+    mParamBlackout.store(true, std::memory_order_release);
+    mParamRig14.store(rig14, std::memory_order_release);
+    mParamSource.store(sourceIndex, std::memory_order_release);
+    mLastAppliedSource = sourceIndex;
+    mParamSpeed.store(document.visual.speed, std::memory_order_release);
+    mParamWhiteExtract.store(document.visual.white_extraction,
+                             std::memory_order_release);
+    mParamAmberExtract.store(document.visual.amber_extraction,
+                             std::memory_order_release);
+    mParamUv.store(document.visual.uv_manual, std::memory_order_release);
     mParameterUpdatePending.store(true, std::memory_order_release);
   }
 
@@ -247,14 +306,21 @@ private:
   // Stop/Seek/Loop truth to be lost behind queued note history.
   aeyla::runtime::HostEventIngress<1024> mHostIngress{};
   aeyla::runtime::HostTransportMailbox mHostTransport{};
+  mutable std::mutex mModelMutex;
   aeyla::product::ApplicationModel mModel{};
   aeyla::product::ProjectFileController mProjectFiles{mModel};
+
+  std::thread mRuntimeThread;
+  std::atomic<bool> mRuntimeStopRequested{false};
+  std::atomic<bool> mRuntimeExited{true};
+  std::atomic<bool> mRuntimeFaulted{false};
 
   mutable std::mutex mHostStateMutex;
   aeyla::runtime::PluginComponentState mHostStateCache{};
   std::optional<aeyla::runtime::PluginComponentState> mPendingHostState;
 
   std::atomic<bool> mParameterUpdatePending{true};
+  std::atomic<bool> mLookParameterUiSyncPending{false};
   std::atomic<bool> mHostDeactivationPending{false};
   std::atomic<bool> mHostStateRestoreRejected{false};
   std::atomic<bool> mOutputArmed{false};
@@ -268,4 +334,18 @@ private:
   std::atomic<std::uint64_t> mDmxGeneration{0};
   std::atomic<int> mDmxNonZeroChannels{0};
   std::atomic<float> mVisualPhase{0.0F};
+  std::atomic<bool> mParamBlackout{true};
+  std::atomic<float> mParamGrandMaster{1.0F};
+  std::atomic<bool> mParamRig14{false};
+  std::atomic<int> mParamSource{1};
+  std::atomic<float> mParamSpeed{0.35F};
+  std::atomic<float> mParamWhiteExtract{0.20F};
+  std::atomic<float> mParamAmberExtract{0.15F};
+  std::atomic<float> mParamUv{0.0F};
+  std::atomic<bool> mRenderingOffline{false};
+  std::atomic<bool> mActiveSongBound{false};
+  int mLastAppliedSource{1};
+  bool mLastHostRunning{false};
+  std::string mLastProjectedSongId;
+  std::uint64_t mLastProjectedTick{0U};
 };

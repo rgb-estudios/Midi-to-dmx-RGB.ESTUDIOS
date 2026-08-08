@@ -4,7 +4,9 @@
 #include <bit>
 #include <cmath>
 #include <new>
+#include <set>
 #include <string_view>
+#include <utility>
 
 namespace aeyla::runtime {
 namespace {
@@ -25,6 +27,11 @@ void append_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
   out.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xFFU));
 }
 
+void append_u64(std::vector<std::uint8_t>& out, std::uint64_t value) {
+  for (std::size_t index = 0; index < 8U; ++index)
+    out.push_back(static_cast<std::uint8_t>((value >> (index * 8U)) & 0xFFU));
+}
+
 bool read_u16(std::span<const std::uint8_t> bytes, std::size_t& offset,
               std::uint16_t& value) noexcept {
   if (offset + 2 > bytes.size()) return false;
@@ -43,6 +50,25 @@ bool read_u32(std::span<const std::uint8_t> bytes, std::size_t& offset,
           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24U);
   offset += 4;
   return true;
+}
+
+bool read_u64(std::span<const std::uint8_t> bytes, std::size_t& offset,
+              std::uint64_t& value) noexcept {
+  if (offset + 8U > bytes.size()) return false;
+  value = 0U;
+  for (std::size_t index = 0; index < 8U; ++index)
+    value |= static_cast<std::uint64_t>(bytes[offset + index]) << (index * 8U);
+  offset += 8U;
+  return true;
+}
+
+bool valid_binding_id(std::string_view value) noexcept {
+  if (value.empty() || value.size() > kMaxSessionSongIdBytes) return false;
+  return std::all_of(value.begin(), value.end(), [](char character) {
+    const auto ch = static_cast<unsigned char>(character);
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+           (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.';
+  });
 }
 
 bool is_known_locator_mode(ProjectLocatorMode mode) noexcept {
@@ -98,6 +124,17 @@ PluginStateError validate_state(const PluginComponentState& state) noexcept {
       !is_safe_relative_locator(state.project_locator)) {
     return PluginStateError::unsafe_relative_locator;
   }
+  if (state.song_bindings.size() > kMaxSessionSongBindings)
+    return PluginStateError::invalid_song_binding;
+  std::set<std::string> song_ids;
+  for (const auto& binding : state.song_bindings) {
+    if (!valid_binding_id(binding.song_id) ||
+        !std::isfinite(binding.host_start_ppq) ||
+        std::fabs(binding.host_start_ppq) > 1000000000.0 ||
+        !song_ids.insert(binding.song_id).second) {
+      return PluginStateError::invalid_song_binding;
+    }
+  }
   return PluginStateError::none;
 }
 
@@ -110,7 +147,11 @@ PluginStateEncodeResult encode_plugin_component_state(
   if (result.error != PluginStateError::none) return result;
 
   const auto locator_size = static_cast<std::uint32_t>(state.project_locator.size());
-  const auto payload_size = static_cast<std::uint32_t>(kFixedPayloadSize + locator_size);
+  std::size_t binding_bytes = 2U;
+  for (const auto& binding : state.song_bindings)
+    binding_bytes += 2U + binding.song_id.size() + 8U;
+  const auto payload_size = static_cast<std::uint32_t>(
+      kFixedPayloadSize + locator_size + binding_bytes);
   const auto total_size = kHeaderSize + static_cast<std::size_t>(payload_size);
   if (total_size > kMaxPluginStateBytes) {
     result.error = PluginStateError::locator_too_large;
@@ -133,6 +174,16 @@ PluginStateEncodeResult encode_plugin_component_state(
     result.bytes.insert(result.bytes.end(), state.project_checksum.begin(), state.project_checksum.end());
     append_u32(result.bytes, locator_size);
     result.bytes.insert(result.bytes.end(), state.project_locator.begin(), state.project_locator.end());
+    append_u16(result.bytes,
+               static_cast<std::uint16_t>(state.song_bindings.size()));
+    for (const auto& binding : state.song_bindings) {
+      append_u16(result.bytes,
+                 static_cast<std::uint16_t>(binding.song_id.size()));
+      result.bytes.insert(result.bytes.end(), binding.song_id.begin(),
+                          binding.song_id.end());
+      append_u64(result.bytes,
+                 std::bit_cast<std::uint64_t>(binding.host_start_ppq));
+    }
   } catch (const std::bad_alloc&) {
     result.bytes.clear();
     result.error = PluginStateError::allocation_failure;
@@ -164,7 +215,6 @@ PluginStateDecodeResult decode_plugin_component_state(
     result.error = PluginStateError::truncated;
     return result;
   }
-  (void)format_minor;
   if (format_major != kPluginStateFormatMajor) {
     result.error = PluginStateError::unsupported_major_version;
     return result;
@@ -229,6 +279,41 @@ PluginStateDecodeResult decode_plugin_component_state(
   }
   offset += locator_size;
 
+  if (format_minor >= 1U) {
+    std::uint16_t binding_count = 0U;
+    if (!read_u16(bytes.first(payload_end), offset, binding_count) ||
+        binding_count > kMaxSessionSongBindings) {
+      result.error = PluginStateError::invalid_song_binding;
+      return result;
+    }
+    try {
+      result.state.song_bindings.reserve(binding_count);
+      for (std::uint16_t index = 0U; index < binding_count; ++index) {
+        std::uint16_t id_size = 0U;
+        if (!read_u16(bytes.first(payload_end), offset, id_size) ||
+            id_size == 0U || id_size > kMaxSessionSongIdBytes ||
+            offset + id_size + 8U > payload_end) {
+          result.error = PluginStateError::invalid_song_binding;
+          return result;
+        }
+        SessionSongBinding binding;
+        binding.song_id.assign(
+            reinterpret_cast<const char*>(bytes.data() + offset), id_size);
+        offset += id_size;
+        std::uint64_t start_bits = 0U;
+        if (!read_u64(bytes.first(payload_end), offset, start_bits)) {
+          result.error = PluginStateError::invalid_song_binding;
+          return result;
+        }
+        binding.host_start_ppq = std::bit_cast<double>(start_bits);
+        result.state.song_bindings.push_back(std::move(binding));
+      }
+    } catch (...) {
+      result.error = PluginStateError::allocation_failure;
+      return result;
+    }
+  }
+
   // Same-major future minor versions may append fields inside payload_size.
   if (offset > payload_end) {
     result.error = PluginStateError::invalid_payload_size;
@@ -253,6 +338,7 @@ const char* plugin_state_error_name(PluginStateError error) noexcept {
     case PluginStateError::invalid_locator_mode: return "invalid_locator_mode";
     case PluginStateError::invalid_grand_master: return "invalid_grand_master";
     case PluginStateError::inconsistent_locator: return "inconsistent_locator";
+    case PluginStateError::invalid_song_binding: return "invalid_song_binding";
   }
   return "unknown";
 }

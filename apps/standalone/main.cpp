@@ -43,6 +43,10 @@ const char* reason_name(RuntimeSafetyReason reason) noexcept {
       return "event_overflow";
     case RuntimeSafetyReason::host_deactivation:
       return "host_deactivation";
+    case RuntimeSafetyReason::offline_render:
+      return "offline_render";
+    case RuntimeSafetyReason::runtime_fault:
+      return "runtime_fault";
     case RuntimeSafetyReason::shutdown:
       return "shutdown";
   }

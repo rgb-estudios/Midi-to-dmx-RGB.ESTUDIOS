@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -21,6 +22,7 @@ constexpr const char* kDevelopmentProjectId =
 constexpr const char* kDevelopmentTimestamp = "2026-08-07T00:00:00Z";
 
 float clamp01(float value) {
+  if (!std::isfinite(value)) return 0.0F;
   return std::clamp(value, 0.0F, 1.0F);
 }
 
@@ -88,24 +90,23 @@ FixtureProfile make_runtime_profile(
   return profile;
 }
 
-RgbColor sample_source(VisualSource source, float x, float y, float phase) {
+RgbColor sample_source(VisualSource source, const RgbColor& primary,
+                       const RgbColor& secondary, float x, float y,
+                       float phase) {
   const float nx = clamp01(x);
   const float ny = clamp01(y);
   const float p = phase - std::floor(phase);
 
   switch (source) {
     case VisualSource::solid:
-      return {0.85F, 0.02F, 0.04F};
+      return primary;
 
     case VisualSource::gradient:
-      if (nx < 0.5F) {
-        return mix({0.03F, 0.08F, 0.30F}, {0.92F, 0.03F, 0.07F}, nx * 2.0F);
-      }
-      return mix({0.92F, 0.03F, 0.07F}, {1.0F, 0.42F, 0.04F}, (nx - 0.5F) * 2.0F);
+      return mix(primary, secondary, nx);
 
     case VisualSource::wave: {
       const float value = 0.5F + 0.5F * std::sin((nx * 4.0F + p * 2.0F) * kPi);
-      return mix({0.01F, 0.06F, 0.18F}, {0.05F, 0.78F, 1.0F}, value);
+      return mix(primary, secondary, value);
     }
 
     case VisualSource::noise: {
@@ -116,14 +117,14 @@ RgbColor sample_source(VisualSource source, float x, float y, float phase) {
       seed ^= seed >> 13U;
       seed *= 1274126177U;
       const float value = static_cast<float>((seed >> 8U) & 255U) / 255.0F;
-      return mix({0.03F, 0.01F, 0.05F}, {0.90F, 0.02F, 0.12F}, value);
+      return mix(primary, secondary, value);
     }
 
     case VisualSource::chase: {
       const float raw_distance = std::fabs(nx - p);
       const float wrapped_distance = std::min(raw_distance, 1.0F - raw_distance);
       const float value = clamp01(1.0F - wrapped_distance * 7.0F);
-      return mix({0.01F, 0.01F, 0.02F}, {1.0F, 0.03F, 0.06F}, value);
+      return mix(primary, secondary, value);
     }
   }
 
@@ -236,6 +237,10 @@ project::ProjectValidation ApplicationModel::load_project_bundle(
 
   project_ = document;
   project_.output.armed = false;
+  project_.visual.speed = active_look->speed;
+  project_.visual.white_extraction = active_look->white_extraction;
+  project_.visual.amber_extraction = active_look->amber_extraction;
+  project_.visual.uv_manual = active_look->uv_manual;
   show_program_ = show_program;
   active_song_index_ = 0U;
   authored_source_ = *source_from_name(active_look->source);
@@ -267,9 +272,6 @@ project::ProjectDocument ApplicationModel::project_document_for_save(
   project::ProjectDocument copy = project_;
   copy.modified_at = std::move(modified_at);
   copy.output.armed = false;
-  copy.visual.white_extraction = color_settings_.white_extraction;
-  copy.visual.amber_extraction = color_settings_.amber_extraction;
-  copy.visual.uv_manual = color_settings_.uv_manual;
   return copy;
 }
 
@@ -298,6 +300,270 @@ show::ShowValidation ApplicationModel::show_performance_validation() const {
       show_program_, available_look_ids(project_));
 }
 
+AuthoringResult ApplicationModel::store_current_look() {
+  if (project_.looks.size() >= project::kMaximumLooks)
+    return {false, {}, "The project already contains the 2048-Look maximum"};
+  const auto active = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& look) {
+        return look.look_id == project_.visual.active_look_id;
+      });
+  if (active == project_.looks.end())
+    return {false, {}, "No active Look is available to store"};
+
+  std::size_t number = project_.looks.size() + 1U;
+  std::string id;
+  do {
+    id = "look-user-" + std::to_string(number++);
+  } while (std::any_of(project_.looks.begin(), project_.looks.end(),
+                       [&](const project::LookDocument& look) {
+                         return look.look_id == id;
+                       }));
+
+  project::LookDocument stored = *active;
+  stored.look_id = id;
+  stored.name = "Look " + std::to_string(project_.looks.size() + 1U);
+
+  project::ProjectDocument candidate = project_;
+  candidate.looks.push_back(stored);
+  candidate.visual.active_look_id = id;
+  const auto validation = validate_runtime_bundle(candidate, show_program_);
+  if (!validation.ok())
+    return {false, {}, "Stored Look failed project validation"};
+
+  project_ = std::move(candidate);
+  authored_source_ = source_from_name(stored.source).value_or(authored_source_);
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return {true, id, stored.name};
+}
+
+AuthoringResult ApplicationModel::create_song() {
+  if (show_program_.songs.size() >= show::kMaximumSongs)
+    return {false, {}, "The Show already contains the 15-Song maximum"};
+
+  std::size_t number = show_program_.songs.size() + 1U;
+  std::string id;
+  do {
+    id = "song-" + std::to_string(number++);
+  } while (std::any_of(show_program_.songs.begin(), show_program_.songs.end(),
+                       [&](const show::SongProgram& song) {
+                         return song.song_id == id;
+                       }));
+
+  show::ShowProgram candidate = show_program_;
+  show::SongProgram song;
+  song.song_id = id;
+  song.name = "Song " + std::to_string(candidate.songs.size() + 1U);
+  song.length_ticks = 16U * song.ppq;
+  candidate.songs.push_back(song);
+  const auto validation = replace_show_program(candidate);
+  if (!validation.ok())
+    return {false, {}, "New Song failed authoring validation"};
+
+  (void)select_song(candidate.songs.size() - 1U);
+  return {true, id, song.name};
+}
+
+AuthoringResult ApplicationModel::store_cue_at_tick(
+    std::uint64_t tick, show::CueBehavior behavior) {
+  if (active_song_index_ >= show_program_.songs.size())
+    return {false, {}, "Create or select a Song before storing a Cue"};
+  if (project_.visual.active_look_id.empty())
+    return {false, {}, "Store or select a Look before storing a Cue"};
+
+  show::ShowProgram candidate = show_program_;
+  auto& song = candidate.songs[active_song_index_];
+  if (behavior == show::CueBehavior::latch &&
+      std::any_of(song.clips.begin(), song.clips.end(),
+                  [&](const show::MidiSceneClip& clip) {
+                    if (clip.start_tick != tick) return false;
+                    const auto scene = std::find_if(
+                        song.scenes.begin(), song.scenes.end(),
+                        [&](const show::SceneDefinition& item) {
+                          return item.scene_id == clip.scene_id;
+                        });
+                    return scene != song.scenes.end() &&
+                           scene->behavior == show::CueBehavior::latch;
+                  })) {
+    return {false, {}, "A latch Cue already exists at this playhead position"};
+  }
+
+  std::array<bool, 128> used_notes{};
+  for (const auto& scene : song.scenes)
+    if (scene.midi_binding.has_value() && scene.midi_binding->channel == 1U)
+      used_notes[scene.midi_binding->note] = true;
+  for (const auto& clip : song.clips)
+    if (clip.channel == 1U) used_notes[clip.note] = true;
+  std::optional<std::uint8_t> note;
+  for (std::uint16_t candidate_note = 36U; candidate_note <= 127U;
+       ++candidate_note) {
+    if (!used_notes[candidate_note]) {
+      note = static_cast<std::uint8_t>(candidate_note);
+      break;
+    }
+  }
+  if (!note.has_value())
+    return {false, {}, "No free MIDI Learn note remains in the active Song"};
+
+  std::size_t number = song.scenes.size() + 1U;
+  std::string scene_id;
+  std::string clip_id;
+  do {
+    scene_id = "cue-" + std::to_string(number);
+    clip_id = "placement-" + std::to_string(number);
+    ++number;
+  } while (std::any_of(song.scenes.begin(), song.scenes.end(),
+                       [&](const show::SceneDefinition& item) {
+                         return item.scene_id == scene_id;
+                       }) ||
+           std::any_of(song.clips.begin(), song.clips.end(),
+                       [&](const show::MidiSceneClip& item) {
+                         return item.clip_id == clip_id;
+                       }));
+  const std::size_t display_number = number - 1U;
+  if (tick >= song.length_ticks) {
+    const std::uint64_t extension = 4U * static_cast<std::uint64_t>(song.ppq);
+    if (tick > std::numeric_limits<std::uint64_t>::max() - extension)
+      return {false, {}, "Cue playhead position is outside supported bounds"};
+    song.length_ticks = tick + extension;
+  }
+  const std::uint64_t requested_duration =
+      behavior == show::CueBehavior::momentary
+          ? std::max<std::uint64_t>(1U, song.ppq / 4U)
+          : static_cast<std::uint64_t>(song.ppq);
+  const std::uint64_t duration =
+      std::min(requested_duration, song.length_ticks - tick);
+
+  show::SceneDefinition scene;
+  scene.scene_id = scene_id;
+  scene.name = "Cue " + std::to_string(display_number);
+  scene.look_id = project_.visual.active_look_id;
+  scene.transition_in_ms = behavior == show::CueBehavior::latch ? 250U : 0U;
+  scene.transition_out_ms = behavior == show::CueBehavior::latch ? 250U : 0U;
+  scene.behavior = behavior;
+  scene.midi_binding = show::MidiBinding{*note, 1U};
+  song.scenes.push_back(scene);
+  song.clips.push_back(
+      {clip_id, scene_id, tick, duration, *note, 127U, 1U});
+
+  const auto validation = replace_show_program(candidate);
+  if (!validation.ok())
+    return {false, {}, "Stored Cue failed Show validation"};
+  return {true, scene_id, scene.name};
+}
+
+bool ApplicationModel::select_look(std::size_t look_index) {
+  if (look_index >= project_.looks.size()) return false;
+  const auto& look = project_.looks[look_index];
+  if (project_.visual.active_look_id == look.look_id) return true;
+
+  project_.visual.active_look_id = look.look_id;
+  project_.visual.speed = look.speed;
+  project_.visual.white_extraction = look.white_extraction;
+  project_.visual.amber_extraction = look.amber_extraction;
+  project_.visual.uv_manual = look.uv_manual;
+  color_settings_.white_extraction = look.white_extraction;
+  color_settings_.amber_extraction = look.amber_extraction;
+  color_settings_.uv_manual = look.uv_manual;
+  authored_source_ = source_from_name(look.source).value_or(authored_source_);
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return true;
+}
+
+bool ApplicationModel::toggle_active_look_fixture(std::size_t fixture_index) {
+  if (fixture_index >= project_.fixtures.size() || fixture_index >= 14U)
+    return false;
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look == project_.looks.end()) return false;
+  look->fixture_mask[fixture_index] = !look->fixture_mask[fixture_index];
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return true;
+}
+
+bool ApplicationModel::active_look_fixture_enabled(
+    std::size_t fixture_index) const noexcept {
+  if (fixture_index >= 14U) return false;
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  return look != project_.looks.end() && look->fixture_mask[fixture_index];
+}
+
+bool ApplicationModel::set_active_look_color(bool secondary,
+                                             const RgbColor& color) {
+  if (!std::isfinite(color.red) || !std::isfinite(color.green) ||
+      !std::isfinite(color.blue)) return false;
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look == project_.looks.end()) return false;
+  const std::array<float, 3> next{
+      clamp01(color.red), clamp01(color.green), clamp01(color.blue)};
+  auto& destination = secondary ? look->secondary_color : look->primary_color;
+  if (destination == next) return true;
+  destination = next;
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return true;
+}
+
+std::array<float, 3> ApplicationModel::active_look_color(
+    bool secondary) const noexcept {
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look == project_.looks.end()) return {};
+  return secondary ? look->secondary_color : look->primary_color;
+}
+
+bool ApplicationModel::set_active_look_intensity(float intensity) {
+  if (!std::isfinite(intensity)) return false;
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look == project_.looks.end()) return false;
+  const float next = clamp01(intensity);
+  if (look->intensity == next) return true;
+  look->intensity = next;
+  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+  safety_.set_blackout(true);
+  mark_dirty();
+  rebuild();
+  return true;
+}
+
+float ApplicationModel::active_look_intensity() const noexcept {
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  return look == project_.looks.end() ? 0.0F : look->intensity;
+}
+
 bool ApplicationModel::select_song(std::size_t song_index) {
   if (song_index >= show_program_.songs.size()) return false;
   if (song_index == active_song_index_ && cue_runtime_.has_value()) return true;
@@ -315,6 +581,13 @@ bool ApplicationModel::select_song(std::size_t song_index) {
 void ApplicationModel::seek_active_song_tick(std::uint64_t tick) {
   if (!cue_runtime_.has_value()) return;
   cue_runtime_->seek(tick);
+  apply_cue_runtime_state();
+  rebuild();
+}
+
+void ApplicationModel::advance_active_song_tick(std::uint64_t tick) {
+  if (!cue_runtime_.has_value()) return;
+  cue_runtime_->advance(tick);
   apply_cue_runtime_state();
   rebuild();
 }
@@ -381,7 +654,11 @@ void ApplicationModel::set_rig14(bool enabled) {
       changed = true;
     }
   }
-  if (changed) mark_dirty();
+  if (changed) {
+    safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+    safety_.set_blackout(true);
+    mark_dirty();
+  }
   rebuild();
 }
 
@@ -397,32 +674,74 @@ void ApplicationModel::set_visual_source(VisualSource source) {
   if (look != project_.looks.end() &&
       project_.visual.active_look_id != look->look_id) {
     project_.visual.active_look_id = look->look_id;
+    project_.visual.speed = look->speed;
+    project_.visual.white_extraction = look->white_extraction;
+    project_.visual.amber_extraction = look->amber_extraction;
+    project_.visual.uv_manual = look->uv_manual;
+    color_settings_.white_extraction = look->white_extraction;
+    color_settings_.amber_extraction = look->amber_extraction;
+    color_settings_.uv_manual = look->uv_manual;
     changed = true;
   }
-  if (changed) mark_dirty();
+  if (changed) {
+    safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+    safety_.set_blackout(true);
+    mark_dirty();
+  }
   rebuild();
 }
 
 void ApplicationModel::set_visual_speed(float value) {
   const float next = clamp01(value);
+  bool changed = false;
   if (project_.visual.speed != next) {
     project_.visual.speed = next;
+    changed = true;
+  }
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look != project_.looks.end() && look->speed != next) {
+    look->speed = next;
+    changed = true;
+  }
+  if (changed) {
+    safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+    safety_.set_blackout(true);
     mark_dirty();
   }
   rebuild();
 }
 
 void ApplicationModel::set_phase(float normalized_phase) {
+  if (!std::isfinite(normalized_phase)) normalized_phase = 0.0F;
   phase_ = normalized_phase - std::floor(normalized_phase);
   rebuild();
 }
 
 void ApplicationModel::set_white_extraction(float value) {
   const float next = clamp01(value);
+  bool changed = false;
   if (color_settings_.white_extraction != next ||
       project_.visual.white_extraction != next) {
     color_settings_.white_extraction = next;
     project_.visual.white_extraction = next;
+    changed = true;
+  }
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look != project_.looks.end() && look->white_extraction != next) {
+    look->white_extraction = next;
+    changed = true;
+  }
+  if (changed) {
+    safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+    safety_.set_blackout(true);
     mark_dirty();
   }
   rebuild();
@@ -430,10 +749,25 @@ void ApplicationModel::set_white_extraction(float value) {
 
 void ApplicationModel::set_amber_extraction(float value) {
   const float next = clamp01(value);
+  bool changed = false;
   if (color_settings_.amber_extraction != next ||
       project_.visual.amber_extraction != next) {
     color_settings_.amber_extraction = next;
     project_.visual.amber_extraction = next;
+    changed = true;
+  }
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look != project_.looks.end() && look->amber_extraction != next) {
+    look->amber_extraction = next;
+    changed = true;
+  }
+  if (changed) {
+    safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+    safety_.set_blackout(true);
     mark_dirty();
   }
   rebuild();
@@ -441,9 +775,24 @@ void ApplicationModel::set_amber_extraction(float value) {
 
 void ApplicationModel::set_uv_manual(float value) {
   const float next = clamp01(value);
+  bool changed = false;
   if (color_settings_.uv_manual != next || project_.visual.uv_manual != next) {
     color_settings_.uv_manual = next;
     project_.visual.uv_manual = next;
+    changed = true;
+  }
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        return candidate.look_id == project_.visual.active_look_id;
+      });
+  if (look != project_.looks.end() && look->uv_manual != next) {
+    look->uv_manual = next;
+    changed = true;
+  }
+  if (changed) {
+    safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
+    safety_.set_blackout(true);
     mark_dirty();
   }
   rebuild();
@@ -540,6 +889,7 @@ void ApplicationModel::mark_dirty() noexcept {
 void ApplicationModel::rebuild_cue_runtime() {
   cue_runtime_.reset();
   cue_source_override_.reset();
+  cue_look_id_.reset();
   cue_scene_blackout_ = false;
   active_scene_id_.clear();
   active_scene_name_.clear();
@@ -558,6 +908,7 @@ void ApplicationModel::rebuild_cue_runtime() {
 
 void ApplicationModel::apply_cue_runtime_state() {
   cue_source_override_.reset();
+  cue_look_id_.reset();
   cue_scene_blackout_ = false;
   active_scene_id_.clear();
   active_scene_name_.clear();
@@ -598,6 +949,7 @@ void ApplicationModel::apply_cue_runtime_state() {
     return;
   }
   cue_source_override_ = *source;
+  cue_look_id_ = look->look_id;
 }
 
 void ApplicationModel::rebuild() {
@@ -606,8 +958,30 @@ void ApplicationModel::rebuild() {
     profiles.emplace(document.profile_id, make_runtime_profile(document));
   }
 
-  const VisualSource source = cue_source_override_.value_or(
-      effective_source(authored_source_, active_executor_));
+  const auto look = std::find_if(
+      project_.looks.begin(), project_.looks.end(),
+      [&](const project::LookDocument& candidate) {
+        const std::string& id = cue_look_id_.has_value()
+            ? *cue_look_id_
+            : project_.visual.active_look_id;
+        return candidate.look_id == id;
+      });
+  const project::LookDocument* effective_look =
+      look == project_.looks.end() ? nullptr : &*look;
+  const VisualSource look_source = effective_look == nullptr
+      ? authored_source_
+      : source_from_name(effective_look->source).value_or(authored_source_);
+  const VisualSource source = effective_source(look_source, active_executor_);
+  const RgbColor primary = effective_look == nullptr
+      ? RgbColor{0.92F, 0.03F, 0.07F}
+      : RgbColor{effective_look->primary_color[0],
+                 effective_look->primary_color[1],
+                 effective_look->primary_color[2]};
+  const RgbColor secondary = effective_look == nullptr
+      ? RgbColor{1.0F, 0.42F, 0.04F}
+      : RgbColor{effective_look->secondary_color[0],
+                 effective_look->secondary_color[1],
+                 effective_look->secondary_color[2]};
   const bool blackout = safety_.blackout() || cue_scene_blackout_;
 
   std::vector<PatchedFixture> patched;
@@ -627,8 +1001,15 @@ void ApplicationModel::rebuild() {
       continue;
     }
 
-    RgbColor sampled = sample_source(source, document.x, document.y, phase_);
+    RgbColor sampled = sample_source(source, primary, secondary,
+                                     document.x, document.y, phase_);
     ColorTransformSettings settings = color_settings_;
+    if (effective_look != nullptr) {
+      settings.intensity *= effective_look->intensity;
+      settings.white_extraction = effective_look->white_extraction;
+      settings.amber_extraction = effective_look->amber_extraction;
+      settings.uv_manual = effective_look->uv_manual;
+    }
     if (active_executor_ >= 0) {
       settings.intensity *= std::max(0.05F, executor_velocity_);
     }
@@ -647,7 +1028,9 @@ void ApplicationModel::rebuild() {
         !blackout && active_executor_ == 7 ? executor_velocity_ : 0.0F);
     if (blackout) semantic.fill(0.0F);
 
-    const bool active = document.enabled;
+    const bool active = document.enabled &&
+        (effective_look == nullptr ||
+         effective_look->fixture_mask[index]);
     patched.push_back({document.logical_fixture_id, document.address, active,
                        profile_it->second, semantic});
 

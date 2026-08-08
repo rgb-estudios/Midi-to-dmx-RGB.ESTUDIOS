@@ -1,32 +1,50 @@
 # AEYLA — matriz de validación
 
-Checkpoint: `CP-AEYLA-0.3.1`  
-Fuente: PR #14, HEAD previo `ebce96470c615cc550b9d4a0482e71e0e4d37c85`.
+Checkpoint: `CP-AEYLA-0.3.2`
+Base del trabajo: PR #14, `4cede207`; el SHA del checkpoint se completa al publicar.
 
 | Área | Evidencia actual | Estado |
 |---|---|---|
-| Core Linux/Windows/macOS | suite PASS en `83f4cd2`; macOS detectó luego tear de transporte, corregido y en revalidación | IMPLEMENTED / REVALIDATE |
-| ASan/UBSan/TSan | suite completa PASS en `83f4cd2` | IMPLEMENTED / CI |
-| Windows VST3 build | build PASS | CI-BUILT |
-| Steinberg Validator Windows | PASS en HEAD previo | SIMULATED / CI |
-| REAPER Windows 7.78 | proceso quedó abierto sin evidencia final | FAILED |
-| Windows standalone | dump: `RIP=0` en `glCreateProgram()` nulo tras fallo de GL loader; issue #17 | FAILED P0 / DIAGNOSED |
-| macOS VST3/AUv2 universal | build arm64+x86_64 PASS; corrección del gate `lipo` pendiente de reejecución | CI-BUILT / REVALIDATE |
-| VST3/standalone proof Windows+macOS | PASS en `8c6a916` | IMPLEMENTED / CI |
-| REAPER macOS | host smoke del nuevo SHA en ejecución | REVALIDATE |
-| Ableton Windows/macOS | sin prueba real actual | NOT STARTED |
-| Logic Pro AUv2 | sin prueba real actual | NOT STARTED |
-| Host PPQ determinista | binding PASS; mailbox seqlock corregido, 201 campañas locales optimizadas PASS | UNIT-TESTED / REVALIDATE |
-| UI con ventana cerrada | falta demostrar que runtime no depende de `OnIdle` del editor | BLOCKED P0 |
-| Art-Net worker | unit/loopback software; no integrado al producto físico | SIMULATED / NOT CONNECTED |
-| Nodo + PAR físicos | sin evidencia | NOT STARTED |
-| Show 15 Songs / soak | sin evidencia | NOT STARTED |
+| Core portable previo | `core-ci` Linux/Windows/macOS verde en `4cede207` | **Implemented** en SHA previo |
+| Quality previo | ASan/UBSan/TSan verde en `4cede207` | **Implemented** en SHA previo |
+| Cambios CP-0.3.2 | 8 ejecutables afectados compilados con GCC 13.3, `-Werror`: PASS | **Scaffolded**; CI multiplataforma pendiente |
+| Project schema | v2 completo; migración explícita v1→v2: PASS local | **Scaffolded**; package/CI pendiente |
+| show.bin | v1.1 Cue-owned MIDI; migración 1.0 ambigua falla cerrado: PASS local | **Scaffolded**; CI pendiente |
+| Host component state | v1.1 con máximo 15 bindings Song→PPQ: PASS local | **Scaffolded**; host save/reopen pendiente |
+| Host PPQ | start/before/in/after + authoring más allá del final: PASS local | **Scaffolded**; hosts reales pendientes |
+| Runtime sin editor | worker independiente de `OnIdle` implementado en producto | **Scaffolded**; prueba editor cerrado pendiente |
+| Offline render | disarm + blackout sostenido y rearmado manual | **Scaffolded**; host/backend pendientes |
+| Windows VST3 + Validator previo | build/Validator habían pasado en SHA previo | **Simulated** en CI previo; revalidación pendiente |
+| Windows standalone | dump previo: `glCreateProgram()` nulo; issue #17 | **Specified** diagnóstico; P0 abierto |
+| REAPER Windows 7.78 | smoke previo sin resultado final verificable | **Specified** gate; pendiente |
+| macOS VST3/AUv2 universal | build previo PASS; host smoke no concluyente | **Simulated** build; host pendiente |
+| Ableton Windows/macOS | sin prueba real actual | **Specified** |
+| Logic Pro AUv2 | sin prueba real actual | **Specified** |
+| Art-Net worker | paquetes/loopback en pruebas previas; no conectado al producto | **Simulated**; NOT CONNECTED |
+| Nodo + PAR físicos | sin evidencia | **Specified** |
+| Show 15 Songs / soak | sin evidencia | **Specified** |
 
-## Gates para Show Candidate
+## Pruebas locales ejecutadas para CP-AEYLA-0.3.2
 
-1. CI portable completo verde en el mismo SHA.
-2. Host smoke real en REAPER, Ableton y Logic según plataforma.
-3. Runtime independiente de ventana y offline-render inhibit demostrado.
-4. Flujo Song/Look/Cue/Binding funcional y persistente.
-5. Art-Net preflight, ARM, Blackout, Disarm y shutdown validados.
-6. Nodo y PAR reales con disconnect/reconnect y soak mínimo de 8 horas.
+- `test_application_model`: PASS.
+- `test_host_song_binding`: PASS.
+- `test_plugin_state`: PASS.
+- `test_runtime_safety`: PASS.
+- `test_project_document`: PASS.
+- `test_show_program`: PASS.
+- `test_show_program_codec`: PASS.
+- standalone diagnostic `--self-test`: PASS.
+- `git diff --check`: PASS durante la iteración.
+
+No se ejecutó CTest completo local porque este entorno no contiene CMake ni la
+dependencia miniz ya poblada. Package/file-controller y el producto iPlug2
+quedan obligatoriamente sujetos a CI.
+
+## Gates antes de Show Candidate
+
+1. CI portable, quality y producto completos verdes en el mismo SHA.
+2. Resolver Windows OpenGL #17 y obtener launch/close real.
+3. Scan/load/save/reopen y editor-closed runtime en REAPER, Ableton y Logic.
+4. Art-Net conectado con preflight, ownership, offline inhibit y watchdog.
+5. Nodo/PAR reales, disconnect/reconnect, blackout y DMX byte a byte.
+6. Soak mínimo 8 horas y tres ensayos completos del show.

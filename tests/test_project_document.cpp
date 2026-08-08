@@ -113,13 +113,22 @@ int main() {
   check(future.ok(), "same-major future-minor project should remain readable");
 
   std::string unsupported_major = first_json;
-  const std::string major_token = "\"major\": 1";
+  const std::string major_token = "\"major\": 2";
   const std::size_t major_position = unsupported_major.find(major_token);
   if (major_position != std::string::npos)
-    unsupported_major.replace(major_position, major_token.size(), "\"major\": 2");
+    unsupported_major.replace(major_position, major_token.size(), "\"major\": 3");
   const ProjectParseResult unsupported = deserialize_project_document(unsupported_major);
   check(!unsupported.ok() && has_error_path(unsupported.validation, "schemaVersion.major"),
         "unsupported schema major must be rejected");
+
+  std::string legacy_major = first_json;
+  const std::size_t legacy_position = legacy_major.find(major_token);
+  if (legacy_position != std::string::npos)
+    legacy_major.replace(legacy_position, major_token.size(), "\"major\": 1");
+  const ProjectParseResult migrated = deserialize_project_document(legacy_major);
+  check(migrated.ok() && migrated.document.has_value() &&
+            migrated.document->schema_version.major == 2U,
+        "schema 1 project must migrate explicitly to complete-Look schema 2");
 
   for (std::size_t length = 0U; length < first_json.size(); length += 31U) {
     const ProjectParseResult truncated = deserialize_project_document(

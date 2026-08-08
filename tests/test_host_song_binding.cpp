@@ -61,6 +61,22 @@ int main() {
   check(projected.state == SongProjectionState::after_song &&
             projected.tick == song.length_ticks,
         "song end boundary must map to explicit after-song state");
+  const auto authoring_at_end = project_host_transport_to_authoring_tick(
+      host, binding, song);
+  check(authoring_at_end.has_value() &&
+            *authoring_at_end == song.length_ticks,
+        "authoring projection must preserve a playhead at the current Song end");
+
+  host.ppq_position = 28.25;
+  const auto authoring_after_end = project_host_transport_to_authoring_tick(
+      host, binding, song);
+  check(authoring_after_end.has_value() &&
+            *authoring_after_end == 12U * song.ppq + song.ppq / 4U,
+        "authoring projection must allow STORE CUE to extend past Song end");
+
+  host.ppq_position = 15.999;
+  check(!project_host_transport_to_authoring_tick(host, binding, song).has_value(),
+        "authoring projection must reject a playhead before the Song anchor");
 
   host.ppq_position = 23.999;
   projected = project_host_transport_to_song(host, binding, song);

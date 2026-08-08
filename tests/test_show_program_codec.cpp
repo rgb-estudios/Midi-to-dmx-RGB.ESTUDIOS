@@ -1,5 +1,6 @@
 #include "show/show_program_codec.h"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +17,62 @@ void check(bool condition, const std::string& message) {
     ++failures;
     std::cerr << "FAIL: " << message << '\n';
   }
+}
+
+void legacy_u16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
+  bytes.push_back(static_cast<std::uint8_t>(value & 0xFFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
+}
+
+void legacy_u32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+  for (std::size_t index = 0U; index < 4U; ++index)
+    bytes.push_back(static_cast<std::uint8_t>((value >> (index * 8U)) & 0xFFU));
+}
+
+void legacy_u64(std::vector<std::uint8_t>& bytes, std::uint64_t value) {
+  for (std::size_t index = 0U; index < 8U; ++index)
+    bytes.push_back(static_cast<std::uint8_t>((value >> (index * 8U)) & 0xFFU));
+}
+
+void legacy_string(std::vector<std::uint8_t>& bytes, const std::string& value) {
+  legacy_u16(bytes, static_cast<std::uint16_t>(value.size()));
+  bytes.insert(bytes.end(), value.begin(), value.end());
+}
+
+std::vector<std::uint8_t> make_legacy_show(bool ambiguous) {
+  std::vector<std::uint8_t> bytes{'A', 'E', 'Y', 'L', 'A', 'S', 'H', 'W'};
+  legacy_u16(bytes, 1U);
+  legacy_u16(bytes, 0U);
+  legacy_u32(bytes, 1U);
+  legacy_string(bytes, "legacy-song");
+  legacy_string(bytes, "Legacy Song");
+  legacy_u64(bytes, std::bit_cast<std::uint64_t>(120.0));
+  bytes.push_back(4U);
+  bytes.push_back(4U);
+  legacy_u32(bytes, 960U);
+  legacy_u64(bytes, 3840U);
+  legacy_u32(bytes, 1U);
+  legacy_u32(bytes, ambiguous ? 2U : 1U);
+  legacy_string(bytes, "legacy-cue");
+  legacy_string(bytes, "Legacy Cue");
+  legacy_string(bytes, "look-solid");
+  legacy_u32(bytes, 250U);
+  legacy_u32(bytes, 250U);
+  bytes.push_back(0U);
+  bytes.push_back(0U);
+  const auto append_clip = [&](const std::string& id, std::uint64_t tick,
+                               std::uint8_t note) {
+    legacy_string(bytes, id);
+    legacy_string(bytes, "legacy-cue");
+    legacy_u64(bytes, tick);
+    legacy_u64(bytes, 960U);
+    bytes.push_back(note);
+    bytes.push_back(127U);
+    bytes.push_back(1U);
+  };
+  append_clip("legacy-placement-1", 0U, 36U);
+  if (ambiguous) append_clip("legacy-placement-2", 1920U, 37U);
+  return bytes;
 }
 
 aeyla::show::SongProgram make_song(std::size_t number) {
@@ -44,6 +101,10 @@ aeyla::show::SongProgram make_song(std::size_t number) {
       {"clip-hit", "scene-hit", 4U * song.ppq, song.ppq / 4U, 38U, 120U, 2U},
       {"clip-black", "scene-black", 7U * song.ppq, song.ppq, 39U, 127U, 1U},
   };
+  song.scenes[0].midi_binding = MidiBinding{36U, 1U};
+  song.scenes[1].midi_binding = MidiBinding{37U, 1U};
+  song.scenes[2].midi_binding = MidiBinding{38U, 2U};
+  song.scenes[3].midi_binding = MidiBinding{39U, 1U};
   return song;
 }
 
@@ -89,6 +150,14 @@ int main() {
   check(decoded.program.has_value() && *decoded.program == source,
         "show.bin round-trip must preserve every authored field");
 
+  const auto migrated_legacy = decode_show_program(make_legacy_show(false), looks);
+  check(migrated_legacy.ok() &&
+            migrated_legacy.program->songs.front().scenes.front()
+                .midi_binding == MidiBinding{36U, 1U},
+        "legacy 1.0 show must migrate an unambiguous placement mapping to its Cue");
+  check(!decode_show_program(make_legacy_show(true), looks).ok(),
+        "legacy Cue with ambiguous placement mappings must fail closed");
+
   // Every strict prefix of a valid file is truncated and must fail closed.
   for (std::size_t size = 0U; size < encoded.bytes.size(); ++size) {
     std::vector<std::uint8_t> prefix(encoded.bytes.begin(),
@@ -112,7 +181,7 @@ int main() {
         "unsupported show major version must be rejected");
 
   auto future_minor = encoded.bytes;
-  future_minor[10] = 1U;
+  future_minor[10] = 2U;
   future_minor[11] = 0U;
   check(!decode_show_program(future_minor, looks).ok(),
         "newer show minor version must not be silently interpreted");

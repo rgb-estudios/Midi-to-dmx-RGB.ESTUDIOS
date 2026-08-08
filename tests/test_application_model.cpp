@@ -40,6 +40,7 @@ aeyla::show::ShowProgram make_ready_show(
                          250U, 250U, false, CueBehavior::latch});
   song.clips.push_back({"clip-main", "scene-main", 0U, song.length_ticks,
                         36U, 127U, 1U});
+  song.scenes.front().midi_binding = MidiBinding{36U, 1U};
   program.songs.push_back(std::move(song));
   return program;
 }
@@ -241,6 +242,66 @@ int main() {
             model.snapshot().output_armed == before_rejected_load.output_armed &&
             model.snapshot().dmx == before_rejected_load.dmx,
         "rejected bundle must not mutate live safety or DMX state");
+
+  // Human authoring slice: no MIDI numbers are required to create a complete
+  // Look, Song and Cue placement. Every semantic edit remains persisted and
+  // every structural Store operation forces a safe output boundary.
+  ApplicationModel authored_model;
+  authored_model.set_visual_source(VisualSource::wave);
+  authored_model.set_visual_speed(0.61F);
+  authored_model.set_white_extraction(0.33F);
+  check(authored_model.set_active_look_color(false, {0.10F, 0.80F, 0.25F}) &&
+            authored_model.set_active_look_color(true, {0.15F, 0.20F, 0.95F}),
+        "primary and secondary palette edits must update the active Look");
+  check(authored_model.set_active_look_intensity(0.74F),
+        "Look intensity must be editable independently from Grand Master");
+  check(authored_model.active_look_fixture_enabled(13U) &&
+            authored_model.toggle_active_look_fixture(13U) &&
+            !authored_model.active_look_fixture_enabled(13U),
+        "fixture participation must be an editable Look-owned mask");
+  const auto stored_look = authored_model.store_current_look();
+  check(stored_look.succeeded && !stored_look.object_id.empty(),
+        "STORE LOOK must persist a named complete artistic state");
+  authored_model.set_visual_source(VisualSource::solid);
+  check(authored_model.select_look(
+            authored_model.project_document().looks.size() - 1U) &&
+            authored_model.active_look_color(false) ==
+                std::array<float, 3>{0.10F, 0.80F, 0.25F},
+        "stored Looks must be selectable again after changing source");
+  const auto created_song = authored_model.create_song();
+  check(created_song.succeeded && authored_model.snapshot().song_count == 1U,
+        "NEW SONG must create one editable Song without requiring MIDI data");
+  check(!authored_model.snapshot().performance_ready,
+        "empty editable Song must remain below performance preflight");
+  const std::uint64_t authored_tick = 20U * 960U;
+  const auto stored_cue = authored_model.store_cue_at_tick(authored_tick);
+  check(stored_cue.succeeded && authored_model.snapshot().performance_ready,
+        "STORE CUE at playhead must make the Song performance-ready");
+  check(authored_model.show_program().songs.front().length_ticks > authored_tick &&
+            authored_model.show_program().songs.front().clips.front().start_tick ==
+                authored_tick,
+        "STORE CUE must extend an authoring Song when the playhead is past its end");
+  check(authored_model.show_program().songs.front().scenes.front()
+            .midi_binding.has_value(),
+        "stored Cue must own its hidden MIDI Learn binding");
+  check(authored_model.snapshot().blackout &&
+            !authored_model.snapshot().output_armed,
+        "STORE LOOK/CUE structural changes must force blackout and disarm");
+  const auto authored_document = authored_model.project_document_for_save(
+      "2026-08-08T12:00:00Z");
+  const auto stored_look_document = std::find_if(
+      authored_document.looks.begin(), authored_document.looks.end(),
+      [&](const auto& look) { return look.look_id == stored_look.object_id; });
+  check(stored_look_document != authored_document.looks.end() &&
+            stored_look_document->speed == 0.61F &&
+            stored_look_document->white_extraction == 0.33F &&
+            stored_look_document->intensity == 0.74F &&
+            !stored_look_document->fixture_mask[13U] &&
+            stored_look_document->primary_color ==
+                std::array<float, 3>{0.10F, 0.80F, 0.25F} &&
+            stored_look_document->secondary_color ==
+                std::array<float, 3>{0.15F, 0.20F, 0.95F},
+        "complete stored Look must own colors, speed, extraction and fixture mask");
 
   // Replacing the show with an empty but authoring-valid program is allowed,
   // but must immediately revoke performance readiness and force safe output.

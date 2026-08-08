@@ -62,13 +62,17 @@ void validate_song(const SongProgram& song, std::size_t song_index,
     error(validation, base + ".ppq", "PPQ must be between 24 and 9600");
   if (song.length_ticks == 0U)
     error(validation, base + ".lengthTicks", "song length must be greater than zero");
-  if (song.scenes.empty() || song.scenes.size() > kMaximumScenesPerSong)
+  if (song.scenes.size() > kMaximumScenesPerSong)
     error(validation, base + ".scenes",
-          "song must contain between 1 and 2048 scenes");
+          "song may not exceed 2048 scenes");
   if (song.clips.size() > kMaximumClipsPerSong)
     error(validation, base + ".clips", "song exceeds the 100000 clip limit");
 
   std::set<std::string> scene_ids;
+  std::map<std::string, std::pair<std::uint8_t, std::uint8_t>>
+      scene_midi_bindings;
+  std::map<std::pair<std::uint8_t, std::uint8_t>, std::string>
+      midi_bindings;
   for (std::size_t index = 0; index < song.scenes.size(); ++index) {
     const auto& scene = song.scenes[index];
     const std::string path = base + ".scenes[" + std::to_string(index) + "]";
@@ -88,10 +92,24 @@ void validate_song(const SongProgram& song, std::size_t song_index,
         scene.transition_out_ms > kMaximumTransitionMs)
       error(validation, path + ".transition",
             "scene transitions may not exceed 60000 ms");
+    if (scene.midi_binding.has_value()) {
+      const auto& mapping = *scene.midi_binding;
+      if (mapping.note > 127U || mapping.channel == 0U || mapping.channel > 16U) {
+        error(validation, path + ".midiBinding",
+              "Cue MIDI binding must use note 0..127 and channel 1..16");
+      } else {
+        scene_midi_bindings.emplace(
+            scene.scene_id, std::make_pair(mapping.channel, mapping.note));
+        const auto [binding, inserted] = midi_bindings.emplace(
+            std::make_pair(mapping.channel, mapping.note), scene.scene_id);
+        if (!inserted && binding->second != scene.scene_id)
+          error(validation, path + ".midiBinding",
+                "one MIDI note/channel may not address multiple Cues");
+      }
+    }
   }
 
   std::set<std::string> clip_ids;
-  std::map<std::pair<std::uint8_t, std::uint8_t>, std::string> midi_bindings;
   std::vector<const MidiSceneClip*> latch_clips;
   std::vector<const MidiSceneClip*> momentary_clips;
   latch_clips.reserve(song.clips.size());
@@ -124,11 +142,22 @@ void validate_song(const SongProgram& song, std::size_t song_index,
     if (clip.channel == 0U || clip.channel > 16U)
       error(validation, path + ".channel", "MIDI channel must be between 1 and 16");
 
-    const auto key = std::make_pair(clip.channel, clip.note);
-    const auto [binding, inserted] = midi_bindings.emplace(key, clip.scene_id);
-    if (!inserted && binding->second != clip.scene_id)
+    const auto legacy_key = std::make_pair(clip.channel, clip.note);
+    const auto scene_mapping = scene_midi_bindings.find(clip.scene_id);
+    if (scene_mapping == scene_midi_bindings.end()) {
+      scene_midi_bindings.emplace(clip.scene_id, legacy_key);
+    } else if (scene_mapping->second != legacy_key) {
       error(validation, path + ".note",
-            "one MIDI note/channel may not address multiple scenes within a song");
+            "Cue placements must use their Cue-owned MIDI binding");
+    }
+    const auto effective_mapping = scene_midi_bindings.find(clip.scene_id);
+    if (effective_mapping != scene_midi_bindings.end()) {
+      const auto [binding, inserted] = midi_bindings.emplace(
+          effective_mapping->second, clip.scene_id);
+      if (!inserted && binding->second != clip.scene_id)
+        error(validation, path + ".note",
+              "one MIDI note/channel may not address multiple Cues within a song");
+    }
 
     if (scene != nullptr) {
       if (scene->behavior == CueBehavior::momentary)
@@ -205,6 +234,12 @@ ShowValidation validate_show_program_for_performance(
   ShowValidation validation = validate_show_program(program, available_look_ids);
   if (program.songs.empty())
     error(validation, "songs", "performance requires at least one programmed song");
+  for (std::size_t index = 0U; index < program.songs.size(); ++index) {
+    const auto& song = program.songs[index];
+    if (song.scenes.empty() || song.clips.empty())
+      error(validation, "songs[" + std::to_string(index) + "]",
+            "performance requires at least one stored Cue placement per Song");
+  }
   return validation;
 }
 
@@ -219,12 +254,19 @@ MidiCompilation compile_song_midi(
 
   result.events.reserve(song.clips.size() * 2U);
   for (const auto& clip : song.clips) {
+    const SceneDefinition* scene = find_scene(song, clip.scene_id);
+    const std::uint8_t note = scene != nullptr && scene->midi_binding.has_value()
+        ? scene->midi_binding->note
+        : clip.note;
+    const std::uint8_t channel = scene != nullptr && scene->midi_binding.has_value()
+        ? scene->midi_binding->channel
+        : clip.channel;
     result.events.push_back({clip.start_tick, MidiEventKind::note_on,
-                             clip.note, clip.velocity, clip.channel,
+                             note, clip.velocity, channel,
                              song.song_id, clip.scene_id, clip.clip_id});
     result.events.push_back({clip.start_tick + clip.duration_ticks,
-                             MidiEventKind::note_off, clip.note, 0U,
-                             clip.channel, song.song_id, clip.scene_id,
+                             MidiEventKind::note_off, note, 0U,
+                             channel, song.song_id, clip.scene_id,
                              clip.clip_id});
   }
 
@@ -296,6 +338,11 @@ void CueRuntime::seek(std::uint64_t tick) noexcept {
   momentary_channel_ = 0U;
 }
 
+void CueRuntime::advance(std::uint64_t tick) noexcept {
+  tick_ = tick;
+  timeline_scene_ = resolved_scene_at_tick(song_, tick);
+}
+
 void CueRuntime::transport_stop() noexcept {
   transport_running_ = false;
   timeline_scene_ = nullptr;
@@ -307,6 +354,12 @@ void CueRuntime::transport_stop() noexcept {
 
 const SceneDefinition* CueRuntime::scene_for_midi(
     std::uint8_t note, std::uint8_t channel) const noexcept {
+  for (const auto& scene : song_.scenes) {
+    if (scene.midi_binding.has_value() &&
+        scene.midi_binding->note == note &&
+        scene.midi_binding->channel == channel)
+      return &scene;
+  }
   for (const auto& clip : song_.clips) {
     if (clip.note == note && clip.channel == channel)
       return find_scene(song_, clip.scene_id);

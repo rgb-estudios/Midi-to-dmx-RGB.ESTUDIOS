@@ -65,6 +65,12 @@ struct ApplicationSnapshot {
   std::vector<std::string> warnings;
 };
 
+struct AuthoringResult {
+  bool succeeded{false};
+  std::string object_id;
+  std::string message;
+};
+
 class ApplicationModel final {
  public:
   ApplicationModel();
@@ -99,11 +105,27 @@ class ApplicationModel final {
   // A successful replacement forces output safe because show semantics changed.
   show::ShowValidation replace_show_program(const show::ShowProgram& program);
   [[nodiscard]] show::ShowValidation show_performance_validation() const;
+  [[nodiscard]] AuthoringResult store_current_look();
+  [[nodiscard]] AuthoringResult create_song();
+  [[nodiscard]] AuthoringResult store_cue_at_tick(
+      std::uint64_t tick,
+      show::CueBehavior behavior = show::CueBehavior::latch);
+  [[nodiscard]] bool select_look(std::size_t look_index);
+  [[nodiscard]] bool toggle_active_look_fixture(std::size_t fixture_index);
+  [[nodiscard]] bool active_look_fixture_enabled(
+      std::size_t fixture_index) const noexcept;
+  [[nodiscard]] bool set_active_look_color(bool secondary,
+                                           const RgbColor& color);
+  [[nodiscard]] std::array<float, 3> active_look_color(
+      bool secondary) const noexcept;
+  [[nodiscard]] bool set_active_look_intensity(float intensity);
+  [[nodiscard]] float active_look_intensity() const noexcept;
 
   // Active song is runtime/session state, not authored show data. Switching it
   // never mutates `.aeylashow` but always forces output safe before playback.
   [[nodiscard]] bool select_song(std::size_t song_index);
   void seek_active_song_tick(std::uint64_t tick);
+  void advance_active_song_tick(std::uint64_t tick);
 
   void mark_project_saved(std::string modified_at);
   void mark_project_unsaved() {
@@ -149,6 +171,7 @@ class ApplicationModel final {
   ColorTransformSettings color_settings_{};
   VisualSource authored_source_{VisualSource::gradient};
   std::optional<VisualSource> cue_source_override_{};
+  std::optional<std::string> cue_look_id_{};
   bool cue_scene_blackout_{false};
   bool rig14_{false};
   bool project_dirty_{true};

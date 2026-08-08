@@ -417,6 +417,52 @@ std::optional<float> require_unit_float(const JsonObject& object, std::string_vi
   return static_cast<float>(*value);
 }
 
+std::optional<std::array<float, 3>> require_color3(
+    const JsonObject& object, std::string_view name, std::string_view path,
+    ProjectValidation& validation) {
+  const JsonArray* values = require_array(object, name, path, validation);
+  if (values == nullptr) return std::nullopt;
+  if (values->size() != 3U) {
+    add_error(validation, std::string(path), "color must contain exactly RGB values");
+    return std::nullopt;
+  }
+  std::array<float, 3> result{};
+  for (std::size_t index = 0U; index < result.size(); ++index) {
+    const double* number = (*values)[index].number();
+    if (number == nullptr || !std::isfinite(*number) || *number < 0.0 ||
+        *number > 1.0) {
+      add_error(validation, std::string(path) + "[" + std::to_string(index) + "]",
+                "color component must be finite and between 0 and 1");
+      return std::nullopt;
+    }
+    result[index] = static_cast<float>(*number);
+  }
+  return result;
+}
+
+std::optional<std::array<bool, kExpectedFixtureCount>> require_fixture_mask(
+    const JsonObject& object, std::string_view name, std::string_view path,
+    ProjectValidation& validation) {
+  const JsonArray* values = require_array(object, name, path, validation);
+  if (values == nullptr) return std::nullopt;
+  if (values->size() != kExpectedFixtureCount) {
+    add_error(validation, std::string(path),
+              "fixture mask must contain exactly 14 boolean positions");
+    return std::nullopt;
+  }
+  std::array<bool, kExpectedFixtureCount> result{};
+  for (std::size_t index = 0U; index < result.size(); ++index) {
+    const bool* value = (*values)[index].boolean();
+    if (value == nullptr) {
+      add_error(validation, std::string(path) + "[" + std::to_string(index) + "]",
+                "fixture-mask entry must be boolean");
+      return std::nullopt;
+    }
+    result[index] = *value;
+  }
+  return result;
+}
+
 bool known_attribute(std::string_view value) {
   static constexpr std::array<std::string_view, 16> names = {
       "dimmer", "shutter", "strobe", "red", "green", "blue", "white",
@@ -428,6 +474,32 @@ bool known_source(std::string_view value) {
   static constexpr std::array<std::string_view, 5> names = {
       "solid", "gradient", "wave", "noise", "chase"};
   return std::find(names.begin(), names.end(), value) != names.end();
+}
+
+void apply_legacy_look_defaults(LookDocument& look,
+                                const VisualDocument& visual) {
+  if (look.source == "solid") {
+    look.primary_color = {0.85F, 0.02F, 0.04F};
+    look.secondary_color = look.primary_color;
+  } else if (look.source == "gradient") {
+    look.primary_color = {0.03F, 0.08F, 0.30F};
+    look.secondary_color = {1.0F, 0.42F, 0.04F};
+  } else if (look.source == "wave") {
+    look.primary_color = {0.01F, 0.06F, 0.18F};
+    look.secondary_color = {0.05F, 0.78F, 1.0F};
+  } else if (look.source == "noise") {
+    look.primary_color = {0.03F, 0.01F, 0.05F};
+    look.secondary_color = {0.90F, 0.02F, 0.12F};
+  } else if (look.source == "chase") {
+    look.primary_color = {0.01F, 0.01F, 0.02F};
+    look.secondary_color = {1.0F, 0.03F, 0.06F};
+  }
+  look.intensity = 1.0F;
+  look.speed = visual.speed;
+  look.white_extraction = visual.white_extraction;
+  look.amber_extraction = visual.amber_extraction;
+  look.uv_manual = visual.uv_manual;
+  look.fixture_mask.fill(true);
 }
 
 bool known_backend(std::string_view value) {
@@ -594,6 +666,16 @@ std::optional<ProjectDocument> project_from_json(const JsonObject& root,
       if (auto field = require_string(*value, "lookId", path + ".lookId", validation)) look.look_id = *field;
       if (auto field = require_string(*value, "name", path + ".name", validation)) look.name = *field;
       if (auto field = require_string(*value, "source", path + ".source", validation)) look.source = *field;
+      if (document.schema_version.major >= 2U) {
+        if (auto field = require_color3(*value, "primaryColor", path + ".primaryColor", validation)) look.primary_color = *field;
+        if (auto field = require_color3(*value, "secondaryColor", path + ".secondaryColor", validation)) look.secondary_color = *field;
+        if (auto field = require_unit_float(*value, "intensity", path + ".intensity", validation)) look.intensity = *field;
+        if (auto field = require_unit_float(*value, "speed", path + ".speed", validation)) look.speed = *field;
+        if (auto field = require_unit_float(*value, "whiteExtraction", path + ".whiteExtraction", validation)) look.white_extraction = *field;
+        if (auto field = require_unit_float(*value, "amberExtraction", path + ".amberExtraction", validation)) look.amber_extraction = *field;
+        if (auto field = require_unit_float(*value, "uvManual", path + ".uvManual", validation)) look.uv_manual = *field;
+        if (auto field = require_fixture_mask(*value, "fixtureMask", path + ".fixtureMask", validation)) look.fixture_mask = *field;
+      }
       document.looks.push_back(std::move(look));
     }
   }
@@ -671,6 +753,12 @@ std::optional<ProjectDocument> project_from_json(const JsonObject& root,
   }
 
   if (!validation.ok()) return std::nullopt;
+  if (document.schema_version.major == 1U) {
+    for (auto& look : document.looks)
+      apply_legacy_look_defaults(look, document.visual);
+    document.schema_version = {2U, 0U};
+    document.app_version = "0.3.0-alpha.2";
+  }
   return document;
 }
 
@@ -772,6 +860,8 @@ ProjectDocument make_default_project_document(std::string project_id,
       {"look-noise", "Noise", "noise"},
       {"look-chase", "Chase", "chase"},
   };
+  for (auto& look : document.looks)
+    apply_legacy_look_defaults(look, document.visual);
   document.visual.active_look_id = "look-gradient";
 
   for (std::uint8_t executor = 0U; executor < 8U; ++executor) {
@@ -791,7 +881,7 @@ ProjectDocument make_default_project_document(std::string project_id,
 ProjectValidation validate_project_document(const ProjectDocument& document) {
   ProjectValidation validation;
 
-  if (document.schema_version.major != 1U)
+  if (document.schema_version.major != 2U)
     add_error(validation, "schemaVersion.major", "unsupported project schema major version");
   if (document.app_version.empty() || document.app_version.size() > 64U)
     add_error(validation, "appVersion", "app version must contain 1 to 64 bytes");
@@ -868,6 +958,8 @@ ProjectValidation validate_project_document(const ProjectDocument& document) {
   }
 
   std::set<std::string> look_ids;
+  if (document.looks.size() > kMaximumLooks)
+    add_error(validation, "looks", "project may not exceed 2048 Looks");
   for (std::size_t index = 0; index < document.looks.size(); ++index) {
     const auto& look = document.looks[index];
     const std::string path = "looks[" + std::to_string(index) + "]";
@@ -875,6 +967,20 @@ ProjectValidation validate_project_document(const ProjectDocument& document) {
     if (!look_ids.insert(look.look_id).second) add_error(validation, path + ".lookId", "duplicate look identifier");
     if (look.name.empty()) add_error(validation, path + ".name", "look name is required");
     if (!known_source(look.source)) add_error(validation, path + ".source", "unsupported visual source");
+    const auto valid_unit = [](float value) {
+      return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+    };
+    for (std::size_t channel = 0U; channel < 3U; ++channel) {
+      if (!valid_unit(look.primary_color[channel]))
+        add_error(validation, path + ".primaryColor[" + std::to_string(channel) + "]", "value must be between 0 and 1");
+      if (!valid_unit(look.secondary_color[channel]))
+        add_error(validation, path + ".secondaryColor[" + std::to_string(channel) + "]", "value must be between 0 and 1");
+    }
+    if (!valid_unit(look.intensity)) add_error(validation, path + ".intensity", "value must be between 0 and 1");
+    if (!valid_unit(look.speed)) add_error(validation, path + ".speed", "value must be between 0 and 1");
+    if (!valid_unit(look.white_extraction)) add_error(validation, path + ".whiteExtraction", "value must be between 0 and 1");
+    if (!valid_unit(look.amber_extraction)) add_error(validation, path + ".amberExtraction", "value must be between 0 and 1");
+    if (!valid_unit(look.uv_manual)) add_error(validation, path + ".uvManual", "value must be between 0 and 1");
   }
   if (look_ids.find(document.visual.active_look_id) == look_ids.end())
     add_error(validation, "visual.activeLookId", "active look does not exist");
@@ -991,7 +1097,24 @@ std::string serialize_project_document(const ProjectDocument& document) {
     const auto& look = document.looks[index];
     output << "    {\"lookId\": " << escape_json(look.look_id)
            << ", \"name\": " << escape_json(look.name)
-           << ", \"source\": " << escape_json(look.source) << "}";
+           << ", \"source\": " << escape_json(look.source)
+           << ", \"primaryColor\": [" << number_string(look.primary_color[0])
+           << ", " << number_string(look.primary_color[1])
+           << ", " << number_string(look.primary_color[2]) << "]"
+           << ", \"secondaryColor\": [" << number_string(look.secondary_color[0])
+           << ", " << number_string(look.secondary_color[1])
+           << ", " << number_string(look.secondary_color[2]) << "]"
+           << ", \"intensity\": " << number_string(look.intensity)
+           << ", \"speed\": " << number_string(look.speed)
+           << ", \"whiteExtraction\": " << number_string(look.white_extraction)
+           << ", \"amberExtraction\": " << number_string(look.amber_extraction)
+           << ", \"uvManual\": " << number_string(look.uv_manual)
+           << ", \"fixtureMask\": [";
+    for (std::size_t fixture = 0U; fixture < look.fixture_mask.size(); ++fixture) {
+      if (fixture != 0U) output << ", ";
+      output << (look.fixture_mask[fixture] ? "true" : "false");
+    }
+    output << "]}";
     output << (index + 1U == document.looks.size() ? "\n" : ",\n");
   }
   output << "  ],\n";
