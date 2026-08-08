@@ -6,6 +6,7 @@ on:
       - product/**
       - src/**
       - tests/**
+      - docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md
       - tools/maintenance/windows/**
       - .github/workflows/reaper-windows-pretest-package.yml
   workflow_dispatch:
@@ -79,6 +80,7 @@ jobs:
           Copy-Item tools/maintenance/windows/CLEAN_AEYLA.cmd $root
           Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $root
           Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $root
+          Copy-Item docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md (Join-Path $root "UI_INTERACTION_CONTRACT.md")
 
           @'
           AEYLA Visual DMX 0.3 — REAPER WINDOWS PRETEST
@@ -118,15 +120,25 @@ jobs:
           - No mata REAPER ni Ableton: si estan abiertos, aborta.
           - No modifica configuracion MIDI/audio del host.
 
-          PRUEBA MANUAL MINIMA
-          A. El plugin aparece en el browser de FX.
-          B. Se puede insertar sin cerrar REAPER.
-          C. Abre la interfaz y permanece visible 60 segundos.
-          D. Cierra y vuelve a abrir la interfaz 5 veces.
-          E. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
-          F. La instancia sigue presente y vuelve en estado seguro DISARMED/BLACKOUT.
-          G. Envia MIDI y confirma actividad visible.
-          H. Mueve el playhead, Play/Stop y Loop y registra cualquier desviacion.
+          INTERACTION PASS — OBLIGATORIO
+          Render correcto NO equivale a UI funcional. Probar con mouse/entrada real:
+          A. NEW crea proyecto o pide confirmar descarte si corresponde.
+          B. OPEN abre dialogo y carga un .aeylashow valido.
+          C. SAVE y SAVE AS responden y actualizan estado SAVED/UNSAVED.
+          D. BLACKOUT cambia inmediatamente de estado visual/runtime.
+          E. RIG 10/14 cambia el mapa de fixtures habilitados.
+          F. SOLID / GRADIENT / WAVE / NOISE / CHASE cambian el preview.
+          G. Click fixture 1, 7, 8 y 14 cambia claramente la seleccion visual.
+          H. Grand Master, Speed, White, Amber y UV responden a click y drag.
+          I. Los 8 executors responden por mouse y liberan al soltar.
+          J. MIDI fisico incrementa contador y activa el runtime correspondiente.
+          K. ARM con BACKEND OFF NO queda mudo: debe mostrar ARM LOCKED y explicar causa.
+          L. Abrir/cerrar UI 5 veces mantiene todas las interacciones.
+
+          PRUEBA HOST / ESTADO
+          M. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
+          N. La instancia sigue presente y vuelve DISARMED/BLACKOUT.
+          O. Mueve playhead, Play/Stop y Loop y registra cualquier desviacion.
 
           IMPORTANTE
           PRETEST NO significa Show Candidate. No dependas todavia de este build para
@@ -140,6 +152,7 @@ jobs:
           "SOURCE_COMMIT=${{ github.sha }}" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "BUILD_KIND=REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "MAINTENANCE_SCRIPT=AEYLA_VST3_MAINTENANCE.ps1" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "UI_INTERACTION_CONTRACT=UI_INTERACTION_CONTRACT.md" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
 
       - uses: actions/upload-artifact@v4
         with:
