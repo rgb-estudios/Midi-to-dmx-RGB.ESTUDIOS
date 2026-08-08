@@ -18,7 +18,7 @@ echo AEYLA Visual DMX - INSTALL
 echo Cierra REAPER, Ableton y cualquier host VST3 antes de continuar.
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%SCRIPT%','-Action','Install','-SourceVst3','%SOURCE%')"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%SCRIPT%','-Action','Install','-SourceVst3','%SOURCE%'); exit $p.ExitCode"
 if errorlevel 1 (
   echo ERROR: instalacion AEYLA no completada.
   pause
