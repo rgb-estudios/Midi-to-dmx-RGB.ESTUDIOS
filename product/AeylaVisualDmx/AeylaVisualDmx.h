@@ -73,6 +73,10 @@ public:
 
   void ToggleOutputArmFromUI();
   void ForceDisarmFromUI();
+  // Operator-facing BLACKOUT path. Enabling blackout performs one deterministic
+  // disarm boundary for both semantic and Take authority, then latches blackout.
+  // Disabling blackout never auto-arms output.
+  void SetBlackoutFromUI(bool enabled);
   void TriggerExecutorFromUI(int executorIndex, float velocity);
   void ReleaseExecutorFromUI(int executorIndex);
   [[nodiscard]] bool SetActiveSongStartFromPlayheadFromUI();
@@ -81,6 +85,8 @@ public:
   [[nodiscard]] std::size_t SongCount() const;
   [[nodiscard]] std::size_t ActiveSongIndex() const;
   [[nodiscard]] std::string SongName(std::size_t songIndex) const;
+  [[nodiscard]] aeyla::product::AuthoringResult RenameSongFromUI(
+      std::size_t songIndex, std::string_view name);
   [[nodiscard]] std::string ActiveSongStatus() const;
   [[nodiscard]] bool SelectAdjacentLookFromUI(int direction);
   [[nodiscard]] std::string ActiveLookStatus() const;
