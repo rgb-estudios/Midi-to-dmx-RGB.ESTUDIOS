@@ -4,13 +4,11 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
-#include <iterator>
-#include <limits>
 #include <sstream>
+#include <span>
 #include <system_error>
 #include <utility>
 
@@ -54,7 +52,7 @@ void append_u64(std::vector<std::uint8_t>& bytes, std::uint64_t value) {
     bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
 }
 
-bool read_u16(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
+bool read_u16(std::span<const std::uint8_t> bytes, std::size_t& cursor,
               std::uint16_t& value) noexcept {
   if(cursor + 2U > bytes.size()) return false;
   value = static_cast<std::uint16_t>(bytes[cursor]) |
@@ -63,7 +61,7 @@ bool read_u16(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
   return true;
 }
 
-bool read_u32(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
+bool read_u32(std::span<const std::uint8_t> bytes, std::size_t& cursor,
               std::uint32_t& value) noexcept {
   if(cursor + 4U > bytes.size()) return false;
   value = 0U;
@@ -72,7 +70,7 @@ bool read_u32(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
   return true;
 }
 
-bool read_u64(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
+bool read_u64(std::span<const std::uint8_t> bytes, std::size_t& cursor,
               std::uint64_t& value) noexcept {
   if(cursor + 8U > bytes.size()) return false;
   value = 0U;
@@ -81,8 +79,9 @@ bool read_u64(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
   return true;
 }
 
-std::uint64_t fnv1a(const std::uint8_t* data, std::size_t size) noexcept {
-  std::uint64_t hash = kFnvOffset;
+std::uint64_t fnv1a_update(std::uint64_t hash,
+                           const std::uint8_t* data,
+                           std::size_t size) noexcept {
   for(std::size_t index = 0U; index < size; ++index) {
     hash ^= static_cast<std::uint64_t>(data[index]);
     hash *= kFnvPrime;
@@ -94,9 +93,9 @@ bool valid_metadata_lengths(std::uint32_t song_id,
                             std::uint32_t song_name,
                             std::uint32_t take_name,
                             std::uint32_t source) noexcept {
-  return song_id <= kMaximumSongIdBytes &&
+  return song_id > 0U && song_id <= kMaximumSongIdBytes &&
          song_name <= kMaximumSongNameBytes &&
-         take_name <= kMaximumTakeNameBytes &&
+         take_name > 0U && take_name <= kMaximumTakeNameBytes &&
          source <= kMaximumSourceIpv4Bytes;
 }
 
@@ -120,8 +119,8 @@ bool validate_take(const DmxTake& take, std::string& error_message) {
     set_error(error_message, "Take exceeds the one-hour safety limit");
     return false;
   }
-  if(take.name.size() > kMaximumTakeNameBytes) {
-    set_error(error_message, "Take name is too long");
+  if(take.name.empty() || take.name.size() > kMaximumTakeNameBytes) {
+    set_error(error_message, "Take name is empty or too long");
     return false;
   }
   if(take.source_ipv4.size() > kMaximumSourceIpv4Bytes) {
@@ -150,61 +149,27 @@ bool sync_file(FILE* file) noexcept {
 #endif
 }
 
-bool write_bytes_sync(const std::filesystem::path& path,
-                      const std::vector<std::uint8_t>& bytes,
-                      std::string& error_message) {
-  FILE* file = open_binary_write(path);
-  if(file == nullptr) {
-    set_error(error_message, "Could not open temporary Take file for writing");
-    return false;
-  }
+bool write_raw(FILE* file, const std::uint8_t* data, std::size_t size,
+               std::string& error_message) {
+  if(size == 0U) return true;
+  const std::size_t written = std::fwrite(data, 1U, size, file);
+  if(written == size) return true;
+  set_error(error_message, "Short write while storing Take");
+  return false;
+}
 
-  const std::size_t written =
-      std::fwrite(bytes.data(), 1U, bytes.size(), file);
-  if(written != bytes.size()) {
-    set_error(error_message, "Short write while storing Take");
-    std::fclose(file);
-    return false;
-  }
-  if(!sync_file(file)) {
-    set_error(error_message, "Could not flush Take to stable storage");
-    std::fclose(file);
-    return false;
-  }
-  if(std::fclose(file) != 0) {
-    set_error(error_message, "Could not close Take file after writing");
-    return false;
-  }
+bool write_hashed(FILE* file, const std::uint8_t* data, std::size_t size,
+                  std::uint64_t& hash, std::string& error_message) {
+  if(!write_raw(file, data, size, error_message)) return false;
+  hash = fnv1a_update(hash, data, size);
   return true;
 }
 
-std::optional<std::vector<std::uint8_t>> read_bounded(
-    const std::filesystem::path& source,
-    std::string& error_message) {
-  std::error_code error;
-  const std::uintmax_t size = std::filesystem::file_size(source, error);
-  if(error) {
-    set_error(error_message, "Could not determine Take file size: " + error.message());
-    return std::nullopt;
-  }
-  if(size < kFixedHeaderBytes + 8U || size > kMaximumTakeFileBytes) {
-    set_error(error_message, "Take file size is outside the supported bounds");
-    return std::nullopt;
-  }
-
-  std::ifstream input(source, std::ios::binary);
-  if(!input) {
-    set_error(error_message, "Could not open Take file");
-    return std::nullopt;
-  }
-  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-  input.read(reinterpret_cast<char*>(bytes.data()),
-             static_cast<std::streamsize>(bytes.size()));
-  if(input.gcount() != static_cast<std::streamsize>(bytes.size()) || input.bad()) {
-    set_error(error_message, "Could not read the complete Take file");
-    return std::nullopt;
-  }
-  return bytes;
+bool write_hashed_string(FILE* file, std::string_view value,
+                         std::uint64_t& hash, std::string& error_message) {
+  return write_hashed(file,
+                      reinterpret_cast<const std::uint8_t*>(value.data()),
+                      value.size(), hash, error_message);
 }
 
 std::filesystem::path temporary_path(const std::filesystem::path& target) {
@@ -270,16 +235,15 @@ struct DecodedHeader {
   std::uint32_t source_length{0U};
 };
 
-bool decode_fixed_header(const std::vector<std::uint8_t>& bytes,
+bool decode_fixed_header(std::span<const std::uint8_t> bytes,
                          DecodedHeader& header,
-                         std::size_t& cursor,
                          std::string& error_message) {
-  if(bytes.size() < kFixedHeaderBytes ||
+  if(bytes.size() != kFixedHeaderBytes ||
      !std::equal(kMagic.begin(), kMagic.end(), bytes.begin())) {
     set_error(error_message, "Not an AEYLA Take file or unsupported magic");
     return false;
   }
-  cursor = kMagic.size();
+  std::size_t cursor = kMagic.size();
   std::uint16_t version = 0U;
   std::uint16_t reserved = 0U;
   if(!read_u16(bytes, cursor, version) ||
@@ -290,7 +254,8 @@ bool decode_fixed_header(const std::vector<std::uint8_t>& bytes,
      !read_u32(bytes, cursor, header.song_id_length) ||
      !read_u32(bytes, cursor, header.song_name_length) ||
      !read_u32(bytes, cursor, header.take_name_length) ||
-     !read_u32(bytes, cursor, header.source_length)) {
+     !read_u32(bytes, cursor, header.source_length) ||
+     cursor != bytes.size()) {
     set_error(error_message, "Take header is truncated");
     return false;
   }
@@ -311,71 +276,91 @@ bool decode_fixed_header(const std::vector<std::uint8_t>& bytes,
   return true;
 }
 
-bool read_string(const std::vector<std::uint8_t>& bytes,
-                 std::size_t& cursor,
-                 std::uint32_t length,
-                 std::string& value) {
-  if(cursor + static_cast<std::size_t>(length) > bytes.size()) return false;
-  value.assign(reinterpret_cast<const char*>(bytes.data() + cursor), length);
-  cursor += static_cast<std::size_t>(length);
-  return true;
-}
-
-std::optional<StoredDmxTake> decode_complete(
-    const std::filesystem::path& source,
-    const std::vector<std::uint8_t>& bytes,
-    std::string& error_message) {
-  DecodedHeader header;
-  std::size_t cursor = 0U;
-  if(!decode_fixed_header(bytes, header, cursor, error_message))
-    return std::nullopt;
-
+std::uint64_t expected_file_size(const DecodedHeader& header) noexcept {
   const std::uint64_t metadata_bytes =
       static_cast<std::uint64_t>(header.song_id_length) +
       static_cast<std::uint64_t>(header.song_name_length) +
       static_cast<std::uint64_t>(header.take_name_length) +
       static_cast<std::uint64_t>(header.source_length);
-  const std::uint64_t payload_bytes = header.frame_count * 512ULL;
-  const std::uint64_t expected = static_cast<std::uint64_t>(kFixedHeaderBytes) +
-                                 metadata_bytes + payload_bytes + 8ULL;
-  if(expected != bytes.size()) {
-    set_error(error_message, "Take file length does not match its header");
-    return std::nullopt;
+  return static_cast<std::uint64_t>(kFixedHeaderBytes) + metadata_bytes +
+         header.frame_count * 512ULL + 8ULL;
+}
+
+bool read_exact(std::ifstream& input, std::uint8_t* data, std::size_t size) {
+  if(size == 0U) return true;
+  input.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(size));
+  return input.gcount() == static_cast<std::streamsize>(size);
+}
+
+bool read_hashed(std::ifstream& input, std::uint8_t* data, std::size_t size,
+                 std::uint64_t& hash) {
+  if(!read_exact(input, data, size)) return false;
+  hash = fnv1a_update(hash, data, size);
+  return true;
+}
+
+bool read_hashed_string(std::ifstream& input, std::uint32_t length,
+                        std::string& value, std::uint64_t& hash) {
+  value.resize(length);
+  if(length == 0U) return true;
+  return read_hashed(input,
+                     reinterpret_cast<std::uint8_t*>(value.data()),
+                     value.size(), hash);
+}
+
+std::array<std::uint8_t, 8> encode_u64(std::uint64_t value) {
+  std::array<std::uint8_t, 8> bytes{};
+  for(unsigned shift = 0U; shift < 64U; shift += 8U)
+    bytes[shift / 8U] = static_cast<std::uint8_t>((value >> shift) & 0xFFU);
+  return bytes;
+}
+
+std::uint64_t decode_u64(const std::array<std::uint8_t, 8>& bytes) noexcept {
+  std::size_t cursor = 0U;
+  std::uint64_t value = 0U;
+  (void)read_u64(std::span<const std::uint8_t>(bytes.data(), bytes.size()),
+                 cursor, value);
+  return value;
+}
+
+bool verify_checksum_streaming(const std::filesystem::path& source,
+                               std::string& error_message) {
+  std::error_code error;
+  const auto size = std::filesystem::file_size(source, error);
+  if(error || size < kFixedHeaderBytes + 8U || size > kMaximumTakeFileBytes) {
+    set_error(error_message, "Take file size is outside the supported bounds");
+    return false;
+  }
+  std::ifstream input(source, std::ios::binary);
+  if(!input) {
+    set_error(error_message, "Could not open Take for checksum verification");
+    return false;
   }
 
-  StoredDmxTake result;
-  result.source_path = source;
-  if(!read_string(bytes, cursor, header.song_id_length, result.song_id) ||
-     !read_string(bytes, cursor, header.song_name_length, result.song_name) ||
-     !read_string(bytes, cursor, header.take_name_length, result.take.name) ||
-     !read_string(bytes, cursor, header.source_length, result.take.source_ipv4)) {
-    set_error(error_message, "Take metadata is truncated");
-    return std::nullopt;
-  }
-
-  result.take.port_address = header.port_address;
-  result.take.frames_per_second = header.frames_per_second;
-  result.take.frames.resize(static_cast<std::size_t>(header.frame_count));
-  for(auto& frame : result.take.frames) {
-    if(cursor + frame.size() > bytes.size()) {
-      set_error(error_message, "Take DMX payload is truncated");
-      return std::nullopt;
+  std::uint64_t remaining = static_cast<std::uint64_t>(size) - 8ULL;
+  std::array<std::uint8_t, 64U * 1024U> buffer{};
+  std::uint64_t hash = kFnvOffset;
+  while(remaining > 0U) {
+    const std::size_t chunk = static_cast<std::size_t>(
+        std::min<std::uint64_t>(remaining, buffer.size()));
+    if(!read_exact(input, buffer.data(), chunk)) {
+      set_error(error_message, "Take checksum verification read failed");
+      return false;
     }
-    std::memcpy(frame.data(), bytes.data() + cursor, frame.size());
-    cursor += frame.size();
+    hash = fnv1a_update(hash, buffer.data(), chunk);
+    remaining -= chunk;
   }
 
-  std::uint64_t stored_hash = 0U;
-  if(!read_u64(bytes, cursor, stored_hash) || cursor != bytes.size()) {
-    set_error(error_message, "Take checksum trailer is malformed");
-    return std::nullopt;
+  std::array<std::uint8_t, 8> trailer{};
+  if(!read_exact(input, trailer.data(), trailer.size())) {
+    set_error(error_message, "Take checksum trailer is truncated");
+    return false;
   }
-  const std::uint64_t computed_hash = fnv1a(bytes.data(), bytes.size() - 8U);
-  if(stored_hash != computed_hash) {
+  if(hash != decode_u64(trailer)) {
     set_error(error_message, "Take checksum mismatch; file may be corrupted");
-    return std::nullopt;
+    return false;
   }
-  return result;
+  return true;
 }
 
 bool inspect_header(const std::filesystem::path& source,
@@ -387,52 +372,57 @@ bool inspect_header(const std::filesystem::path& source,
 
   std::ifstream input(source, std::ios::binary);
   if(!input) return false;
-  std::vector<std::uint8_t> header_bytes(kFixedHeaderBytes);
-  input.read(reinterpret_cast<char*>(header_bytes.data()),
-             static_cast<std::streamsize>(header_bytes.size()));
-  if(input.gcount() != static_cast<std::streamsize>(header_bytes.size()))
+  std::array<std::uint8_t, kFixedHeaderBytes> header_bytes{};
+  if(!read_exact(input, header_bytes.data(), header_bytes.size()))
     return false;
 
   DecodedHeader header;
-  std::size_t cursor = 0U;
   std::string decode_error;
-  if(!decode_fixed_header(header_bytes, header, cursor, decode_error))
+  if(!decode_fixed_header(
+         std::span<const std::uint8_t>(header_bytes.data(), header_bytes.size()),
+         header, decode_error) || expected_file_size(header) != size)
     return false;
 
-  const std::uint64_t metadata_bytes =
-      static_cast<std::uint64_t>(header.song_id_length) +
-      static_cast<std::uint64_t>(header.song_name_length) +
-      static_cast<std::uint64_t>(header.take_name_length) +
-      static_cast<std::uint64_t>(header.source_length);
-  const std::uint64_t expected = static_cast<std::uint64_t>(kFixedHeaderBytes) +
-      metadata_bytes + header.frame_count * 512ULL + 8ULL;
-  if(expected != size) return false;
-
-  std::vector<char> metadata(static_cast<std::size_t>(metadata_bytes));
-  if(!metadata.empty()) {
-    input.read(metadata.data(), static_cast<std::streamsize>(metadata.size()));
-    if(input.gcount() != static_cast<std::streamsize>(metadata.size()))
-      return false;
-  }
-
-  std::size_t metadata_cursor = 0U;
-  const auto take_text = [&](std::uint32_t length) -> std::string {
-    const std::size_t count = static_cast<std::size_t>(length);
-    if(metadata_cursor + count > metadata.size()) return {};
-    std::string value(metadata.data() + metadata_cursor, count);
-    metadata_cursor += count;
-    return value;
+  auto read_text = [&](std::uint32_t length, std::string& value) -> bool {
+    value.resize(length);
+    return length == 0U || read_exact(
+        input, reinterpret_cast<std::uint8_t*>(value.data()), value.size());
   };
+
   entry.path = source;
-  entry.song_id = take_text(header.song_id_length);
-  entry.song_name = take_text(header.song_name_length);
-  entry.take_name = take_text(header.take_name_length);
-  entry.source_ipv4 = take_text(header.source_length);
+  if(!read_text(header.song_id_length, entry.song_id) ||
+     !read_text(header.song_name_length, entry.song_name) ||
+     !read_text(header.take_name_length, entry.take_name) ||
+     !read_text(header.source_length, entry.source_ipv4))
+    return false;
   entry.port_address = header.port_address;
   entry.frames_per_second = header.frames_per_second;
   entry.frame_count = header.frame_count;
   entry.modified = std::filesystem::last_write_time(source, error);
   return !error;
+}
+
+bool write_probe(const std::filesystem::path& path,
+                 std::string& error_message) {
+  FILE* file = open_binary_write(path);
+  if(file == nullptr) {
+    set_error(error_message, "Could not create a write probe in Take library");
+    return false;
+  }
+  constexpr std::array<std::uint8_t, 5> probe{'A', 'E', 'Y', 'L', 'A'};
+  const bool written = write_raw(file, probe.data(), probe.size(), error_message);
+  const bool synced = written && sync_file(file);
+  const bool closed = std::fclose(file) == 0;
+  if(!written) return false;
+  if(!synced) {
+    set_error(error_message, "Could not flush Take library write probe");
+    return false;
+  }
+  if(!closed) {
+    set_error(error_message, "Could not close Take library write probe");
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -458,8 +448,7 @@ bool prepare_take_directory(const std::filesystem::path& directory,
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto probe = directory / (".aeyla_write_probe_" +
                                    std::to_string(stamp) + ".tmp");
-  std::vector<std::uint8_t> payload{'A', 'E', 'Y', 'L', 'A'};
-  if(!write_bytes_sync(probe, payload, error_message)) {
+  if(!write_probe(probe, error_message)) {
     remove_quietly(probe);
     return false;
   }
@@ -503,47 +492,72 @@ bool save_take_file_atomic(const std::filesystem::path& target,
   const std::uint64_t frame_count = take.frames.size();
   const std::uint64_t metadata_bytes = song_id.size() + song_name.size() +
                                        take.name.size() + take.source_ipv4.size();
-  const std::uint64_t total_without_checksum =
+  const std::uint64_t total_bytes =
       static_cast<std::uint64_t>(kFixedHeaderBytes) + metadata_bytes +
-      frame_count * 512ULL;
-  if(total_without_checksum + 8ULL > kMaximumTakeFileBytes) {
+      frame_count * 512ULL + 8ULL;
+  if(total_bytes > kMaximumTakeFileBytes) {
     set_error(error_message, "Encoded Take exceeds the 128 MiB file limit");
     return false;
   }
 
-  std::vector<std::uint8_t> bytes;
-  bytes.reserve(static_cast<std::size_t>(total_without_checksum + 8ULL));
-  bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
-  append_u16(bytes, kDmxTakeFileVersion);
-  append_u16(bytes, take.port_address);
-  append_u16(bytes, take.frames_per_second);
-  append_u16(bytes, 0U);
-  append_u64(bytes, frame_count);
-  append_u32(bytes, static_cast<std::uint32_t>(song_id.size()));
-  append_u32(bytes, static_cast<std::uint32_t>(song_name.size()));
-  append_u32(bytes, static_cast<std::uint32_t>(take.name.size()));
-  append_u32(bytes, static_cast<std::uint32_t>(take.source_ipv4.size()));
-  bytes.insert(bytes.end(), song_id.begin(), song_id.end());
-  bytes.insert(bytes.end(), song_name.begin(), song_name.end());
-  bytes.insert(bytes.end(), take.name.begin(), take.name.end());
-  bytes.insert(bytes.end(), take.source_ipv4.begin(), take.source_ipv4.end());
-  for(const auto& frame : take.frames)
-    bytes.insert(bytes.end(), frame.begin(), frame.end());
-  append_u64(bytes, fnv1a(bytes.data(), bytes.size()));
+  std::vector<std::uint8_t> header;
+  header.reserve(kFixedHeaderBytes);
+  header.insert(header.end(), kMagic.begin(), kMagic.end());
+  append_u16(header, kDmxTakeFileVersion);
+  append_u16(header, take.port_address);
+  append_u16(header, take.frames_per_second);
+  append_u16(header, 0U);
+  append_u64(header, frame_count);
+  append_u32(header, static_cast<std::uint32_t>(song_id.size()));
+  append_u32(header, static_cast<std::uint32_t>(song_name.size()));
+  append_u32(header, static_cast<std::uint32_t>(take.name.size()));
+  append_u32(header, static_cast<std::uint32_t>(take.source_ipv4.size()));
+  if(header.size() != kFixedHeaderBytes) {
+    set_error(error_message, "Internal Take header encoder size mismatch");
+    return false;
+  }
 
   const auto temporary = temporary_path(target);
   const auto backup = backup_path(target);
   remove_quietly(temporary);
-  if(!write_bytes_sync(temporary, bytes, error_message)) {
+  FILE* file = open_binary_write(temporary);
+  if(file == nullptr) {
+    set_error(error_message, "Could not open temporary Take file for writing");
+    return false;
+  }
+
+  std::uint64_t hash = kFnvOffset;
+  bool ok = write_hashed(file, header.data(), header.size(), hash, error_message) &&
+            write_hashed_string(file, song_id, hash, error_message) &&
+            write_hashed_string(file, song_name, hash, error_message) &&
+            write_hashed_string(file, take.name, hash, error_message) &&
+            write_hashed_string(file, take.source_ipv4, hash, error_message);
+  for(const auto& frame : take.frames) {
+    if(!ok) break;
+    ok = write_hashed(file, frame.data(), frame.size(), hash, error_message);
+  }
+  const auto trailer = encode_u64(hash);
+  if(ok)
+    ok = write_raw(file, trailer.data(), trailer.size(), error_message);
+  if(ok && !sync_file(file)) {
+    set_error(error_message, "Could not flush Take to stable storage");
+    ok = false;
+  }
+  if(std::fclose(file) != 0 && ok) {
+    set_error(error_message, "Could not close Take file after writing");
+    ok = false;
+  }
+  if(!ok) {
     remove_quietly(temporary);
     return false;
   }
 
+  TakeFileIndexEntry indexed;
   std::string verify_error;
-  const auto verified = load_take_file(temporary, verify_error);
-  if(!verified.has_value() || verified->song_id != song_id ||
-     verified->song_name != song_name || verified->take.name != take.name ||
-     verified->take.frames.size() != take.frames.size()) {
+  if(!inspect_header(temporary, indexed) ||
+     indexed.song_id != song_id || indexed.song_name != song_name ||
+     indexed.take_name != take.name || indexed.frame_count != frame_count ||
+     !verify_checksum_streaming(temporary, verify_error)) {
     set_error(error_message, "Temporary Take failed deterministic read-back: " +
                              verify_error);
     remove_quietly(temporary);
@@ -584,9 +598,64 @@ std::optional<StoredDmxTake> load_take_file(
     const std::filesystem::path& source,
     std::string& error_message) {
   error_message.clear();
-  const auto bytes = read_bounded(source, error_message);
-  if(!bytes.has_value()) return std::nullopt;
-  return decode_complete(source, *bytes, error_message);
+  std::error_code fs_error;
+  const auto size = std::filesystem::file_size(source, fs_error);
+  if(fs_error || size < kFixedHeaderBytes + 8U || size > kMaximumTakeFileBytes) {
+    set_error(error_message, "Take file size is outside the supported bounds");
+    return std::nullopt;
+  }
+
+  std::ifstream input(source, std::ios::binary);
+  if(!input) {
+    set_error(error_message, "Could not open Take file");
+    return std::nullopt;
+  }
+
+  std::array<std::uint8_t, kFixedHeaderBytes> header_bytes{};
+  std::uint64_t hash = kFnvOffset;
+  if(!read_hashed(input, header_bytes.data(), header_bytes.size(), hash)) {
+    set_error(error_message, "Take header is truncated");
+    return std::nullopt;
+  }
+  DecodedHeader header;
+  if(!decode_fixed_header(
+         std::span<const std::uint8_t>(header_bytes.data(), header_bytes.size()),
+         header, error_message) || expected_file_size(header) != size) {
+    if(error_message.empty())
+      set_error(error_message, "Take file length does not match its header");
+    return std::nullopt;
+  }
+
+  StoredDmxTake result;
+  result.source_path = source;
+  if(!read_hashed_string(input, header.song_id_length, result.song_id, hash) ||
+     !read_hashed_string(input, header.song_name_length, result.song_name, hash) ||
+     !read_hashed_string(input, header.take_name_length, result.take.name, hash) ||
+     !read_hashed_string(input, header.source_length, result.take.source_ipv4, hash)) {
+    set_error(error_message, "Take metadata is truncated");
+    return std::nullopt;
+  }
+
+  result.take.port_address = header.port_address;
+  result.take.frames_per_second = header.frames_per_second;
+  result.take.frames.resize(static_cast<std::size_t>(header.frame_count));
+  for(auto& frame : result.take.frames) {
+    if(!read_hashed(input, frame.data(), frame.size(), hash)) {
+      set_error(error_message, "Take DMX payload is truncated");
+      return std::nullopt;
+    }
+  }
+
+  std::array<std::uint8_t, 8> trailer{};
+  if(!read_exact(input, trailer.data(), trailer.size())) {
+    set_error(error_message, "Take checksum trailer is truncated");
+    return std::nullopt;
+  }
+  if(hash != decode_u64(trailer)) {
+    set_error(error_message, "Take checksum mismatch; file may be corrupted");
+    return std::nullopt;
+  }
+  return result;
 }
 
 TakeLibraryScanResult scan_take_directory(
