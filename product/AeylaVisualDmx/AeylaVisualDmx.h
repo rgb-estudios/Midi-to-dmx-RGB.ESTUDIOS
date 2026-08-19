@@ -2,6 +2,8 @@
 
 #include "IPlug_include_in_plug_hdr.h"
 #include "IControls.h"
+#include "capture/artnet_capture_worker.h"
+#include "network/network_interfaces.h"
 #include "product/application_model.h"
 #include "product/project_file_controller.h"
 #include "product/project_identity.h"
@@ -13,13 +15,16 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <thread>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 constexpr int kNumPresets = 1;
 
@@ -71,6 +76,10 @@ public:
   void ReleaseExecutorFromUI(int executorIndex);
   [[nodiscard]] bool SetActiveSongStartFromPlayheadFromUI();
   [[nodiscard]] bool SelectAdjacentSongFromUI(int direction);
+  [[nodiscard]] bool SelectSongFromUI(std::size_t songIndex);
+  [[nodiscard]] std::size_t SongCount() const;
+  [[nodiscard]] std::size_t ActiveSongIndex() const;
+  [[nodiscard]] std::string SongName(std::size_t songIndex) const;
   [[nodiscard]] std::string ActiveSongStatus() const;
   [[nodiscard]] bool SelectAdjacentLookFromUI(int direction);
   [[nodiscard]] std::string ActiveLookStatus() const;
@@ -89,6 +98,31 @@ public:
       std::string_view specification);
   [[nodiscard]] std::string OutputBackendStatus() const;
   [[nodiscard]] std::string OutputBackendError() const;
+
+  // AEYLA Show Player pretest: one independently selectable RX NIC receives
+  // Avolites Art-Net while another selectable TX NIC can drive the physical
+  // node. These settings are intentionally session-local in this gate.
+  [[nodiscard]] bool RefreshNetworkInterfacesFromUI();
+  [[nodiscard]] bool CycleRxInterfaceFromUI(int direction);
+  [[nodiscard]] bool CycleTxInterfaceFromUI(int direction);
+  [[nodiscard]] std::string RxInterfaceStatus() const;
+  [[nodiscard]] std::string TxInterfaceStatus() const;
+  [[nodiscard]] std::size_t NetworkInterfaceCount() const;
+
+  // Takes are kept in memory for this first host-integrated recorder gate. The
+  // next persistence gate will move validated Takes into the .aeylashow package.
+  [[nodiscard]] aeyla::product::AuthoringResult ToggleTakeCaptureFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult ToggleActiveTakePlaybackFromUI();
+  void StopActiveTakePlaybackFromUI();
+  [[nodiscard]] bool TakeRecording() const noexcept;
+  [[nodiscard]] bool TakePlaying() const noexcept;
+  [[nodiscard]] bool HasActiveTake() const;
+  [[nodiscard]] std::string ActiveTakeStatus() const;
+  [[nodiscard]] std::string CaptureInputStatus() const;
+  [[nodiscard]] double ActiveTakePlaybackProgress() const;
+  [[nodiscard]] std::uint64_t CaptureAcceptedPackets() const noexcept;
+  [[nodiscard]] std::uint64_t CaptureSequenceGaps() const noexcept;
+
   [[nodiscard]] std::uint64_t ArtNetSentPackets() const noexcept
   {
     return mArtNetOutput.stats().sent_packets;
@@ -100,6 +134,7 @@ public:
 
   aeyla::product::ProjectFileStatus NewProjectFromUI()
   {
+    StopActiveTakePlaybackFromUI();
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.new_project(
         aeyla::product::generate_project_uuid(),
@@ -116,6 +151,7 @@ public:
   aeyla::product::ProjectFileStatus OpenProjectFromUI(
       const std::filesystem::path& path)
   {
+    StopActiveTakePlaybackFromUI();
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.open(path);
     if(status.succeeded)
@@ -263,6 +299,12 @@ private:
   void SetOutputArmed(bool armed);
   void RefreshOutputBackendFromProjectLocked();
   void PublishOutputFrameLocked(bool renderingOffline);
+  void RestartCaptureInputFromRouting();
+  [[nodiscard]] std::string SelectedRxIpv4() const;
+  [[nodiscard]] std::string SelectedTxIpv4() const;
+  [[nodiscard]] std::string ActiveSongIdLocked() const;
+  [[nodiscard]] bool ActiveTakeFrameForNow(aeyla::DmxUniverse& frame,
+                                            double& progress);
 
   void PrepareProjectForSave()
   {
@@ -322,17 +364,29 @@ private:
     mParameterUpdatePending.store(true, std::memory_order_release);
   }
 
-  // Discrete note events are bounded in the SPSC queue. Absolute transport
-  // state uses a separate latest-state mailbox so MIDI bursts can never cause
-  // Stop/Seek/Loop truth to be lost behind queued note history.
   aeyla::runtime::HostEventIngress<1024> mHostIngress{};
   aeyla::runtime::HostTransportMailbox mHostTransport{};
   mutable std::mutex mModelMutex;
   aeyla::product::ApplicationModel mModel{};
   aeyla::product::ProjectFileController mProjectFiles{mModel};
   aeyla::output::ArtNetOutputWorker mArtNetOutput{};
+  aeyla::capture::ArtNetCaptureWorker mArtNetCapture{};
   std::string mOutputBackendError;
   std::uint64_t mLastArtNetSendErrors{0U};
+
+  mutable std::mutex mNetworkMutex;
+  std::vector<aeyla::network::NetworkInterface> mNetworkInterfaces;
+  std::size_t mRxInterfaceIndex{0U};
+  std::size_t mTxInterfaceIndex{0U};
+  std::string mCaptureInputError;
+
+  mutable std::mutex mTakeMutex;
+  std::map<std::string, std::vector<aeyla::capture::DmxTake>> mTakesBySong;
+  std::chrono::steady_clock::time_point mTakePlaybackStarted{};
+  std::atomic<bool> mTakePlaybackActive{false};
+  std::atomic<bool> mTakeOutputArmOverride{false};
+  std::atomic<double> mTakePlaybackProgress{0.0};
+  std::uint64_t mTakePlaybackGeneration{1000000000ULL};
 
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};
