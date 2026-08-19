@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
@@ -66,9 +67,8 @@ bool read_u32(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
               std::uint32_t& value) noexcept {
   if(cursor + 4U > bytes.size()) return false;
   value = 0U;
-  for(unsigned shift = 0U; shift < 32U; shift += 8U) {
+  for(unsigned shift = 0U; shift < 32U; shift += 8U)
     value |= static_cast<std::uint32_t>(bytes[cursor++]) << shift;
-  }
   return true;
 }
 
@@ -76,9 +76,8 @@ bool read_u64(const std::vector<std::uint8_t>& bytes, std::size_t& cursor,
               std::uint64_t& value) noexcept {
   if(cursor + 8U > bytes.size()) return false;
   value = 0U;
-  for(unsigned shift = 0U; shift < 64U; shift += 8U) {
+  for(unsigned shift = 0U; shift < 64U; shift += 8U)
     value |= static_cast<std::uint64_t>(bytes[cursor++]) << shift;
-  }
   return true;
 }
 
@@ -275,7 +274,7 @@ bool decode_fixed_header(const std::vector<std::uint8_t>& bytes,
                          DecodedHeader& header,
                          std::size_t& cursor,
                          std::string& error_message) {
-  if(bytes.size() < kFixedHeaderBytes + 8U ||
+  if(bytes.size() < kFixedHeaderBytes ||
      !std::equal(kMagic.begin(), kMagic.end(), bytes.begin())) {
     set_error(error_message, "Not an AEYLA Take file or unsupported magic");
     return false;
@@ -620,7 +619,7 @@ TakeLibraryScanResult scan_take_directory(
       error.clear();
       continue;
     }
-    if(entry.path().extension() != kDmxTakeFileExtension)
+    if(entry.path().extension().string() != std::string(kDmxTakeFileExtension))
       continue;
 
     TakeFileIndexEntry indexed;
