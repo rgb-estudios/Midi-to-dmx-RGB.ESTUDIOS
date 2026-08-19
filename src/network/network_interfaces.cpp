@@ -41,9 +41,19 @@ std::string wide_to_utf8(const wchar_t* text) {
 #endif
 
 void normalize(std::vector<NetworkInterface>& interfaces) {
+  // Loopback is useful in automated socket tests but is never a valid
+  // operator-facing Art-Net show route. Exposing 127.0.0.1 in the same selector
+  // as physical NICs allowed the R03 UI to enter a perfectly valid local socket
+  // state that could never reach external lighting hardware.
+  interfaces.erase(
+      std::remove_if(interfaces.begin(), interfaces.end(),
+                     [](const NetworkInterface& item) {
+                       return item.loopback || item.ipv4.rfind("127.", 0U) == 0U;
+                     }),
+      interfaces.end());
+
   std::sort(interfaces.begin(), interfaces.end(),
             [](const NetworkInterface& a, const NetworkInterface& b) {
-              if(a.loopback != b.loopback) return !a.loopback;
               if(a.name != b.name) return a.name < b.name;
               return a.ipv4 < b.ipv4;
             });
