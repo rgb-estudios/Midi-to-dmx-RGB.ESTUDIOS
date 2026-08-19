@@ -4,798 +4,463 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
-#include <cstdint>
 #include <cstdio>
+#include <string>
 
 class AeylaMainControl final : public IControl
 {
 public:
   AeylaMainControl(const IRECT& bounds, AeylaVisualDmx& plug)
-  : IControl(bounds,
-             {kParamBlackout,
-              kParamGrandMaster,
-              kParamRigMode,
-              kParamSource,
-              kParamSpeed,
-              kParamWhiteExtract,
-              kParamAmberExtract,
-              kParamUV})
+  : IControl(bounds, {kParamBlackout})
   , mPlug(plug)
   {
+    (void)mPlug.RefreshNetworkInterfacesFromUI();
   }
 
   void Draw(IGraphics& g) override
   {
     BuildLayout();
-    mPhase = static_cast<double>(mPlug.VisualPhase());
-    mPrimaryColor = FromNormalized(mPlug.ActiveLookColor(false));
-    mSecondaryColor = FromNormalized(mPlug.ActiveLookColor(true));
-
     g.FillRect(kBackground, mRECT);
     DrawHeader(g);
-    DrawSourcePanel(g);
-    DrawCanvas(g);
-    DrawInspector(g);
+    DrawSetlist(g);
+    DrawSongWorkspace(g);
+    DrawRouting(g);
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
-    (void) mod;
+    (void)mod;
     BuildLayout();
 
     if(Contains(mBlackoutButton, x, y))
     {
-      SetValueFromUserInput(GetValue(kValBlackout) > 0.5 ? 0.0 : 1.0, kValBlackout);
+      SetValueFromUserInput(GetValue(0) > 0.5 ? 0.0 : 1.0, 0);
+      SetDirty(false);
       return;
     }
 
-    if(Contains(mRigButton, x, y))
+    if(Contains(mTakeArmButton, x, y))
     {
-      SetValueFromUserInput(GetValue(kValRigMode) > 0.5 ? 0.0 : 1.0, kValRigMode);
+      Report(mPlug.ToggleTakeOutputArmFromUI());
+      SetDirty(false);
       return;
     }
 
-    for(int i = 0; i < static_cast<int>(mSourceButtons.size()); ++i)
+    const std::size_t songCount = mPlug.SongCount();
+    for(std::size_t index = 0; index < songCount && index < mSongRows.size(); ++index)
     {
-      if(Contains(mSourceButtons[static_cast<std::size_t>(i)], x, y))
+      if(Contains(mSongRows[index], x, y))
       {
-        SetValueFromUserInput(static_cast<double>(i) / 4.0, kValSource);
+        if(!mPlug.SelectSongFromUI(index))
+          mMessage = "Song switch blocked while capture is active.";
+        SetDirty(false);
         return;
       }
     }
 
-    if(Contains(mStoreLookButton, x, y))
-    {
-      ReportAuthoringResult(mPlug.StoreLookFromUI());
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mPreviousLookButton, x, y))
-    {
-      (void) mPlug.SelectAdjacentLookFromUI(-1);
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mNextLookButton, x, y))
-    {
-      (void) mPlug.SelectAdjacentLookFromUI(1);
-      SetDirty(false);
-      return;
-    }
     if(Contains(mNewSongButton, x, y))
     {
-      ReportAuthoringResult(mPlug.CreateSongFromUI());
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mPreviousSongButton, x, y))
-    {
-      (void) mPlug.SelectAdjacentSongFromUI(-1);
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mNextSongButton, x, y))
-    {
-      (void) mPlug.SelectAdjacentSongFromUI(1);
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mStoreCueButton, x, y))
-    {
-      ReportAuthoringResult(mPlug.StoreCueAtPlayheadFromUI());
+      Report(mPlug.CreateSongFromUI());
       SetDirty(false);
       return;
     }
 
-    for(int i = 0; i < static_cast<int>(mFixtureButtons.size()); ++i)
+    if(Contains(mRecordButton, x, y))
     {
-      if(Contains(mFixtureButtons[static_cast<std::size_t>(i)], x, y))
-      {
-        mSelectedFixture = i;
-        SetDirty(false);
-        return;
-      }
-    }
-
-    if(Contains(mGrandMasterSlider, x, y))
-    {
-      SetSliderFromX(x, mGrandMasterSlider, kValGrandMaster);
-      return;
-    }
-    if(Contains(mLookIntensitySlider, x, y))
-    {
-      SetLookIntensityFromX(x);
-      return;
-    }
-    if(Contains(mSpeedSlider, x, y))
-    {
-      SetSliderFromX(x, mSpeedSlider, kValSpeed);
-      return;
-    }
-    if(Contains(mWhiteSlider, x, y))
-    {
-      SetSliderFromX(x, mWhiteSlider, kValWhite);
-      return;
-    }
-    if(Contains(mAmberSlider, x, y))
-    {
-      SetSliderFromX(x, mAmberSlider, kValAmber);
-      return;
-    }
-    if(Contains(mUVSlider, x, y))
-    {
-      SetSliderFromX(x, mUVSlider, kValUV);
-      return;
-    }
-    if(Contains(mFixtureMaskButton, x, y))
-    {
-      (void) mPlug.ToggleFixtureInActiveLookFromUI(mSelectedFixture);
+      Report(mPlug.ToggleTakeCaptureFromUI());
       SetDirty(false);
       return;
     }
 
-    if(Contains(mColorTargetButton, x, y))
+    if(Contains(mPlayButton, x, y))
     {
-      mEditingSecondaryColor = !mEditingSecondaryColor;
+      Report(mPlug.ToggleActiveTakePlaybackFromUI());
       SetDirty(false);
       return;
     }
 
-    for(std::size_t i = 0; i < mPaletteButtons.size(); ++i)
+    if(Contains(mStopButton, x, y))
     {
-      if(Contains(mPaletteButtons[i], x, y))
-      {
-        const auto& selected = Palette()[i];
-        (void) mPlug.SetActiveLookColorFromUI(
-            mEditingSecondaryColor,
-            static_cast<float>(selected.R) / 255.0F,
-            static_cast<float>(selected.G) / 255.0F,
-            static_cast<float>(selected.B) / 255.0F);
-        SetDirty(false);
-        return;
-      }
+      mPlug.StopActiveTakePlaybackFromUI();
+      mMessage = "Playback stopped · HOLD current DMX frame.";
+      SetDirty(false);
+      return;
     }
-  }
 
-  void OnMouseDrag(float x, float y, float dX, float dY, const IMouseMod& mod) override
-  {
-    (void) dX;
-    (void) dY;
-    (void) mod;
-
-    if(Contains(mGrandMasterSlider, x, y))
-      SetSliderFromX(x, mGrandMasterSlider, kValGrandMaster);
-    else if(Contains(mLookIntensitySlider, x, y))
-      SetLookIntensityFromX(x);
-    else if(Contains(mSpeedSlider, x, y))
-      SetSliderFromX(x, mSpeedSlider, kValSpeed);
-    else if(Contains(mWhiteSlider, x, y))
-      SetSliderFromX(x, mWhiteSlider, kValWhite);
-    else if(Contains(mAmberSlider, x, y))
-      SetSliderFromX(x, mAmberSlider, kValAmber);
-    else if(Contains(mUVSlider, x, y))
-      SetSliderFromX(x, mUVSlider, kValUV);
+    if(Contains(mRxPrevious, x, y))
+    {
+      if(!mPlug.CycleRxInterfaceFromUI(-1))
+        mMessage = "RX adapter change blocked while recording.";
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mRxNext, x, y))
+    {
+      if(!mPlug.CycleRxInterfaceFromUI(1))
+        mMessage = "RX adapter change blocked while recording.";
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mTxPrevious, x, y))
+    {
+      (void)mPlug.CycleTxInterfaceFromUI(-1);
+      mMessage = "TX route changed · physical output requires re-arm.";
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mTxNext, x, y))
+    {
+      (void)mPlug.CycleTxInterfaceFromUI(1);
+      mMessage = "TX route changed · physical output requires re-arm.";
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mRefreshNetworkButton, x, y))
+    {
+      if(mPlug.RefreshNetworkInterfacesFromUI())
+        mMessage = "Network adapters refreshed.";
+      else
+        mMessage = "No active IPv4 adapters detected.";
+      SetDirty(false);
+      return;
+    }
   }
 
 private:
-  enum EValueIndexes
-  {
-    kValBlackout = 0,
-    kValGrandMaster,
-    kValRigMode,
-    kValSource,
-    kValSpeed,
-    kValWhite,
-    kValAmber,
-    kValUV
-  };
+  static constexpr IColor kBackground{255, 7, 8, 11};
+  static constexpr IColor kPanel{255, 14, 16, 21};
+  static constexpr IColor kPanelRaised{255, 21, 24, 31};
+  static constexpr IColor kPanelSelected{255, 30, 25, 30};
+  static constexpr IColor kLine{255, 43, 48, 59};
+  static constexpr IColor kLineStrong{255, 73, 80, 95};
+  static constexpr IColor kText{255, 235, 238, 242};
+  static constexpr IColor kMuted{255, 135, 143, 157};
+  static constexpr IColor kFaint{255, 88, 95, 108};
+  static constexpr IColor kAccent{255, 229, 48, 61};
+  static constexpr IColor kAccentDark{255, 84, 25, 33};
+  static constexpr IColor kGood{255, 70, 205, 137};
+  static constexpr IColor kWarn{255, 238, 159, 64};
 
-  static constexpr IColor kBackground{255, 8, 9, 12};
-  static constexpr IColor kPanel{255, 17, 19, 24};
-  static constexpr IColor kPanelRaised{255, 24, 27, 34};
-  static constexpr IColor kLine{255, 47, 51, 62};
-  static constexpr IColor kText{255, 236, 238, 242};
-  static constexpr IColor kMuted{255, 139, 145, 158};
-  static constexpr IColor kRed{255, 231, 45, 55};
-  static constexpr IColor kRedDark{255, 113, 20, 28};
-  static constexpr IColor kGreen{255, 57, 211, 132};
-  static constexpr IColor kBlue{255, 59, 140, 246};
-  static constexpr IColor kAmber{255, 245, 154, 43};
-  static constexpr IColor kUV{255, 161, 85, 247};
-
-  static bool Contains(const IRECT& r, float x, float y) noexcept
+  static bool Contains(const IRECT& rect, float x, float y) noexcept
   {
-    return x >= r.L && x <= r.R && y >= r.T && y <= r.B;
+    return x >= rect.L && x <= rect.R && y >= rect.T && y <= rect.B;
   }
 
-  static IColor Mix(const IColor& a, const IColor& b, double t)
+  static void Card(IGraphics& g, const IRECT& rect)
   {
-    t = std::clamp(t, 0.0, 1.0);
-    const auto mixChannel = [t](int x, int y) {
-      return static_cast<int>(std::lround(static_cast<double>(x) +
-                                          (static_cast<double>(y - x) * t)));
-    };
-    return IColor(mixChannel(a.A, b.A),
-                  mixChannel(a.R, b.R),
-                  mixChannel(a.G, b.G),
-                  mixChannel(a.B, b.B));
+    g.FillRoundRect(kPanel, rect, 9.0F);
+    g.DrawRoundRect(kLine, rect, 9.0F, nullptr, 1.0F);
   }
 
-  static IColor FromNormalized(const std::array<float, 3>& color)
+  static void Button(IGraphics& g, const IRECT& rect, const char* label,
+                     const IColor& fill, const IColor& border,
+                     const IColor& text = kText)
   {
-    return IColor(255,
-                  static_cast<int>(std::lround(
-                      std::clamp(color[0], 0.0F, 1.0F) * 255.0F)),
-                  static_cast<int>(std::lround(
-                      std::clamp(color[1], 0.0F, 1.0F) * 255.0F)),
-                  static_cast<int>(std::lround(
-                      std::clamp(color[2], 0.0F, 1.0F) * 255.0F)));
-  }
-
-  static IColor ContrastText(const IColor& color)
-  {
-    const int luminance = color.R * 299 + color.G * 587 + color.B * 114;
-    return luminance > 150000 ? IColor(255, 8, 9, 12) : kText;
-  }
-
-  static const std::array<IColor, 8>& Palette()
-  {
-    static const std::array<IColor, 8> colors = {
-        IColor(255, 255, 255, 255), IColor(255, 232, 28, 45),
-        IColor(255, 245, 154, 43), IColor(255, 30, 88, 232),
-        IColor(255, 30, 211, 232), IColor(255, 220, 47, 196),
-        IColor(255, 44, 205, 105), IColor(255, 118, 48, 220)};
-    return colors;
+    g.FillRoundRect(fill, rect, 6.0F);
+    g.DrawRoundRect(border, rect, 6.0F, nullptr, 1.0F);
+    g.DrawText(IText(10.0F, text, "AeylaUI", EAlign::Center, EVAlign::Middle),
+               label, rect.GetPadded(-4.0F));
   }
 
   void BuildLayout()
   {
-    const float width = mRECT.W();
-    const float height = mRECT.H();
-    const float margin = 16.0F;
-    const float headerH = 70.0F;
-    const float footerH = 36.0F;
-    const float executorH = 122.0F;
-    const float leftW = std::clamp(width * 0.18F, 190.0F, 250.0F);
-    const float rightW = std::clamp(width * 0.23F, 250.0F, 330.0F);
+    constexpr float margin = 14.0F;
+    constexpr float headerHeight = 70.0F;
+    constexpr float footerReserve = 54.0F;
+    constexpr float gap = 10.0F;
+    const float leftWidth = std::clamp(mRECT.W() * 0.22F, 218.0F, 286.0F);
+    const float rightWidth = std::clamp(mRECT.W() * 0.27F, 286.0F, 356.0F);
 
-    mHeader = IRECT(mRECT.L, mRECT.T, mRECT.R, mRECT.T + headerH);
-    mFooter = IRECT(mRECT.L, mRECT.B - footerH, mRECT.R, mRECT.B);
-    mExecutors = IRECT(mRECT.L + margin,
-                       mFooter.T - executorH,
-                       mRECT.R - margin,
-                       mFooter.T - 10.0F);
+    mHeader = IRECT(mRECT.L + margin, mRECT.T + 8.0F,
+                    mRECT.R - margin, mRECT.T + headerHeight);
+    const float contentTop = mHeader.B + 6.0F;
+    const float contentBottom = mRECT.B - footerReserve;
+    mSetlist = IRECT(mRECT.L + margin, contentTop,
+                     mRECT.L + margin + leftWidth, contentBottom);
+    mRouting = IRECT(mRECT.R - margin - rightWidth, contentTop,
+                     mRECT.R - margin, contentBottom);
+    mWorkspace = IRECT(mSetlist.R + gap, contentTop,
+                       mRouting.L - gap, contentBottom);
 
-    const float contentTop = mHeader.B + 10.0F;
-    const float contentBottom = mExecutors.T - 10.0F;
-    mSources = IRECT(mRECT.L + margin,
-                     contentTop,
-                     mRECT.L + margin + leftW,
-                     contentBottom);
-    mInspector = IRECT(mRECT.R - margin - rightW,
-                       contentTop,
-                       mRECT.R - margin,
-                       contentBottom);
-    mCanvas = IRECT(mSources.R + 10.0F,
-                    contentTop,
-                    mInspector.L - 10.0F,
-                    contentBottom);
+    mBlackoutButton = IRECT(mHeader.R - 146.0F, mHeader.T + 14.0F,
+                            mHeader.R, mHeader.B - 14.0F);
+    mTakeArmButton = IRECT(mHeader.R - 302.0F, mHeader.T + 14.0F,
+                           mHeader.R - 154.0F, mHeader.B - 14.0F);
 
-    mBlackoutButton = IRECT(mHeader.R - 152.0F, mHeader.T + 16.0F,
-                            mHeader.R - 16.0F, mHeader.B - 16.0F);
-
-    mRigButton = IRECT(mCanvas.R - 98.0F, mCanvas.T + 14.0F,
-                       mCanvas.R - 14.0F, mCanvas.T + 46.0F);
-    mColorTargetButton = IRECT(mInspector.L + 16.0F, mInspector.T + 104.0F,
-                               mInspector.R - 16.0F, mInspector.T + 130.0F);
-    const float paletteGap = 5.0F;
-    const float paletteWidth =
-        (mInspector.W() - 32.0F - paletteGap * 7.0F) / 8.0F;
-    for(std::size_t i = 0; i < mPaletteButtons.size(); ++i)
+    const IRECT listBody = mSetlist.GetPadded(-10.0F);
+    float top = listBody.T + 42.0F;
+    const float rowHeight = 28.0F;
+    for(std::size_t index = 0; index < mSongRows.size(); ++index)
     {
-      const float left = mInspector.L + 16.0F +
-                         static_cast<float>(i) * (paletteWidth + paletteGap);
-      mPaletteButtons[i] =
-          IRECT(left, mInspector.T + 136.0F, left + paletteWidth,
-                mInspector.T + 162.0F);
+      mSongRows[index] = IRECT(listBody.L, top,
+                               listBody.R, top + rowHeight - 3.0F);
+      top += rowHeight;
     }
-    mFixtureMaskButton = IRECT(mInspector.L + 16.0F, mInspector.T + 169.0F,
-                               mInspector.R - 16.0F, mInspector.T + 195.0F);
+    mNewSongButton = IRECT(listBody.L, mSetlist.B - 42.0F,
+                           listBody.R, mSetlist.B - 12.0F);
 
-    const IRECT sourceArea(mSources.L + 12.0F, mSources.T + 64.0F,
-                           mSources.R - 12.0F, mSources.T + 294.0F);
-    for(int i = 0; i < 5; ++i)
-    {
-      const float top = sourceArea.T + static_cast<float>(i) * 44.0F;
-      mSourceButtons[static_cast<std::size_t>(i)] =
-          IRECT(sourceArea.L, top, sourceArea.R, top + 34.0F);
-    }
+    const IRECT work = mWorkspace.GetPadded(-16.0F);
+    mTimeline = IRECT(work.L, work.T + 128.0F, work.R, work.T + 166.0F);
+    const float buttonTop = mTimeline.B + 18.0F;
+    const float transportGap = 8.0F;
+    const float transportWidth = (work.W() - transportGap * 2.0F) / 3.0F;
+    mRecordButton = IRECT(work.L, buttonTop,
+                          work.L + transportWidth, buttonTop + 42.0F);
+    mPlayButton = IRECT(mRecordButton.R + transportGap, buttonTop,
+                        mRecordButton.R + transportGap + transportWidth,
+                        buttonTop + 42.0F);
+    mStopButton = IRECT(mPlayButton.R + transportGap, buttonTop,
+                        work.R, buttonTop + 42.0F);
 
-    constexpr float navigationWidth = 34.0F;
-    mPreviousLookButton = IRECT(mSources.L + 12.0F, mSources.B - 264.0F,
-                                mSources.L + 12.0F + navigationWidth,
-                                mSources.B - 230.0F);
-    mNextLookButton = IRECT(mSources.R - 12.0F - navigationWidth,
-                            mSources.B - 264.0F, mSources.R - 12.0F,
-                            mSources.B - 230.0F);
-    mLookStatus = IRECT(mPreviousLookButton.R + 6.0F, mSources.B - 264.0F,
-                        mNextLookButton.L - 6.0F, mSources.B - 230.0F);
-    mStoreLookButton = IRECT(mSources.L + 12.0F, mSources.B - 222.0F,
-                             mSources.R - 12.0F, mSources.B - 188.0F);
-    mNewSongButton = IRECT(mSources.L + 12.0F, mSources.B - 180.0F,
-                           mSources.R - 12.0F, mSources.B - 146.0F);
-    mNextSongButton = IRECT(mSources.R - 12.0F - navigationWidth,
-                            mSources.B - 138.0F, mSources.R - 12.0F,
-                            mSources.B - 104.0F);
-    mPreviousSongButton = IRECT(mSources.L + 12.0F, mSources.B - 138.0F,
-                                mSources.L + 12.0F + navigationWidth,
-                                mSources.B - 104.0F);
-    mSongStatus = IRECT(mPreviousSongButton.R + 6.0F, mSources.B - 138.0F,
-                        mNextSongButton.L - 6.0F, mSources.B - 104.0F);
-    mStoreCueButton = IRECT(mSources.L + 12.0F, mSources.B - 96.0F,
-                            mSources.R - 12.0F, mSources.B - 62.0F);
-
-    const float sliderL = mInspector.L + 18.0F;
-    const float sliderR = mInspector.R - 18.0F;
-    float sliderTop = mInspector.T + 205.0F;
-    mGrandMasterSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 57.0F;
-    mLookIntensitySlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 57.0F;
-    mSpeedSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 57.0F;
-    mWhiteSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 57.0F;
-    mAmberSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-    sliderTop += 57.0F;
-    mUVSlider = IRECT(sliderL, sliderTop, sliderR, sliderTop + 30.0F);
-
-    const IRECT mapArea(mCanvas.L + 38.0F, mCanvas.T + 88.0F,
-                        mCanvas.R - 38.0F, mCanvas.B - 44.0F);
-    for(int row = 0; row < 2; ++row)
-    {
-      for(int col = 0; col < 7; ++col)
-      {
-        const int index = row * 7 + col;
-        const float x = mapArea.L + mapArea.W() * (static_cast<float>(col) / 6.0F);
-        const float y = mapArea.T + mapArea.H() * (row == 0 ? 0.28F : 0.72F);
-        mFixtureButtons[static_cast<std::size_t>(index)] =
-            IRECT(x - 18.0F, y - 18.0F, x + 18.0F, y + 18.0F);
-      }
-    }
+    const IRECT route = mRouting.GetPadded(-12.0F);
+    const float cardTop = route.T + 48.0F;
+    mRxCard = IRECT(route.L, cardTop, route.R, cardTop + 112.0F);
+    mTxCard = IRECT(route.L, mRxCard.B + 10.0F,
+                    route.R, mRxCard.B + 122.0F);
+    mRxPrevious = IRECT(mRxCard.L + 10.0F, mRxCard.B - 37.0F,
+                        mRxCard.L + 46.0F, mRxCard.B - 9.0F);
+    mRxNext = IRECT(mRxCard.R - 46.0F, mRxCard.B - 37.0F,
+                    mRxCard.R - 10.0F, mRxCard.B - 9.0F);
+    mTxPrevious = IRECT(mTxCard.L + 10.0F, mTxCard.B - 37.0F,
+                        mTxCard.L + 46.0F, mTxCard.B - 9.0F);
+    mTxNext = IRECT(mTxCard.R - 46.0F, mTxCard.B - 37.0F,
+                    mTxCard.R - 10.0F, mTxCard.B - 9.0F);
+    mRefreshNetworkButton = IRECT(route.L, mTxCard.B + 12.0F,
+                                  route.R, mTxCard.B + 42.0F);
   }
 
   void DrawHeader(IGraphics& g)
   {
-    g.FillRect(kPanel, mHeader);
-    g.DrawLine(kLine, mHeader.L, mHeader.B, mHeader.R, mHeader.B, nullptr, 1.0F);
+    g.DrawText(IText(20.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "AEYLA  /  SHOW PLAYER",
+               IRECT(mHeader.L, mHeader.T, mHeader.L + 360.0F, mHeader.B - 20.0F));
+    const std::string project = mPlug.ProjectName();
+    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               ("RGB ESTUDIOS · " + project +
+                " · HOST-NATIVE CAPTURE/REPLAY PRETEST").c_str(),
+               IRECT(mHeader.L, mHeader.B - 27.0F,
+                     mHeader.L + 620.0F, mHeader.B));
 
-    const IText titleText(25.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IText smallText(11.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    g.DrawText(titleText, "AEYLA  /  VISUAL DMX", IRECT(mHeader.L + 18.0F, mHeader.T + 9.0F,
-                                                         mHeader.L + 390.0F, mHeader.T + 43.0F));
-    g.DrawText(smallText, "GRAPHICAL ALPHA  ·  SHARED STANDALONE + VST3",
-               IRECT(mHeader.L + 19.0F, mHeader.T + 41.0F,
-                     mHeader.L + 460.0F, mHeader.B - 8.0F));
+    const bool blackout = GetValue(0) > 0.5;
+    Button(g, mBlackoutButton, blackout ? "BLACKOUT ON" : "BLACKOUT OFF",
+           blackout ? kAccentDark : kPanelRaised,
+           blackout ? kAccent : kLineStrong,
+           blackout ? kText : kGood);
 
-    const bool midiActive = mPlug.LastMidiNote() >= 0;
-    const IColor midiColor = midiActive ? kGreen : kMuted;
-    g.FillCircle(midiColor, mHeader.L + 500.0F, mHeader.T + 31.0F, 5.0F);
-    char midiLabel[96];
-    std::snprintf(midiLabel, sizeof(midiLabel), "MIDI  %llu  ·  NOTE %d",
-                  static_cast<unsigned long long>(mPlug.MidiEventCount()),
-                  mPlug.LastMidiNote());
-    g.DrawText(smallText, midiLabel,
-               IRECT(mHeader.L + 512.0F, mHeader.T + 16.0F,
-                     mHeader.L + 760.0F, mHeader.T + 47.0F));
-
-    const bool blackout = GetValue(kValBlackout) > 0.5;
-    DrawButton(g, mBlackoutButton,
-               blackout ? "BLACKOUT ON" : "BLACKOUT",
-               blackout ? kRed : kPanelRaised,
-               kText);
+    const bool takeArmed = mPlug.TakeOutputArmed();
+    Button(g, mTakeArmButton,
+           takeArmed ? "TAKE OUTPUT ARMED" : "ARM TAKE OUTPUT",
+           takeArmed ? kGood : kPanelRaised,
+           takeArmed ? kGood : kLineStrong,
+           takeArmed ? IColor(255, 8, 30, 20) : kText);
   }
 
-  void DrawSourcePanel(IGraphics& g)
+  void DrawSetlist(IGraphics& g)
   {
-    DrawPanel(g, mSources);
-    const IText section(13.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IText caption(10.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    g.DrawText(section, "VISUAL SOURCES",
-               IRECT(mSources.L + 14.0F, mSources.T + 14.0F,
-                     mSources.R - 14.0F, mSources.T + 38.0F));
-    g.DrawText(caption, "Click a source to map it across the rig",
-               IRECT(mSources.L + 14.0F, mSources.T + 36.0F,
-                     mSources.R - 14.0F, mSources.T + 58.0F));
+    Card(g, mSetlist);
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "SETLIST",
+               IRECT(mSetlist.L + 12.0F, mSetlist.T + 8.0F,
+                     mSetlist.R - 12.0F, mSetlist.T + 36.0F));
 
-    static constexpr const char* names[] = {"SOLID", "GRADIENT", "WAVE", "NOISE", "CHASE"};
-    const int current = SourceIndex();
-    for(int i = 0; i < 5; ++i)
+    const std::size_t count = mPlug.SongCount();
+    const std::size_t active = mPlug.ActiveSongIndex();
+    for(std::size_t index = 0; index < mSongRows.size(); ++index)
     {
-      DrawButton(g,
-                 mSourceButtons[static_cast<std::size_t>(i)],
-                 names[i],
-                 i == current ? kRedDark : kPanelRaised,
-                 i == current ? kText : kMuted);
-    }
-
-    DrawButton(g, mPreviousLookButton, "<", kPanelRaised, kText);
-    const auto lookStatus = mPlug.ActiveLookStatus();
-    DrawButton(g, mLookStatus, lookStatus.c_str(), kPanelRaised, kMuted);
-    DrawButton(g, mNextLookButton, ">", kPanelRaised, kText);
-    DrawButton(g, mStoreLookButton, "1  ·  STORE LOOK", kPanelRaised, kText);
-    DrawButton(g, mNewSongButton, "2  ·  NEW SONG", kPanelRaised, kText);
-    DrawButton(g, mPreviousSongButton, "<", kPanelRaised, kText);
-    const auto songStatus = mPlug.ActiveSongStatus();
-    DrawButton(g, mSongStatus, songStatus.c_str(), kPanelRaised, kMuted);
-    DrawButton(g, mNextSongButton, ">", kPanelRaised, kText);
-    DrawButton(g, mStoreCueButton, "3  ·  STORE CUE @ PLAYHEAD",
-               kRedDark, kText);
-
-    const IRECT info(mSources.L + 12.0F, mSources.B - 52.0F,
-                     mSources.R - 12.0F, mSources.B - 12.0F);
-    g.FillRoundRect(IColor(255, 12, 13, 17), info, 8.0F);
-    g.FillCircle(kAmber, info.L + 17.0F, info.MH(), 4.0F);
-    const char* outputState = mPlug.OutputArmed()
-                                  ? "LIVE ART-NET OUTPUT ARMED"
-                                  : (mPlug.BackendReady()
-                                         ? "ART-NET READY  /  OUTPUT DISARMED"
-                                         : "PREVIEW  /  OUTPUT OFF");
-    g.DrawText(caption, outputState,
-               IRECT(info.L + 28.0F, info.T + 4.0F,
-                     info.R - 10.0F, info.B - 4.0F));
-  }
-
-  void DrawCanvas(IGraphics& g)
-  {
-    DrawPanel(g, mCanvas);
-    const IText section(13.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IText caption(10.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    g.DrawText(section, "VISUAL CANVAS  /  FIXTURE SAMPLER",
-               IRECT(mCanvas.L + 16.0F, mCanvas.T + 14.0F,
-                     mCanvas.R - 116.0F, mCanvas.T + 38.0F));
-    g.DrawText(caption, "The texture is sampled at each numbered point",
-               IRECT(mCanvas.L + 16.0F, mCanvas.T + 37.0F,
-                     mCanvas.R - 116.0F, mCanvas.T + 58.0F));
-
-    const bool rig14 = GetValue(kValRigMode) > 0.5;
-    DrawButton(g, mRigButton, rig14 ? "RIG 14" : "RIG 10",
-               rig14 ? kBlue : kPanelRaised, kText);
-
-    const IRECT visual(mCanvas.L + 18.0F, mCanvas.T + 68.0F,
-                       mCanvas.R - 18.0F, mCanvas.B - 18.0F);
-    DrawVisualTexture(g, visual);
-
-    const int activeExecutor = mPlug.ActiveExecutor();
-
-    for(int i = 0; i < 14; ++i)
-    {
-      const int col = i % 7;
-      const bool physical = rig14 || col < 5;
-      const IRECT& fixture = mFixtureButtons[static_cast<std::size_t>(i)];
-      const float cx = fixture.MW();
-      const float cy = fixture.MH();
-      const double sample = std::clamp((cx - visual.L) / std::max(1.0F, visual.W()), 0.0F, 1.0F);
-      IColor fixtureColor = SampleColor(sample, cy, visual);
-      if(!physical)
-        fixtureColor = IColor(90, fixtureColor.R, fixtureColor.G, fixtureColor.B);
-
-      const bool selected = i == mSelectedFixture;
-      g.FillCircle(fixtureColor, cx, cy, selected ? 14.0F : 11.0F);
-      g.DrawCircle(selected ? kText : IColor(180, 8, 8, 10), cx, cy,
-                   selected ? 17.0F : 13.0F, nullptr, selected ? 2.5F : 1.5F);
-
-      char label[8];
-      std::snprintf(label, sizeof(label), "%d", i + 1);
-      const IText number(9.0F, physical ? IColor(255, 5, 6, 8) : kMuted,
-                         "AeylaUI", EAlign::Center, EVAlign::Middle);
-      g.DrawText(number, label, fixture);
-    }
-
-    if(activeExecutor >= 0)
-    {
-      char activeText[64];
-      std::snprintf(activeText, sizeof(activeText), "EXECUTOR %02d ACTIVE",
-                    activeExecutor + 1);
-      const IRECT badge(mCanvas.L + 18.0F, mCanvas.B - 54.0F,
-                        mCanvas.L + 170.0F, mCanvas.B - 24.0F);
-      g.FillRoundRect(kRed, badge, 6.0F);
-      const IText badgeText(10.0F, kText, "AeylaUI", EAlign::Center, EVAlign::Middle);
-      g.DrawText(badgeText, activeText, badge);
-    }
-  }
-
-  void DrawVisualTexture(IGraphics& g, const IRECT& visual)
-  {
-    g.FillRoundRect(IColor(255, 5, 6, 9), visual, 10.0F);
-    const int source = SourceIndex();
-    const int strips = 72;
-
-    if(source == 0)
-    {
-      g.FillRoundRect(mPrimaryColor, visual.GetPadded(-2.0F), 9.0F);
-      return;
-    }
-
-    if(source == 1)
-    {
-      for(int i = 0; i < strips; ++i)
+      const IRECT& row = mSongRows[index];
+      if(index >= count)
       {
-        const double t = static_cast<double>(i) / static_cast<double>(strips - 1);
-        const float left = visual.L + visual.W() * static_cast<float>(t);
-        const float right = visual.L + visual.W() * static_cast<float>(i + 1) /
-                                           static_cast<float>(strips);
-        const IColor c = Mix(mPrimaryColor, mSecondaryColor, t);
-        g.FillRect(c, IRECT(left, visual.T, right + 1.0F, visual.B));
+        g.DrawLine(kLine, row.L, row.B, row.R, row.B, nullptr, 1.0F);
+        continue;
       }
-      return;
+
+      const bool selected = index == active;
+      if(selected)
+        g.FillRoundRect(kPanelSelected, row, 5.0F);
+      if(selected)
+        g.DrawRoundRect(kAccent, row, 5.0F, nullptr, 1.0F);
+
+      char number[8];
+      std::snprintf(number, sizeof(number), "%02d", static_cast<int>(index + 1U));
+      g.DrawText(IText(9.0F, selected ? kAccent : kFaint,
+                       "AeylaUI", EAlign::Near, EVAlign::Middle),
+                 number,
+                 IRECT(row.L + 8.0F, row.T, row.L + 34.0F, row.B));
+      std::string name = mPlug.SongName(index);
+      if(name.empty()) name = "Song";
+      g.DrawText(IText(9.0F, selected ? kText : kMuted,
+                       "AeylaUI", EAlign::Near, EVAlign::Middle),
+                 name.c_str(),
+                 IRECT(row.L + 38.0F, row.T, row.R - 8.0F, row.B));
     }
 
-    if(source == 2)
-    {
-      for(int i = 0; i < strips; ++i)
-      {
-        const double t = static_cast<double>(i) / static_cast<double>(strips - 1);
-        const double wave = 0.5 + 0.5 * std::sin((t * 4.0 + mPhase * 2.0) * 3.141592653589793);
-        const IColor c = Mix(mPrimaryColor, mSecondaryColor, wave);
-        const float left = visual.L + visual.W() * static_cast<float>(t);
-        const float right = visual.L + visual.W() * static_cast<float>(i + 1) /
-                                           static_cast<float>(strips);
-        g.FillRect(c, IRECT(left, visual.T, right + 1.0F, visual.B));
-      }
-      return;
-    }
-
-    if(source == 3)
-    {
-      constexpr int cols = 18;
-      constexpr int rows = 10;
-      for(int row = 0; row < rows; ++row)
-      {
-        for(int col = 0; col < cols; ++col)
-        {
-          const std::uint32_t seed = static_cast<std::uint32_t>(
-              col * 73856093U ^ row * 19349663U ^
-              static_cast<int>(mPhase * 60.0) * 83492791U);
-          const double n = static_cast<double>((seed >> 8U) & 255U) / 255.0;
-          const IColor c = Mix(mPrimaryColor, mSecondaryColor, n);
-          const float cellW = visual.W() / static_cast<float>(cols);
-          const float cellH = visual.H() / static_cast<float>(rows);
-          g.FillRect(c, IRECT(visual.L + col * cellW,
-                              visual.T + row * cellH,
-                              visual.L + (col + 1) * cellW + 1.0F,
-                              visual.T + (row + 1) * cellH + 1.0F));
-        }
-      }
-      return;
-    }
-
-    g.FillRect(IColor(255, 7, 8, 11), visual);
-    const float chaseW = std::max(40.0F, visual.W() * 0.18F);
-    const float centre = visual.L + static_cast<float>(mPhase) * (visual.W() + chaseW) - chaseW;
-    for(int i = 0; i < 36; ++i)
-    {
-      const double t = static_cast<double>(i) / 35.0;
-      const float left = centre - chaseW * 0.5F + chaseW * static_cast<float>(t);
-      const IColor c = Mix(mSecondaryColor, mPrimaryColor,
-                           1.0 - std::abs(t * 2.0 - 1.0));
-      g.FillRect(c, IRECT(left, visual.T, left + chaseW / 35.0F + 1.0F, visual.B));
-    }
+    Button(g, mNewSongButton,
+           count >= 15U ? "15 SONG LIMIT" : "+ NEW SONG",
+           kPanelRaised, kLineStrong, count >= 15U ? kFaint : kText);
   }
 
-  IColor SampleColor(double normalizedX, float y, const IRECT& visual) const
+  void DrawSongWorkspace(IGraphics& g)
   {
-    const int source = SourceIndex();
-    if(source == 0)
-      return mPrimaryColor;
-    if(source == 1)
-      return Mix(mPrimaryColor, mSecondaryColor, normalizedX);
-    if(source == 2)
-    {
-      const double wave = 0.5 + 0.5 * std::sin((normalizedX * 4.0 + mPhase * 2.0) *
-                                               3.141592653589793);
-      return Mix(mPrimaryColor, mSecondaryColor, wave);
-    }
-    if(source == 3)
-    {
-      const int row = static_cast<int>(10.0F * (y - visual.T) / std::max(1.0F, visual.H()));
-      const int col = static_cast<int>(18.0 * normalizedX);
-      const std::uint32_t seed = static_cast<std::uint32_t>(
-          col * 73856093U ^ row * 19349663U ^
-          static_cast<int>(mPhase * 60.0) * 83492791U);
-      const double n = static_cast<double>((seed >> 8U) & 255U) / 255.0;
-      return Mix(mPrimaryColor, mSecondaryColor, n);
-    }
+    Card(g, mWorkspace);
+    const IRECT work = mWorkspace.GetPadded(-16.0F);
+    const std::size_t count = mPlug.SongCount();
+    const std::size_t active = mPlug.ActiveSongIndex();
 
-    const double distance = std::abs(normalizedX - mPhase);
-    const double intensity = std::clamp(1.0 - distance * 7.0, 0.0, 1.0);
-    return Mix(mSecondaryColor, mPrimaryColor, intensity);
+    std::string title = "NO SONG SELECTED";
+    if(count > 0U)
+    {
+      char prefix[32];
+      std::snprintf(prefix, sizeof(prefix), "%02d / %02d  ·  ",
+                    static_cast<int>(active + 1U), static_cast<int>(count));
+      title = prefix + mPlug.SongName(active);
+    }
+    g.DrawText(IText(18.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               title.c_str(), IRECT(work.L, work.T, work.R, work.T + 36.0F));
+    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "AUTHORING SOURCE  AVOLITES TITAN  →  ART-NET U1  →  TAKE",
+               IRECT(work.L, work.T + 39.0F, work.R, work.T + 61.0F));
+
+    const std::string take = mPlug.ActiveTakeStatus();
+    g.DrawText(IText(11.0F, mPlug.TakeRecording() ? kAccent : kText,
+                     "AeylaUI", EAlign::Near, EVAlign::Middle),
+               take.c_str(), IRECT(work.L, work.T + 74.0F,
+                                   work.R, work.T + 104.0F));
+
+    g.FillRoundRect(IColor(255, 9, 11, 15), mTimeline, 5.0F);
+    g.DrawRoundRect(kLine, mTimeline, 5.0F, nullptr, 1.0F);
+    const double progress = mPlug.ActiveTakePlaybackProgress();
+    if(progress > 0.0)
+    {
+      const float right = mTimeline.L +
+          static_cast<float>(std::clamp(progress, 0.0, 1.0)) * mTimeline.W();
+      g.FillRoundRect(kAccentDark,
+                      IRECT(mTimeline.L, mTimeline.T, right, mTimeline.B), 5.0F);
+    }
+    char percent[32];
+    std::snprintf(percent, sizeof(percent), "%03d%%",
+                  static_cast<int>(std::clamp(progress, 0.0, 1.0) * 100.0));
+    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Far, EVAlign::Middle),
+               percent, mTimeline.GetPadded(-10.0F));
+
+    Button(g, mRecordButton,
+           mPlug.TakeRecording() ? "STOP + SAVE TAKE" : "RECORD NEW TAKE",
+           mPlug.TakeRecording() ? kAccentDark : kPanelRaised,
+           mPlug.TakeRecording() ? kAccent : kLineStrong);
+    Button(g, mPlayButton,
+           mPlug.TakePlaying() ? "STOP / HOLD" : "PLAY ACTIVE TAKE",
+           mPlug.TakePlaying() ? kGood : kPanelRaised,
+           mPlug.TakePlaying() ? kGood : kLineStrong,
+           mPlug.TakePlaying() ? IColor(255, 8, 30, 20) : kText);
+    Button(g, mStopButton, "STOP / HOLD", kPanelRaised, kLineStrong);
+
+    const float infoTop = mStopButton.B + 28.0F;
+    g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "CAPTURE CONTRACT",
+               IRECT(work.L, infoTop, work.R, infoTop + 24.0F));
+    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Top),
+               "· 512 DMX slots / one Art-Net universe\n"
+               "· normalized recording at 44 Hz\n"
+               "· first Art-Net source locks during each Take\n"
+               "· STOP holds the current frame; DISARM is explicit\n"
+               "· host heartbeat / offline render can auto-disarm output\n"
+               "· Takes are RAM-only in this PRETEST build",
+               IRECT(work.L, infoTop + 27.0F, work.R,
+                     std::min(work.B - 58.0F, infoTop + 140.0F)));
+
+    const IRECT messageRect(work.L, work.B - 48.0F, work.R, work.B);
+    g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
+    const std::string message = mMessage.empty()
+        ? "Ready. Select a Song, confirm RX LIVE, record a Take, then test replay."
+        : mMessage;
+    g.DrawText(IText(9.0F, mMessage.empty() ? kFaint : kWarn,
+                     "AeylaUI", EAlign::Near, EVAlign::Middle),
+               message.c_str(), messageRect.GetPadded(-10.0F));
   }
 
-  void DrawInspector(IGraphics& g)
+  void DrawRouting(IGraphics& g)
   {
-    DrawPanel(g, mInspector);
-    const IText section(13.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IText caption(10.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IText valueText(11.0F, kText, "AeylaUI", EAlign::Far, EVAlign::Middle);
+    Card(g, mRouting);
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "ROUTING",
+               IRECT(mRouting.L + 12.0F, mRouting.T + 8.0F,
+                     mRouting.R - 12.0F, mRouting.T + 36.0F));
 
-    g.DrawText(section, "FIXTURE INSPECTOR",
-               IRECT(mInspector.L + 16.0F, mInspector.T + 14.0F,
-                     mInspector.R - 16.0F, mInspector.T + 38.0F));
+    DrawRouteCard(g, mRxCard, "ART-NET INPUT / RX",
+                  mPlug.RxInterfaceStatus(), mPlug.CaptureInputStatus(),
+                  mRxPrevious, mRxNext,
+                  mPlug.CaptureAcceptedPackets() > 0U ? kGood : kWarn);
+    DrawRouteCard(g, mTxCard, "ART-NET OUTPUT / TX",
+                  mPlug.TxInterfaceStatus(), mPlug.OutputBackendStatus(),
+                  mTxPrevious, mTxNext,
+                  mPlug.BackendReady() ? kGood : kWarn);
 
-    char fixtureName[64];
-    std::snprintf(fixtureName, sizeof(fixtureName), "FIXTURE %02d  ·  %s%d",
-                  mSelectedFixture + 1,
-                  mSelectedFixture < 7 ? "L" : "R",
-                  (mSelectedFixture % 7) + 1);
-    g.DrawText(IText(17.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               fixtureName,
-               IRECT(mInspector.L + 16.0F, mInspector.T + 48.0F,
-                     mInspector.R - 16.0F, mInspector.T + 77.0F));
-    g.DrawText(caption, "PROFILE  ·  RGBWALUV 13CH",
-               IRECT(mInspector.L + 16.0F, mInspector.T + 78.0F,
-                     mInspector.R - 16.0F, mInspector.T + 101.0F));
-    DrawButton(g, mColorTargetButton,
-               mEditingSecondaryColor ? "EDITING SECONDARY COLOR"
-                                      : "EDITING PRIMARY COLOR",
-               mEditingSecondaryColor ? mSecondaryColor : mPrimaryColor,
-               ContrastText(mEditingSecondaryColor ? mSecondaryColor
-                                                   : mPrimaryColor));
+    Button(g, mRefreshNetworkButton, "REFRESH NETWORK ADAPTERS",
+           kPanelRaised, kLineStrong);
 
-    const auto& palette = Palette();
-    for(std::size_t i = 0; i < mPaletteButtons.size(); ++i)
-    {
-      const IRECT& swatch = mPaletteButtons[i];
-      const auto& color = palette[i];
-      g.FillRoundRect(color, swatch, 4.0F);
-      const IColor& active = mEditingSecondaryColor ? mSecondaryColor : mPrimaryColor;
-      const bool selected = color.R == active.R && color.G == active.G &&
-                            color.B == active.B;
-      g.DrawRoundRect(selected ? ContrastText(color) : kLine, swatch, 4.0F, nullptr,
-                      selected ? 2.5F : 1.0F);
-    }
-
-    const bool included = mPlug.FixtureIncludedInActiveLook(mSelectedFixture);
-    DrawButton(g, mFixtureMaskButton,
-               included ? "FIXTURE INCLUDED IN LOOK" : "FIXTURE EXCLUDED FROM LOOK",
-               included ? kPanelRaised : kRedDark,
-               included ? kGreen : kText);
-
-    DrawSlider(g, mGrandMasterSlider, "GRAND MASTER", GetValue(kValGrandMaster), kRed, valueText);
-    DrawSlider(g, mLookIntensitySlider, "LOOK INTENSITY",
-               mPlug.ActiveLookIntensity(), kGreen, valueText);
-    DrawSlider(g, mSpeedSlider, "ANIMATION SPEED", GetValue(kValSpeed), kBlue, valueText);
-    DrawSlider(g, mWhiteSlider, "WHITE EXTRACTION", GetValue(kValWhite), kText, valueText);
-    DrawSlider(g, mAmberSlider, "AMBER EXTRACTION", GetValue(kValAmber), kAmber, valueText);
-    DrawSlider(g, mUVSlider, "UV MANUAL", GetValue(kValUV), kUV, valueText);
+    const float infoTop = mRefreshNetworkButton.B + 14.0F;
+    char diagnostics[160];
+    std::snprintf(diagnostics, sizeof(diagnostics),
+                  "NICs %llu  ·  RX PKT %llu  ·  SEQ GAP %llu  ·  TX PKT %llu  ·  ERR %llu",
+                  static_cast<unsigned long long>(mPlug.NetworkInterfaceCount()),
+                  static_cast<unsigned long long>(mPlug.CaptureAcceptedPackets()),
+                  static_cast<unsigned long long>(mPlug.CaptureSequenceGaps()),
+                  static_cast<unsigned long long>(mPlug.ArtNetSentPackets()),
+                  static_cast<unsigned long long>(mPlug.ArtNetSendErrors()));
+    g.DrawText(IText(8.5F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Top),
+               diagnostics,
+               IRECT(mRouting.L + 14.0F, infoTop,
+                     mRouting.R - 14.0F, infoTop + 52.0F));
   }
 
-  void ReportAuthoringResult(const aeyla::product::AuthoringResult& result)
+  void DrawRouteCard(IGraphics& g, const IRECT& rect,
+                     const char* title, const std::string& adapter,
+                     const std::string& signal, const IRECT& previous,
+                     const IRECT& next, const IColor& statusColor)
   {
+    g.FillRoundRect(kPanelRaised, rect, 7.0F);
+    g.DrawRoundRect(kLine, rect, 7.0F, nullptr, 1.0F);
+    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               title, IRECT(rect.L + 10.0F, rect.T + 7.0F,
+                            rect.R - 10.0F, rect.T + 27.0F));
+    g.DrawText(IText(9.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               adapter.c_str(), IRECT(rect.L + 10.0F, rect.T + 29.0F,
+                                      rect.R - 10.0F, rect.T + 54.0F));
+    g.DrawText(IText(8.5F, statusColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               signal.c_str(), IRECT(rect.L + 10.0F, rect.T + 55.0F,
+                                     rect.R - 10.0F, rect.T + 79.0F));
+    Button(g, previous, "<", kPanel, kLineStrong);
+    Button(g, next, ">", kPanel, kLineStrong);
+  }
+
+  void Report(const aeyla::product::AuthoringResult& result)
+  {
+    mMessage = result.message;
     if(result.succeeded)
       return;
     if(auto* ui = GetUI())
-      ui->ShowMessageBox(result.message.c_str(), "AEYLA · AUTHORING", kMB_OK);
-  }
-
-  void DrawPanel(IGraphics& g, const IRECT& r)
-  {
-    g.FillRoundRect(kPanel, r, 10.0F);
-    g.DrawRoundRect(kLine, r, 10.0F, nullptr, 1.0F);
-  }
-
-  void DrawButton(IGraphics& g,
-                  const IRECT& r,
-                  const char* label,
-                  const IColor& fill,
-                  const IColor& textColor)
-  {
-    g.FillRoundRect(fill, r, 7.0F);
-    g.DrawRoundRect(kLine, r, 7.0F, nullptr, 1.0F);
-    g.DrawText(IText(10.0F, textColor, "AeylaUI", EAlign::Center, EVAlign::Middle),
-               label, r.GetPadded(-4.0F));
-  }
-
-  void DrawSlider(IGraphics& g,
-                  const IRECT& r,
-                  const char* label,
-                  double value,
-                  const IColor& accent,
-                  const IText& valueText)
-  {
-    const IText labelText(10.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle);
-    const IRECT labelRect(r.L, r.T - 24.0F, r.R, r.T - 4.0F);
-    g.DrawText(labelText, label, labelRect);
-
-    char valueLabel[16];
-    std::snprintf(valueLabel, sizeof(valueLabel), "%d%%",
-                  static_cast<int>(std::lround(value * 100.0)));
-    g.DrawText(valueText, valueLabel, labelRect);
-
-    const IRECT track(r.L, r.MH() - 4.0F, r.R, r.MH() + 4.0F);
-    g.FillRoundRect(IColor(255, 35, 38, 46), track, 4.0F);
-    const float fillR = track.L + track.W() * static_cast<float>(value);
-    if(fillR > track.L)
-      g.FillRoundRect(accent, IRECT(track.L, track.T, fillR, track.B), 4.0F);
-    g.FillCircle(kText, fillR, track.MH(), 6.0F);
-  }
-
-  void SetSliderFromX(float x, const IRECT& slider, int valueIndex)
-  {
-    const double value = std::clamp((x - slider.L) / std::max(1.0F, slider.W()),
-                                    0.0F, 1.0F);
-    SetValueFromUserInput(value, valueIndex);
-  }
-
-  void SetLookIntensityFromX(float x)
-  {
-    const float value = std::clamp(
-        (x - mLookIntensitySlider.L) /
-            std::max(1.0F, mLookIntensitySlider.W()),
-        0.0F, 1.0F);
-    (void) mPlug.SetActiveLookIntensityFromUI(value);
-    SetDirty(false);
-  }
-
-  int SourceIndex() const
-  {
-    return std::clamp(static_cast<int>(std::lround(GetValue(kValSource) * 4.0)), 0, 4);
+      ui->ShowMessageBox(result.message.c_str(), "AEYLA · OPERATION BLOCKED", kMB_OK);
   }
 
   AeylaVisualDmx& mPlug;
-  double mPhase{0.0};
-  int mSelectedFixture{0};
+  std::string mMessage;
 
   IRECT mHeader{};
-  IRECT mFooter{};
-  IRECT mSources{};
-  IRECT mCanvas{};
-  IRECT mInspector{};
-  IRECT mExecutors{};
+  IRECT mSetlist{};
+  IRECT mWorkspace{};
+  IRECT mRouting{};
   IRECT mBlackoutButton{};
-  IRECT mRigButton{};
-  IRECT mColorTargetButton{};
-  std::array<IRECT, 8> mPaletteButtons{};
-  IRECT mFixtureMaskButton{};
-  IRECT mGrandMasterSlider{};
-  IRECT mLookIntensitySlider{};
-  IRECT mSpeedSlider{};
-  IRECT mWhiteSlider{};
-  IRECT mAmberSlider{};
-  IRECT mUVSlider{};
-  std::array<IRECT, 5> mSourceButtons{};
-  IRECT mStoreLookButton{};
-  IRECT mPreviousLookButton{};
-  IRECT mLookStatus{};
-  IRECT mNextLookButton{};
+  IRECT mTakeArmButton{};
+  std::array<IRECT, 15> mSongRows{};
   IRECT mNewSongButton{};
-  IRECT mPreviousSongButton{};
-  IRECT mSongStatus{};
-  IRECT mNextSongButton{};
-  IRECT mStoreCueButton{};
-  std::array<IRECT, 14> mFixtureButtons{};
-  bool mEditingSecondaryColor{false};
-  IColor mPrimaryColor{255, 232, 28, 45};
-  IColor mSecondaryColor{255, 245, 154, 43};
+  IRECT mTimeline{};
+  IRECT mRecordButton{};
+  IRECT mPlayButton{};
+  IRECT mStopButton{};
+  IRECT mRxCard{};
+  IRECT mTxCard{};
+  IRECT mRxPrevious{};
+  IRECT mRxNext{};
+  IRECT mTxPrevious{};
+  IRECT mTxNext{};
+  IRECT mRefreshNetworkButton{};
 };
