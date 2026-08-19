@@ -3,6 +3,7 @@
 #include "IPlug_include_in_plug_hdr.h"
 #include "IControls.h"
 #include "capture/artnet_capture_worker.h"
+#include "capture/dmx_take_scheduler.h"
 #include "network/network_interfaces.h"
 #include "product/application_model.h"
 #include "product/project_file_controller.h"
@@ -99,9 +100,6 @@ public:
   [[nodiscard]] std::string OutputBackendStatus() const;
   [[nodiscard]] std::string OutputBackendError() const;
 
-  // AEYLA Show Player pretest: one independently selectable RX NIC receives
-  // Avolites Art-Net while another selectable TX NIC can drive the physical
-  // node. These settings are intentionally session-local in this gate.
   [[nodiscard]] bool RefreshNetworkInterfacesFromUI();
   [[nodiscard]] bool CycleRxInterfaceFromUI(int direction);
   [[nodiscard]] bool CycleTxInterfaceFromUI(int direction);
@@ -109,13 +107,16 @@ public:
   [[nodiscard]] std::string TxInterfaceStatus() const;
   [[nodiscard]] std::size_t NetworkInterfaceCount() const;
 
-  // Takes are kept in memory for this first host-integrated recorder gate. The
-  // next persistence gate will move validated Takes into the .aeylashow package.
+  // Host-integrated Avolites recorder gate. Takes are deliberately volatile in
+  // this first build; persistence into .aeylashow is enabled only after replay
+  // fidelity and host behaviour pass real-machine tests.
   [[nodiscard]] aeyla::product::AuthoringResult ToggleTakeCaptureFromUI();
   [[nodiscard]] aeyla::product::AuthoringResult ToggleActiveTakePlaybackFromUI();
   void StopActiveTakePlaybackFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult ToggleTakeOutputArmFromUI();
   [[nodiscard]] bool TakeRecording() const noexcept;
   [[nodiscard]] bool TakePlaying() const noexcept;
+  [[nodiscard]] bool TakeOutputArmed() const noexcept;
   [[nodiscard]] bool HasActiveTake() const;
   [[nodiscard]] std::string ActiveTakeStatus() const;
   [[nodiscard]] std::string CaptureInputStatus() const;
@@ -135,6 +136,7 @@ public:
   aeyla::product::ProjectFileStatus NewProjectFromUI()
   {
     StopActiveTakePlaybackFromUI();
+    mTakeScheduler.disarm();
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.new_project(
         aeyla::product::generate_project_uuid(),
@@ -152,6 +154,7 @@ public:
       const std::filesystem::path& path)
   {
     StopActiveTakePlaybackFromUI();
+    mTakeScheduler.disarm();
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.open(path);
     if(status.succeeded)
@@ -303,8 +306,6 @@ private:
   [[nodiscard]] std::string SelectedRxIpv4() const;
   [[nodiscard]] std::string SelectedTxIpv4() const;
   [[nodiscard]] std::string ActiveSongIdLocked() const;
-  [[nodiscard]] bool ActiveTakeFrameForNow(aeyla::DmxUniverse& frame,
-                                            double& progress);
 
   void PrepareProjectForSave()
   {
@@ -382,11 +383,7 @@ private:
 
   mutable std::mutex mTakeMutex;
   std::map<std::string, std::vector<aeyla::capture::DmxTake>> mTakesBySong;
-  std::chrono::steady_clock::time_point mTakePlaybackStarted{};
-  std::atomic<bool> mTakePlaybackActive{false};
-  std::atomic<bool> mTakeOutputArmOverride{false};
-  std::atomic<double> mTakePlaybackProgress{0.0};
-  std::uint64_t mTakePlaybackGeneration{1000000000ULL};
+  aeyla::capture::DmxTakeScheduler mTakeScheduler{};
 
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};
