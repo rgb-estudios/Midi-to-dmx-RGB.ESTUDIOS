@@ -1,7 +1,6 @@
 #include "AeylaVisualDmx.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -57,6 +56,7 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
   if(TakeRecording())
     return false;
   StopActiveTakePlaybackFromUI();
+  mTakeScheduler.disarm();
 
   const std::scoped_lock lock(mModelMutex);
   if(!mModel.select_song(songIndex))
@@ -73,7 +73,6 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
         });
   }
   mActiveSongBound.store(bound, std::memory_order_release);
-  mTakePlaybackProgress.store(0.0, std::memory_order_release);
   mParamBlackout.store(true, std::memory_order_release);
   mLastProjectedSongId.clear();
   mLastProjectedTick = 0U;
@@ -116,6 +115,8 @@ bool AeylaVisualDmx::RefreshNetworkInterfacesFromUI()
       mCaptureInputError = "No active IPv4 network adapters detected";
   }
 
+  mArtNetOutput.set_preferred_source_ipv4(SelectedTxIpv4());
+  mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   RestartCaptureInputFromRouting();
   return !discovered.empty();
 }
@@ -146,8 +147,7 @@ bool AeylaVisualDmx::CycleTxInterfaceFromUI(int direction)
   if(direction == 0)
     return false;
 
-  // A routing mutation is always a safe boundary. Physical output must be
-  // explicitly re-armed after the selected TX adapter changes.
+  mTakeScheduler.disarm();
   ForceDisarmFromUI();
   {
     const std::scoped_lock lock(mNetworkMutex);
@@ -156,6 +156,7 @@ bool AeylaVisualDmx::CycleTxInterfaceFromUI(int direction)
     mTxInterfaceIndex = WrapIndex(mTxInterfaceIndex, direction,
                                   mNetworkInterfaces.size());
   }
+  mArtNetOutput.set_preferred_source_ipv4(SelectedTxIpv4());
 
   const std::scoped_lock lock(mModelMutex);
   RefreshOutputBackendFromProjectLocked();
@@ -262,8 +263,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
       const std::scoped_lock takeLock(mTakeMutex);
       auto& versions = mTakesBySong[songId];
       versions.push_back(std::move(*take));
-      // The host-integrated pretest retains a short rollback history in RAM.
-      // Persisted/versioned Takes are a separate package-format gate.
       constexpr std::size_t kMaximumVolatileTakesPerSong = 5U;
       if(versions.size() > kMaximumVolatileTakesPerSong)
         versions.erase(versions.begin(),
@@ -271,13 +270,12 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
                            static_cast<std::ptrdiff_t>(
                                versions.size() - kMaximumVolatileTakesPerSong));
     }
-    mTakePlaybackProgress.store(0.0, std::memory_order_release);
     return {true, takeName,
             takeName + " captured · " + FormatDuration(duration) +
                 " · 44 Hz · VOLATILE PRETEST"};
   }
 
-  if(OutputArmed())
+  if(OutputArmed() || TakeOutputArmed())
     return {false, {}, "DISARM physical output before recording from Avolites"};
   if(TakePlaying())
     return {false, {}, "Stop Take playback before recording a new Take"};
@@ -304,7 +302,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
   std::string error;
   if(!mArtNetCapture.begin_recording(error))
     return {false, {}, error};
-  mTakePlaybackProgress.store(0.0, std::memory_order_release);
   return {true, {}, "Recording DMX Take from " + stats.source_ipv4};
 }
 
@@ -315,7 +312,12 @@ bool AeylaVisualDmx::TakeRecording() const noexcept
 
 bool AeylaVisualDmx::TakePlaying() const noexcept
 {
-  return mTakePlaybackActive.load(std::memory_order_acquire);
+  return mTakeScheduler.status().playing;
+}
+
+bool AeylaVisualDmx::TakeOutputArmed() const noexcept
+{
+  return mTakeScheduler.status().armed;
 }
 
 bool AeylaVisualDmx::HasActiveTake() const
@@ -346,6 +348,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
   if(songId.empty())
     return {false, {}, "No active Song"};
 
+  const aeyla::capture::DmxTake* activeTake = nullptr;
   std::string name;
   double duration = 0.0;
   {
@@ -353,85 +356,75 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
     const auto found = mTakesBySong.find(songId);
     if(found == mTakesBySong.end() || found->second.empty())
       return {false, {}, "Record a Take for this Song first"};
-    const auto& take = found->second.back();
-    name = take.name;
-    duration = take.duration_seconds();
-    mTakePlaybackStarted = std::chrono::steady_clock::now();
+    activeTake = &found->second.back();
+    name = activeTake->name;
+    duration = activeTake->duration_seconds();
   }
-  mTakePlaybackProgress.store(0.0, std::memory_order_release);
-  mTakePlaybackActive.store(true, std::memory_order_release);
+
+  mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
+  std::string error;
+  if(!mTakeScheduler.load_take(activeTake, error))
+    return {false, {}, error};
+  if(!mTakeScheduler.play(error))
+    return {false, {}, error};
+
   return {true, name,
           "Playing " + name + " · " + FormatDuration(duration) +
-              " · PRETEST clock"};
+              " · PRETEST clock / host heartbeat safety"};
 }
 
 void AeylaVisualDmx::StopActiveTakePlaybackFromUI()
 {
-  if(!mTakePlaybackActive.load(std::memory_order_acquire))
-    return;
-
-  // Resolve one last frame while the playback clock is still active, then keep
-  // its normalized progress. Physical output remains on that frame (HOLD) while
-  // ARM remains active; DISARM is the explicit safe-output transition.
-  {
-    const std::scoped_lock modelLock(mModelMutex);
-    aeyla::DmxUniverse frame{};
-    double progress = 0.0;
-    (void)ActiveTakeFrameForNow(frame, progress);
-  }
-  mTakePlaybackActive.store(false, std::memory_order_release);
+  mTakeScheduler.stop_hold();
 }
 
-bool AeylaVisualDmx::ActiveTakeFrameForNow(aeyla::DmxUniverse& frame,
-                                            double& progress)
+aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
 {
-  // Caller owns mModelMutex, preserving a single lock order: model -> take.
-  const std::string songId = ActiveSongIdLocked();
-  if(songId.empty()) return false;
-
-  const std::scoped_lock takeLock(mTakeMutex);
-  const auto found = mTakesBySong.find(songId);
-  if(found == mTakesBySong.end() || found->second.empty())
-    return false;
-  const auto& take = found->second.back();
-  if(take.frames.empty() || take.frames_per_second == 0U)
-    return false;
-
-  std::size_t index = 0U;
-  if(mTakePlaybackActive.load(std::memory_order_acquire))
+  if(TakeOutputArmed())
   {
-    const double elapsed = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - mTakePlaybackStarted).count();
-    const double framePosition = elapsed *
-        static_cast<double>(take.frames_per_second);
-    index = framePosition <= 0.0
-                ? 0U
-                : static_cast<std::size_t>(framePosition);
-    if(index >= take.frames.size())
-    {
-      index = take.frames.size() - 1U;
-      mTakePlaybackActive.store(false, std::memory_order_release);
-      progress = 1.0;
-    }
-    else
-    {
-      progress = take.frames.size() <= 1U
-                     ? 1.0
-                     : static_cast<double>(index) /
-                           static_cast<double>(take.frames.size() - 1U);
-    }
-    mTakePlaybackProgress.store(progress, std::memory_order_release);
+    mTakeScheduler.disarm();
+    return {true, {}, "TAKE OUTPUT DISARMED"};
   }
-  else
+  if(OutputArmed())
+    return {false, {}, "Disarm semantic/model output before arming Take output"};
+  if(TakeRecording())
+    return {false, {}, "Stop Avolites capture before arming physical output"};
+  if(!ProjectValid())
+    return {false, {}, "Project is invalid"};
+  if(!BackendReady())
+    return {false, {}, "Configure a healthy Art-Net output target first"};
+  if(!RuntimeHealthy() || RenderingOffline())
+    return {false, {}, "Runtime/offline safety gate blocks physical output"};
+  if(EffectiveBlackout())
+    return {false, {}, "Disable BLACKOUT before arming Take output"};
+
+  std::string songId;
   {
-    progress = std::clamp(
-        mTakePlaybackProgress.load(std::memory_order_acquire), 0.0, 1.0);
-    index = static_cast<std::size_t>(std::llround(
-        progress * static_cast<double>(take.frames.size() - 1U)));
+    const std::scoped_lock modelLock(mModelMutex);
+    songId = ActiveSongIdLocked();
+  }
+  if(songId.empty())
+    return {false, {}, "No active Song"};
+
+  const aeyla::capture::DmxTake* activeTake = nullptr;
+  {
+    const std::scoped_lock takeLock(mTakeMutex);
+    const auto found = mTakesBySong.find(songId);
+    if(found == mTakesBySong.end() || found->second.empty())
+      return {false, {}, "Record a Take for this Song first"};
+    activeTake = &found->second.back();
   }
 
-  frame = take.frames[index];
-  return true;
+  mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
+  const auto schedulerStatus = mTakeScheduler.status();
+  std::string error;
+  if(!schedulerStatus.playing && !schedulerStatus.hold_valid &&
+     !mTakeScheduler.load_take(activeTake, error))
+    return {false, {}, error};
+  if(!mTakeScheduler.arm(error))
+    return {false, {}, error};
+  return {true, activeTake->name,
+          "TAKE OUTPUT ARMED · " + TxInterfaceStatus()};
 }
 
 std::string AeylaVisualDmx::ActiveTakeStatus() const
@@ -448,12 +441,15 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
   if(found == mTakesBySong.end() || found->second.empty())
     return "NO TAKE · READY TO CAPTURE";
   const auto& take = found->second.back();
+  const auto scheduler = mTakeScheduler.status();
   std::string status = take.name + " · " + FormatDuration(take.duration_seconds()) +
                        " · " + std::to_string(take.frames_per_second) + " Hz";
-  if(mTakePlaybackActive.load(std::memory_order_acquire))
+  if(scheduler.playing)
     status += " · PLAY";
-  else if(mTakePlaybackProgress.load(std::memory_order_acquire) > 0.0)
+  else if(scheduler.progress > 0.0)
     status += " · HOLD";
+  if(scheduler.armed)
+    status += " · ON AIR";
   return status;
 }
 
@@ -474,7 +470,7 @@ std::string AeylaVisualDmx::CaptureInputStatus() const
 
 double AeylaVisualDmx::ActiveTakePlaybackProgress() const
 {
-  return std::clamp(mTakePlaybackProgress.load(std::memory_order_acquire), 0.0, 1.0);
+  return mTakeScheduler.status().progress;
 }
 
 std::uint64_t AeylaVisualDmx::CaptureAcceptedPackets() const noexcept
