@@ -108,8 +108,7 @@ std::vector<NetworkInterface> enumerate_ipv4_interfaces() {
       const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(
           address->Address.lpSockaddr);
       std::array<char, INET_ADDRSTRLEN> text{};
-      if(inet_ntop(AF_INET, &ipv4->sin_addr, text.data(),
-                   static_cast<socklen_t>(text.size())) == nullptr)
+      if(inet_ntop(AF_INET, &ipv4->sin_addr, text.data(), text.size()) == nullptr)
         continue;
       result.push_back({id, name, text.data(),
                         static_cast<std::uint8_t>(
