@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -20,6 +21,9 @@ struct DmxTakeSchedulerStatus {
   bool hold_valid{false};
   bool host_heartbeat_ok{false};
   double progress{0.0};
+  std::size_t range_start_frame{0U};
+  std::size_t range_end_frame_exclusive{0U};
+  std::size_t current_frame{0U};
   std::string error;
 };
 
@@ -28,8 +32,9 @@ struct DmxTakeSchedulerStatus {
 // The scheduler is independent from the plug-in editor and never touches the
 // audio callback. It advances a selected Take from steady clock for the first
 // capture/replay hardware gate, while the DAW host transport mailbox acts as a
-// liveness/offline safety heartbeat. A later gate will replace the steady-clock
-// position with absolute host sample position without changing the Take format.
+// liveness/offline safety heartbeat. Playback range is non-destructive: IN/OUT
+// only constrain which source frames are emitted; the recorded Take remains
+// byte-identical on disk.
 class DmxTakeScheduler final {
  public:
   DmxTakeScheduler();
@@ -43,6 +48,11 @@ class DmxTakeScheduler final {
 
   [[nodiscard]] bool load_take(const DmxTake* take,
                                std::string& error_message);
+  [[nodiscard]] bool set_play_range(std::size_t start_frame,
+                                    std::size_t end_frame_exclusive,
+                                    std::string& error_message);
+  void reset_play_range() noexcept;
+
   [[nodiscard]] bool play(std::string& error_message);
   void stop_hold() noexcept;
 
@@ -64,6 +74,9 @@ class DmxTakeScheduler final {
   const DmxTake* take_{nullptr};
   DmxUniverse hold_frame_{};
   bool hold_valid_{false};
+  std::size_t range_start_frame_{0U};
+  std::size_t range_end_frame_exclusive_{0U};
+  std::size_t current_frame_{0U};
   std::chrono::steady_clock::time_point play_started_{};
   std::uint64_t generation_{2000000000ULL};
   std::string error_;
