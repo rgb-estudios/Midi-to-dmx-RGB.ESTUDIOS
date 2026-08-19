@@ -91,6 +91,9 @@ add_library(aeyla_runtime
   src/project/project_package.cpp
   src/show/show_program.cpp
   src/show/show_program_codec.cpp
+  src/network/network_interfaces.cpp
+  src/capture/artnet_capture_worker.cpp
+  src/capture/dmx_take_scheduler.cpp
   src/output/artnet_output_worker.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
@@ -100,7 +103,7 @@ target_link_libraries(aeyla_runtime PUBLIC
   Threads::Threads
 )
 if(WIN32)
-  target_link_libraries(aeyla_runtime PUBLIC ws2_32)
+  target_link_libraries(aeyla_runtime PUBLIC ws2_32 iphlpapi)
 endif()
 if(MSVC)
   target_compile_options(aeyla_runtime PRIVATE /W4 /permissive-)
