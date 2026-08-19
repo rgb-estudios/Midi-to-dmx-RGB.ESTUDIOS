@@ -19,6 +19,7 @@ iplug_add_plugin(${PROJECT_NAME}
   SOURCES
     AeylaVisualDmx.cpp
     AeylaShowPlayerIntegration.cpp
+    AeylaTakeTrimIntegration.cpp
     AeylaTakeLibrarySession.cpp
     AeylaTakeLibrarySession.h
     AeylaVisualDmx.h
