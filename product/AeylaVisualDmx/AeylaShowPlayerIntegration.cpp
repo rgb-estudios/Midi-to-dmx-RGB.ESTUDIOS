@@ -418,8 +418,10 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   const auto schedulerStatus = mTakeScheduler.status();
   std::string error;
-  if(!schedulerStatus.playing && !schedulerStatus.hold_valid &&
-     !mTakeScheduler.load_take(activeTake, error))
+  // A completed capture may have reallocated the Song's Take vector. Reload
+  // the current latest Take whenever playback is stopped so ARM can never
+  // retain a stale pointer or an older Take's HOLD frame.
+  if(!schedulerStatus.playing && !mTakeScheduler.load_take(activeTake, error))
     return {false, {}, error};
   if(!mTakeScheduler.arm(error))
     return {false, {}, error};
