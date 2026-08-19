@@ -113,9 +113,6 @@ public:
   [[nodiscard]] std::string TxInterfaceStatus() const;
   [[nodiscard]] std::size_t NetworkInterfaceCount() const;
 
-  // Host-integrated Avolites recorder gate. Takes are deliberately volatile in
-  // this first build; persistence into .aeylashow is enabled only after replay
-  // fidelity and host behaviour pass real-machine tests.
   [[nodiscard]] aeyla::product::AuthoringResult ToggleTakeCaptureFromUI();
   [[nodiscard]] aeyla::product::AuthoringResult ToggleActiveTakePlaybackFromUI();
   void StopActiveTakePlaybackFromUI();
@@ -127,6 +124,21 @@ public:
   [[nodiscard]] std::string ActiveTakeStatus() const;
   [[nodiscard]] std::string CaptureInputStatus() const;
   [[nodiscard]] double ActiveTakePlaybackProgress() const;
+
+  // Non-destructive Take editor. Delta is expressed in seconds. The source
+  // recording remains untouched; playback starts/ends at the edited frame
+  // boundaries. Editing is blocked while REC, PLAY or physical Take output is
+  // active so the scheduler cannot be reconfigured in flight.
+  [[nodiscard]] aeyla::product::AuthoringResult AdjustActiveTakeInFromUI(
+      double deltaSeconds);
+  [[nodiscard]] aeyla::product::AuthoringResult AdjustActiveTakeOutFromUI(
+      double deltaSeconds);
+  [[nodiscard]] aeyla::product::AuthoringResult ResetActiveTakeTrimFromUI();
+  [[nodiscard]] double ActiveTakeInSeconds() const;
+  [[nodiscard]] double ActiveTakeOutSeconds() const;
+  [[nodiscard]] double ActiveTakeOriginalDurationSeconds() const;
+  [[nodiscard]] double ActiveTakeEffectiveDurationSeconds() const;
+
   [[nodiscard]] std::uint64_t CaptureAcceptedPackets() const noexcept;
   [[nodiscard]] std::uint64_t CaptureSequenceGaps() const noexcept;
 
