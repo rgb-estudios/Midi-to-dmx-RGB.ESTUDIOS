@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <functional>
 #include <string>
-#include <string_view>
 #include <utility>
 
 class AeylaRuntimeStatusControl final : public IControl
@@ -26,7 +25,6 @@ public:
     const IColor raised(255, 21, 23, 29);
     const IColor line(255, 47, 51, 62);
     const IColor text(255, 226, 229, 234);
-    const IColor muted(255, 139, 145, 158);
     const IColor warning(255, 245, 154, 43);
     const IColor valid(255, 57, 211, 132);
     const IColor danger(255, 231, 45, 55);
@@ -35,13 +33,12 @@ public:
     g.DrawLine(line, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
     static constexpr const char* labels[] = {
-        "NEW", "OPEN", "SAVE", "SAVE AS", "OUTPUT SETUP"};
+        "NEW", "OPEN", "SAVE", "SAVE AS"};
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
       g.FillRoundRect(raised, mButtons[index], 5.0F);
-      g.DrawRoundRect(index == 4U ? warning : line,
-                      mButtons[index], 5.0F, nullptr, 1.0F);
-      g.DrawText(IText(9.0F, index == 4U ? warning : text,
+      g.DrawRoundRect(line, mButtons[index], 5.0F, nullptr, 1.0F);
+      g.DrawText(IText(9.0F, text,
                        "AeylaUI", EAlign::Center, EVAlign::Middle),
                  labels[index], mButtons[index]);
     }
@@ -53,15 +50,19 @@ public:
     g.DrawText(IText(8.5F, mPlug.ProjectDirty() ? warning : valid,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
                projectLabel.c_str(),
-               IRECT(footer.L + 372.0F, footer.T,
-                     footer.L + 650.0F, footer.B));
+               IRECT(footer.L + 270.0F, footer.T,
+                     footer.L + 610.0F, footer.B));
 
+    // Output configuration has exactly one operator authority: the ART-NET
+    // NETWORK panel in AeylaMainControl. The footer is status-only and can no
+    // longer open the legacy IPv4@universe editor that previously overrode the
+    // simplified TX route.
     const std::string backend = mPlug.OutputBackendStatus();
     g.DrawText(IText(8.5F, mPlug.BackendReady() ? valid : warning,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                backend.c_str(),
-               IRECT(footer.L + 650.0F, footer.T,
-                     footer.L + 865.0F, footer.B));
+               IRECT(footer.L + 610.0F, footer.T,
+                     footer.L + 875.0F, footer.B));
 
     std::string state;
     if(mPlug.TakeOutputArmed())
@@ -85,7 +86,7 @@ public:
 
     g.DrawText(IText(8.5F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
                state.c_str(),
-               IRECT(footer.L + 865.0F, footer.T,
+               IRECT(footer.L + 875.0F, footer.T,
                      footer.R - 14.0F, footer.B));
   }
 
@@ -124,30 +125,6 @@ public:
       PromptSaveAs();
       return;
     }
-    if(Contains(mButtons[4], x, y))
-      PromptOutputSetup();
-  }
-
-  void OnTextEntryCompletion(const char* str, int valIdx) override
-  {
-    if(valIdx != kOutputConfigTextEntry || str == nullptr)
-      return;
-    const auto result = mPlug.ConfigureArtNetFromUI(str);
-    if(!result.succeeded)
-    {
-      GetUI()->ShowMessageBox(
-          (result.message +
-           "\n\nUse IPv4@universe (example: 2.0.0.50@0), or type OFF.")
-              .c_str(),
-          "AEYLA · ART-NET PREFLIGHT", kMB_OK);
-    }
-    else
-    {
-      // Re-apply explicit RX/TX NIC routing and restart the capture listener so
-      // its Port-Address matches the newly configured output universe.
-      (void)mPlug.RefreshNetworkInterfacesFromUI();
-    }
-    SetDirty(false);
   }
 
 private:
@@ -182,7 +159,7 @@ private:
     constexpr float left = 12.0F;
     constexpr float topPad = 8.0F;
     constexpr float gap = 6.0F;
-    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F, 110.0F};
+    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F};
     float cursor = footer.L + left;
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
@@ -190,22 +167,6 @@ private:
                               cursor + widths[index], footer.B - topPad);
       cursor += widths[index] + gap;
     }
-  }
-
-  void PromptOutputSetup()
-  {
-    std::string current = mPlug.OutputBackendStatus();
-    static constexpr std::string_view prefix = "ARTNET ";
-    if(current.rfind(prefix, 0U) == 0U)
-      current.erase(0U, prefix.size());
-    else
-      current = "2.0.0.50@0";
-
-    GetUI()->CreateTextEntry(
-        *this,
-        IText(12.0F, IColor(255, 236, 238, 242), "AeylaUI",
-              EAlign::Center, EVAlign::Middle),
-        mButtons[4], current.c_str(), kOutputConfigTextEntry);
   }
 
   void ReportFileStatus(const aeyla::product::ProjectFileStatus& status)
@@ -269,8 +230,7 @@ private:
   }
 
   AeylaVisualDmx& mPlug;
-  static constexpr int kOutputConfigTextEntry = 1001;
-  std::array<IRECT, 5> mButtons{};
+  std::array<IRECT, 4> mButtons{};
   WDL_String mDialogFileName;
   WDL_String mDialogPath;
 };
