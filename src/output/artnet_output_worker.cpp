@@ -75,7 +75,7 @@ bool parse_numeric_ipv4(std::string_view text,
 
 bool valid_unicast_octets(const std::array<std::uint8_t, 4>& octets) noexcept {
   // 0/8 is "this network" and 224/4 includes multicast plus the reserved
-  // high range. Neither is a deterministic unicast node destination.
+  // high range. Neither is a deterministic explicit interface/destination.
   return octets[0] != 0U && octets[0] < 224U;
 }
 
@@ -108,8 +108,22 @@ bool valid_config_ranges(const ArtNetOutputConfig& config,
 bool safe_unicast_target(const in_addr& address) noexcept {
   const std::uint32_t host = ntohl(address.s_addr);
   if (host == 0U || host == 0xFFFFFFFFU) return false;
-  // 224.0.0.0/4 is multicast. Alpha v1 deliberately uses explicit unicast.
   if ((host & 0xF0000000U) == 0xE0000000U) return false;
+  return true;
+}
+
+bool validate_optional_source(std::string_view source,
+                              std::string& error_message) noexcept {
+  if(source.empty()) return true;
+  std::array<std::uint8_t, 4> octets{};
+  if(!parse_numeric_ipv4(source, octets)) {
+    error_message = "Art-Net TX source must be a numeric local IPv4 address";
+    return false;
+  }
+  if(!valid_unicast_octets(octets)) {
+    error_message = "Art-Net TX source must be a unicast local IPv4 address";
+    return false;
+  }
   return true;
 }
 
@@ -119,6 +133,7 @@ bool validate_artnet_output_config(const ArtNetOutputConfig& config,
                                    std::string& error_message) noexcept {
   error_message.clear();
   if (!valid_config_ranges(config, error_message)) return false;
+  if (!validate_optional_source(config.source_ipv4, error_message)) return false;
 
   std::array<std::uint8_t, 4> octets{};
   if (!parse_numeric_ipv4(config.target_ipv4, octets)) {
@@ -193,6 +208,27 @@ class ArtNetOutputWorker::Impl final {
       return false;
     }
 
+    if(!next_config.source_ipv4.empty()) {
+      sockaddr_in local{};
+      local.sin_family = AF_INET;
+      local.sin_port = 0;
+      if(inet_pton(AF_INET, next_config.source_ipv4.c_str(),
+                   &local.sin_addr) != 1) {
+        close_socket(next_socket);
+        error_message = "Art-Net TX source IPv4 could not be parsed";
+        cleanup_winsock();
+        return false;
+      }
+      if(bind(next_socket, reinterpret_cast<const sockaddr*>(&local),
+              sizeof(local)) != 0) {
+        close_socket(next_socket);
+        error_message = "could not bind Art-Net TX to local IPv4 " +
+                        next_config.source_ipv4;
+        cleanup_winsock();
+        return false;
+      }
+    }
+
     socket_ = next_socket;
     target_ = next_target;
     config_ = next_config;
@@ -221,9 +257,6 @@ class ArtNetOutputWorker::Impl final {
 
   void shutdown() noexcept {
     if (worker_.joinable()) {
-      // Clean shutdown from an enabled output is itself a safety transition.
-      // Queue one blackout in the network thread before it exits, avoiding a
-      // concurrent send/sequence race with the caller thread.
       const bool was_enabled =
           enabled_.exchange(false, std::memory_order_acq_rel);
       if (was_enabled)
@@ -351,8 +384,6 @@ class ArtNetOutputWorker::Impl final {
         next_deadline = std::chrono::steady_clock::now() + period;
       }
 
-      // Stop is checked after the pending blackout so a clean shutdown cannot
-      // leave the last non-zero frame intentionally latched by this worker.
       if (stop_requested_.load(std::memory_order_acquire)) break;
 
       const auto now = std::chrono::steady_clock::now();
