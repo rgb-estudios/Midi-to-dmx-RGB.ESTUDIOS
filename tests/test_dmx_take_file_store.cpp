@@ -94,7 +94,7 @@ int main() {
     std::fstream file(target, std::ios::binary | std::ios::in | std::ios::out);
     check(static_cast<bool>(file), "corruption test must open Take file");
     if(file) {
-      file.seekp(64, std::ios::beg);
+      file.seekg(64, std::ios::beg);
       char value = 0;
       file.read(&value, 1);
       file.clear();
