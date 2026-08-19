@@ -9,6 +9,9 @@
 namespace aeyla::output {
 
 struct ArtNetOutputConfig {
+  // Optional numeric local IPv4 bind. Empty means let the OS route normally.
+  // AEYLA Show Player sets this explicitly when the operator selects a TX NIC.
+  std::string source_ipv4;
   // Alpha v1 deliberately accepts a numeric IPv4 address only. Avoiding DNS in
   // the runtime removes a blocking/failure-prone dependency from show output.
   std::string target_ipv4;
@@ -31,7 +34,8 @@ struct ArtNetOutputStats {
 
 // Pure, non-network preflight used before changing persisted output settings.
 // Alpha v1 accepts only explicit numeric unicast IPv4 targets: no DNS,
-// broadcast, multicast or implicit interface discovery.
+// multicast or implicit destination discovery. source_ipv4 may be empty for OS
+// routing or a numeric local IPv4 when an explicit TX adapter is selected.
 [[nodiscard]] bool validate_artnet_output_config(
     const ArtNetOutputConfig& config, std::string& error_message) noexcept;
 
@@ -43,7 +47,8 @@ struct ArtNetOutputStats {
 // - while enabled the worker refreshes the latest frame at fixed FPS;
 // - disabling requests one zero-DMX ArtDMX packet and then stops refreshing;
 // - start begins disabled; a caller must explicitly enable output;
-// - no DNS, discovery, filesystem or UI work occurs in the worker.
+// - no DNS, discovery, filesystem or UI work occurs in the worker;
+// - source_ipv4 binds the UDP socket to one selected local NIC when supplied.
 class ArtNetOutputWorker final {
  public:
   ArtNetOutputWorker();
