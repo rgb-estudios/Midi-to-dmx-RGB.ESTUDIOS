@@ -2,6 +2,7 @@
 
 #include "core/dmx_compiler.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
