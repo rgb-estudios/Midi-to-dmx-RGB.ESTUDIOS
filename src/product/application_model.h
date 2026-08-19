@@ -75,10 +75,15 @@ class ApplicationModel final {
  public:
   ApplicationModel();
 
+  // Transactional project+show publication. Validation is pure: on failure the
+  // currently loaded valid runtime remains untouched. On success the complete
+  // bundle is published disarmed + blackout as one state transition.
   project::ProjectValidation load_project_bundle(
       const project::ProjectDocument& document,
       const show::ShowProgram& show_program);
 
+  // Compatibility path for project-only callers/new projects. It intentionally
+  // publishes an empty authoring show, which is saveable but not show-ready.
   project::ProjectValidation load_project_document(
       const project::ProjectDocument& document);
 
@@ -96,6 +101,8 @@ class ApplicationModel final {
     return show_program_;
   }
 
+  // Authoring replacement validates against the current project's Look IDs.
+  // A successful replacement forces output safe because show semantics changed.
   show::ShowValidation replace_show_program(const show::ShowProgram& program);
   [[nodiscard]] show::ShowValidation show_performance_validation() const;
   [[nodiscard]] AuthoringResult store_current_look();
@@ -117,6 +124,8 @@ class ApplicationModel final {
       std::string target_ipv4, std::uint16_t port_address);
   [[nodiscard]] AuthoringResult disable_output_backend();
 
+  // Active song is runtime/session state, not authored show data. Switching it
+  // never mutates `.aeylashow` but always forces output safe before playback.
   [[nodiscard]] bool select_song(std::size_t song_index);
   void seek_active_song_tick(std::uint64_t tick);
   void advance_active_song_tick(std::uint64_t tick);
@@ -130,10 +139,7 @@ class ApplicationModel final {
   void set_project_valid(bool valid);
   void set_project_name(std::string name);
   void set_backend_ready(bool ready);
-  // external_performance_ready is reserved for a separately validated runtime
-  // source such as an imported/captured DMX Take. It never bypasses project,
-  // backend, blackout or other RuntimeSafetyState gates.
-  [[nodiscard]] bool request_arm(bool external_performance_ready = false);
+  [[nodiscard]] bool request_arm();
   void disarm(runtime::RuntimeSafetyReason reason =
                   runtime::RuntimeSafetyReason::operator_disarm);
   void set_blackout(bool enabled);
