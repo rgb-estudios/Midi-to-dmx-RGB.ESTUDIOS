@@ -34,7 +34,10 @@ public:
 
     if(Contains(mBlackoutButton, x, y))
     {
-      SetValueFromUserInput(GetValue(0) > 0.5 ? 0.0 : 1.0, 0);
+      const bool turningBlackoutOn = GetValue(0) <= 0.5;
+      if(turningBlackoutOn && mPlug.TakeOutputArmed())
+        Report(mPlug.ToggleTakeOutputArmFromUI());
+      SetValueFromUserInput(turningBlackoutOn ? 1.0 : 0.0, 0);
       SetDirty(false);
       return;
     }
@@ -127,19 +130,19 @@ public:
   }
 
 private:
-  static constexpr IColor kBackground{255, 7, 8, 11};
-  static constexpr IColor kPanel{255, 14, 16, 21};
-  static constexpr IColor kPanelRaised{255, 21, 24, 31};
-  static constexpr IColor kPanelSelected{255, 30, 25, 30};
-  static constexpr IColor kLine{255, 43, 48, 59};
-  static constexpr IColor kLineStrong{255, 73, 80, 95};
-  static constexpr IColor kText{255, 235, 238, 242};
-  static constexpr IColor kMuted{255, 135, 143, 157};
-  static constexpr IColor kFaint{255, 88, 95, 108};
-  static constexpr IColor kAccent{255, 229, 48, 61};
-  static constexpr IColor kAccentDark{255, 84, 25, 33};
-  static constexpr IColor kGood{255, 70, 205, 137};
-  static constexpr IColor kWarn{255, 238, 159, 64};
+  inline static const IColor kBackground{255, 7, 8, 11};
+  inline static const IColor kPanel{255, 14, 16, 21};
+  inline static const IColor kPanelRaised{255, 21, 24, 31};
+  inline static const IColor kPanelSelected{255, 30, 25, 30};
+  inline static const IColor kLine{255, 43, 48, 59};
+  inline static const IColor kLineStrong{255, 73, 80, 95};
+  inline static const IColor kText{255, 235, 238, 242};
+  inline static const IColor kMuted{255, 135, 143, 157};
+  inline static const IColor kFaint{255, 88, 95, 108};
+  inline static const IColor kAccent{255, 229, 48, 61};
+  inline static const IColor kAccentDark{255, 84, 25, 33};
+  inline static const IColor kGood{255, 70, 205, 137};
+  inline static const IColor kWarn{255, 238, 159, 64};
 
   static bool Contains(const IRECT& rect, float x, float y) noexcept
   {
