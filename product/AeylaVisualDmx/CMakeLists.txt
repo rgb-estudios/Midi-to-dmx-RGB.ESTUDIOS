@@ -43,6 +43,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/show/show_program_codec.cpp
     ../../src/network/network_interfaces.cpp
     ../../src/capture/artnet_capture_worker.cpp
+    ../../src/capture/dmx_take_file_store.cpp
     ../../src/capture/dmx_take_scheduler.cpp
     ../../src/output/artnet_output_worker.cpp
   FORMATS
