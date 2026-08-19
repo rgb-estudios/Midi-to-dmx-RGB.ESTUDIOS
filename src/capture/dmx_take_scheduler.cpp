@@ -29,13 +29,71 @@ bool DmxTakeScheduler::load_take(const DmxTake* take,
 
   const std::scoped_lock lock(mutex_);
   take_ = take;
-  hold_frame_ = take_->frames.front();
+  range_start_frame_ = 0U;
+  range_end_frame_exclusive_ = take_->frames.size();
+  current_frame_ = range_start_frame_;
+  hold_frame_ = take_->frames[current_frame_];
   hold_valid_ = true;
   progress_.store(0.0, std::memory_order_release);
   error_.clear();
   if(armed_.load(std::memory_order_acquire))
     publish_hold_locked();
   return true;
+}
+
+bool DmxTakeScheduler::set_play_range(std::size_t start_frame,
+                                      std::size_t end_frame_exclusive,
+                                      std::string& error_message) {
+  error_message.clear();
+  if(playing_.load(std::memory_order_acquire)) {
+    error_message = "Stop Take playback before editing IN / OUT";
+    return false;
+  }
+
+  const std::scoped_lock lock(mutex_);
+  if(take_ == nullptr || take_->frames.empty()) {
+    error_message = "Load a Take before editing IN / OUT";
+    return false;
+  }
+  if(start_frame >= take_->frames.size()) {
+    error_message = "IN is outside the recorded Take";
+    return false;
+  }
+  if(end_frame_exclusive == 0U || end_frame_exclusive > take_->frames.size()) {
+    error_message = "OUT is outside the recorded Take";
+    return false;
+  }
+  if(end_frame_exclusive <= start_frame + 1U) {
+    error_message = "IN / OUT must leave at least two DMX frames";
+    return false;
+  }
+
+  range_start_frame_ = start_frame;
+  range_end_frame_exclusive_ = end_frame_exclusive;
+  current_frame_ = range_start_frame_;
+  hold_frame_ = take_->frames[current_frame_];
+  hold_valid_ = true;
+  progress_.store(0.0, std::memory_order_release);
+  error_.clear();
+  if(armed_.load(std::memory_order_acquire))
+    publish_hold_locked();
+  return true;
+}
+
+void DmxTakeScheduler::reset_play_range() noexcept {
+  if(playing_.load(std::memory_order_acquire))
+    return;
+  const std::scoped_lock lock(mutex_);
+  if(take_ == nullptr || take_->frames.empty())
+    return;
+  range_start_frame_ = 0U;
+  range_end_frame_exclusive_ = take_->frames.size();
+  current_frame_ = 0U;
+  hold_frame_ = take_->frames.front();
+  hold_valid_ = true;
+  progress_.store(0.0, std::memory_order_release);
+  if(armed_.load(std::memory_order_acquire))
+    publish_hold_locked();
 }
 
 bool DmxTakeScheduler::play(std::string& error_message) {
@@ -46,7 +104,13 @@ bool DmxTakeScheduler::play(std::string& error_message) {
     error_message = "No Take is loaded";
     return false;
   }
-  hold_frame_ = take_->frames.front();
+  if(range_end_frame_exclusive_ <= range_start_frame_ + 1U ||
+     range_end_frame_exclusive_ > take_->frames.size()) {
+    error_message = "Take IN / OUT range is invalid";
+    return false;
+  }
+  current_frame_ = range_start_frame_;
+  hold_frame_ = take_->frames[current_frame_];
   hold_valid_ = true;
   progress_.store(0.0, std::memory_order_release);
   play_started_ = std::chrono::steady_clock::now();
@@ -118,6 +182,9 @@ DmxTakeSchedulerStatus DmxTakeScheduler::status() const {
   {
     const std::scoped_lock lock(mutex_);
     result.hold_valid = hold_valid_;
+    result.range_start_frame = range_start_frame_;
+    result.range_end_frame_exclusive = range_end_frame_exclusive_;
+    result.current_frame = current_frame_;
     result.error = error_;
   }
   return result;
@@ -148,23 +215,29 @@ void DmxTakeScheduler::update_position_locked(
     std::chrono::steady_clock::time_point now) {
   if(take_ == nullptr || take_->frames.empty() || take_->frames_per_second == 0U)
     return;
+  if(range_end_frame_exclusive_ <= range_start_frame_ + 1U ||
+     range_end_frame_exclusive_ > take_->frames.size())
+    return;
 
   const double elapsed = std::chrono::duration<double>(now - play_started_).count();
-  const double rawIndex = std::max(0.0, elapsed) *
-                          static_cast<double>(take_->frames_per_second);
-  std::size_t index = static_cast<std::size_t>(rawIndex);
-  if(index >= take_->frames.size()) {
-    index = take_->frames.size() - 1U;
+  const double rawOffset = std::max(0.0, elapsed) *
+                           static_cast<double>(take_->frames_per_second);
+  std::size_t offset = static_cast<std::size_t>(rawOffset);
+  const std::size_t rangeFrames = range_end_frame_exclusive_ - range_start_frame_;
+  if(offset >= rangeFrames) {
+    offset = rangeFrames - 1U;
     playing_.store(false, std::memory_order_release);
     progress_.store(1.0, std::memory_order_release);
   } else {
-    const double progress = take_->frames.size() <= 1U
+    const double progress = rangeFrames <= 1U
                                 ? 1.0
-                                : static_cast<double>(index) /
-                                      static_cast<double>(take_->frames.size() - 1U);
+                                : static_cast<double>(offset) /
+                                      static_cast<double>(rangeFrames - 1U);
     progress_.store(progress, std::memory_order_release);
   }
-  hold_frame_ = take_->frames[index];
+
+  current_frame_ = range_start_frame_ + offset;
+  hold_frame_ = take_->frames[current_frame_];
   hold_valid_ = true;
 }
 
