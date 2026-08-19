@@ -35,12 +35,18 @@ const char* reason_name(RuntimeSafetyReason reason) noexcept {
       return "project_invalid";
     case RuntimeSafetyReason::backend_unavailable:
       return "backend_unavailable";
+    case RuntimeSafetyReason::show_not_ready:
+      return "show_not_ready";
     case RuntimeSafetyReason::project_reload:
       return "project_reload";
     case RuntimeSafetyReason::event_overflow:
       return "event_overflow";
     case RuntimeSafetyReason::host_deactivation:
       return "host_deactivation";
+    case RuntimeSafetyReason::offline_render:
+      return "offline_render";
+    case RuntimeSafetyReason::runtime_fault:
+      return "runtime_fault";
     case RuntimeSafetyReason::shutdown:
       return "shutdown";
   }

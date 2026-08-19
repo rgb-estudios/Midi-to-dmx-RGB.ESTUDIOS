@@ -1,0 +1,161 @@
+name: reaper-windows-pretest-package
+
+on:
+  pull_request:
+    paths:
+      - product/**
+      - src/**
+      - tests/**
+      - docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md
+      - tools/maintenance/windows/**
+      - .github/workflows/reaper-windows-pretest-package.yml
+  workflow_dispatch:
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  package-windows-reaper-pretest:
+    name: Windows / integrated 0.3 VST3 / manual REAPER pretest
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate AEYLA maintenance tools
+        shell: pwsh
+        run: |
+          $script = (Resolve-Path "tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $script, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "AEYLA maintenance PowerShell syntax validation failed"
+          }
+          & $script -Action Audit
+
+      - name: Fetch pinned plugin dependencies
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Build integrated AEYLA 0.3 VST3
+        shell: pwsh
+        run: |
+          cmake -S product -B build-product -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2" -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3
+
+      - name: Verify bundle and PE image
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "AeylaVisualDmx.vst3 bundle not found" }
+          $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $binary) { throw "AeylaVisualDmx VST3 binary not found" }
+          if ($binary.Length -lt 1MB) { throw "AeylaVisualDmx VST3 binary unexpectedly small" }
+          $stream = [System.IO.File]::OpenRead($binary.FullName)
+          try { $b0=$stream.ReadByte(); $b1=$stream.ReadByte() } finally { $stream.Dispose() }
+          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "AeylaVisualDmx VST3 binary lacks PE/MZ header" }
+          Write-Host "Verified bundle $($bundle.FullName) binarySize=$($binary.Length)"
+
+      - name: Package manual REAPER pretest
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $root = Join-Path $PWD "reaper-pretest"
+          $vst3Root = Join-Path $root "VST3"
+          New-Item -ItemType Directory -Force $vst3Root | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName (Join-Path $vst3Root "AeylaVisualDmx.vst3")
+
+          Copy-Item tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1 $root
+          Copy-Item tools/maintenance/windows/AUDIT_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/CLEAN_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $root
+          Copy-Item docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md (Join-Path $root "UI_INTERACTION_CONTRACT.md")
+
+          @'
+          AEYLA Visual DMX 0.3 — REAPER WINDOWS PRETEST
+
+          OBJETIVO
+          Este paquete contiene el VST3 integrado 0.3 y herramientas de mantenimiento
+          quirurgicas para pruebas repetibles en REAPER/Windows.
+
+          FLUJO RECOMENDADO PARA CADA BUILD NUEVO
+          1. Cierra REAPER, Ableton y cualquier host VST3.
+          2. Ejecuta CLEAN_INSTALL_AEYLA.cmd.
+          3. El script elimina SOLO AeylaVisualDmx.vst3 de rutas conocidas.
+          4. Retira SOLO la entrada AEYLA del cache VST de REAPER y crea backup del INI.
+          5. Instala el bundle VST3 incluido en este mismo paquete.
+          6. Abre REAPER.
+          7. Preferences > Plug-ins > VST > Re-scan si AEYLA no aparece automaticamente.
+
+          HERRAMIENTAS
+          AUDIT_AEYLA.cmd
+            Solo informa instalaciones AEYLA y entradas AEYLA detectadas en cache REAPER.
+
+          CLEAN_AEYLA.cmd
+            Desinstala SOLO AEYLA y limpia SOLO su entrada del cache REAPER con backup.
+
+          INSTALL_AEYLA.cmd
+            Instala el bundle AEYLA incluido sin tocar el cache REAPER.
+
+          CLEAN_INSTALL_AEYLA.cmd
+            Opcion recomendada para desarrollo: limpia AEYLA anterior, limpia su entrada
+            de cache REAPER e instala el build actual.
+
+          GARANTIAS DEL LIMPIADOR
+          - No elimina archivos .aeylashow.
+          - No elimina proyectos .RPP.
+          - No elimina otros VST/VST3.
+          - No borra el cache VST completo de REAPER.
+          - No mata REAPER ni Ableton: si estan abiertos, aborta.
+          - No modifica configuracion MIDI/audio del host.
+
+          INTERACTION PASS — OBLIGATORIO
+          Render correcto NO equivale a UI funcional. Probar con mouse/entrada real:
+          A. NEW crea proyecto o pide confirmar descarte si corresponde.
+          B. OPEN abre dialogo y carga un .aeylashow valido.
+          C. SAVE y SAVE AS responden y actualizan estado SAVED/UNSAVED.
+          D. BLACKOUT cambia inmediatamente de estado visual/runtime.
+          E. RIG 10/14 cambia el mapa de fixtures habilitados.
+          F. SOLID / GRADIENT / WAVE / NOISE / CHASE cambian el preview.
+          G. Click fixture 1, 7, 8 y 14 cambia claramente la seleccion visual.
+          H. Grand Master, Speed, White, Amber y UV responden a click y drag.
+          I. Los 8 executors responden por mouse y liberan al soltar.
+          J. MIDI fisico incrementa contador y activa el runtime correspondiente.
+          K. ARM con BACKEND OFF NO queda mudo: debe mostrar ARM LOCKED y explicar causa.
+          L. Abrir/cerrar UI 5 veces mantiene todas las interacciones.
+
+          PRUEBA HOST / ESTADO
+          M. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
+          N. La instancia sigue presente y vuelve DISARMED/BLACKOUT.
+          O. Mueve playhead, Play/Stop y Loop y registra cualquier desviacion.
+
+          IMPORTANTE
+          PRETEST NO significa Show Candidate. No dependas todavia de este build para
+          salida fisica durante un show. Art-Net real y los gates de hardware siguen
+          pendientes hasta validacion explicita.
+          '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
+
+          $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "SOURCE_COMMIT=${{ github.sha }}" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "BUILD_KIND=REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "MAINTENANCE_SCRIPT=AEYLA_VST3_MAINTENANCE.ps1" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "UI_INTERACTION_CONTRACT=UI_INTERACTION_CONTRACT.md" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-0.3-REAPER-Windows-PRETEST
+          path: reaper-pretest/**
+          if-no-files-found: error

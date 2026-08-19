@@ -1,5 +1,9 @@
 # Development status
 
+> Historical foundation snapshot from 2026-08-05. For current Alpha 0.3
+> evidence and open gates use `docs/AEYLA_VALIDATION_MATRIX.md` and
+> `docs/checkpoints/CP-AEYLA-0.3.2.md`.
+
 Date: 2026-08-05
 
 Canonical repository: `rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS`

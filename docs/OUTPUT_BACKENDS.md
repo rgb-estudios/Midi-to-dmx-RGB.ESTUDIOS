@@ -18,13 +18,21 @@ The runtime submits immutable frames; backend-specific code cannot alter semanti
 
 - ArtDMX output.
 - UDP port 6454.
-- Unicast and broadcast.
-- Select network adapter.
-- Configurable 15-bit port address shown to users as net/subnet/universe or simplified universe.
+- Numeric IPv4 unicast only in Alpha v1; DNS, broadcast and multicast are
+  rejected by preflight.
+- Operating-system route selection; explicit adapter selection is not yet in
+  the product UI.
+- Configurable 15-bit port address shown as simplified universe `0..32767`.
 - Sequence number.
-- 30–44 Hz selectable refresh; 40 Hz default.
+- Fixed 40 Hz refresh in Alpha v1.
 - One universe.
 - Optional ArtPoll discovery later; not required for first hardware test.
+
+The graphical product persists `backend`, numeric target and universe, then
+opens the socket disarmed. `ARM OUTPUT` only enables refresh after project,
+runtime and backend gates pass. Disable, project reload, offline render, send
+error and shutdown request a safe transition. UDP preflight proves address
+syntax, ownership and local socket creation; it does not prove node reception.
 
 Reference: official Art-Net 4 specification at https://art-net.org.uk/art-net-specification/
 

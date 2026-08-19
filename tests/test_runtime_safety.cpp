@@ -71,6 +71,26 @@ int main() {
 
   state.set_project_valid(true);
   state.set_backend_ready(true);
+  check(state.request_arm(), "may arm before offline-render inhibit test");
+  state.set_blackout(false);
+  state.disarm(RuntimeSafetyReason::offline_render);
+  state.set_blackout(true);
+  check(!state.output_armed() && state.blackout(),
+        "offline render must leave output disarmed and blacked out");
+  check(state.reason() == RuntimeSafetyReason::offline_render,
+        "offline-render inhibit reason should be retained");
+
+  state.set_project_valid(true);
+  state.set_backend_ready(true);
+  check(state.request_arm(), "may arm before runtime-fault inhibit test");
+  state.disarm(RuntimeSafetyReason::runtime_fault);
+  state.set_blackout(true);
+  check(!state.output_armed() && state.blackout() &&
+            state.reason() == RuntimeSafetyReason::runtime_fault,
+        "runtime fault must latch an explicit safe reason");
+
+  state.set_project_valid(true);
+  state.set_backend_ready(true);
   check(state.request_arm(), "may arm before shutdown test");
   state.on_shutdown();
   check(!state.output_armed() && state.blackout(), "shutdown must be safe");

@@ -10,15 +10,23 @@
 namespace aeyla::runtime {
 
 inline constexpr std::uint16_t kPluginStateFormatMajor = 1;
-inline constexpr std::uint16_t kPluginStateFormatMinor = 0;
+inline constexpr std::uint16_t kPluginStateFormatMinor = 1;
 inline constexpr std::size_t kMaxProjectLocatorBytes = 4096;
 inline constexpr std::size_t kMaxPluginStateBytes = 64 * 1024;
+inline constexpr std::size_t kMaxSessionSongBindings = 15;
+inline constexpr std::size_t kMaxSessionSongIdBytes = 128;
 
 enum class ProjectLocatorMode : std::uint8_t {
   none = 0,
   relative_companion = 1,
   absolute_development = 2,
   project_library_id = 3
+};
+
+struct SessionSongBinding {
+  std::string song_id;
+  double host_start_ppq{0.0};
+  bool operator==(const SessionSongBinding&) const = default;
 };
 
 // Authoritative VST3 component state. Output Arm is deliberately absent: every
@@ -32,6 +40,7 @@ struct PluginComponentState {
   bool blackout{true};
   ProjectLocatorMode locator_mode{ProjectLocatorMode::none};
   std::string project_locator{};
+  std::vector<SessionSongBinding> song_bindings{};
 
   bool operator==(const PluginComponentState&) const = default;
 };
@@ -48,7 +57,8 @@ enum class PluginStateError : std::uint8_t {
   invalid_payload_size,
   invalid_locator_mode,
   invalid_grand_master,
-  inconsistent_locator
+  inconsistent_locator,
+  invalid_song_binding
 };
 
 struct PluginStateEncodeResult {

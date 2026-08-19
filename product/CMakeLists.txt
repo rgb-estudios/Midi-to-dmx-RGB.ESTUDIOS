@@ -1,5 +1,26 @@
 cmake_minimum_required(VERSION 3.25)
-project(AeylaVisualDmxProduct VERSION 0.2.1 LANGUAGES C CXX)
+
+# The product persistence layer uses C++17 filesystem, which Apple exposes from
+# macOS 10.15. Our supported DAW matrix starts at macOS 11 (Live 12's current
+# supported floor is 11.7.10), so reject accidental legacy deployment targets
+# rather than producing a bundle that cannot link or load reliably.
+if(APPLE)
+  if(NOT CMAKE_OSX_DEPLOYMENT_TARGET OR
+     CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "11.0")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING
+        "Minimum macOS version supported by AEYLA Visual DMX" FORCE)
+  endif()
+
+  # iPlug2 creates universal plug-in targets when IPLUG2_UNIVERSAL is enabled,
+  # but ordinary dependency targets still follow CMAKE_OSX_ARCHITECTURES. Keep
+  # miniz universal too or the Intel slice links against an arm64-only archive.
+  if(IPLUG2_UNIVERSAL)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING
+        "Architectures for AEYLA universal macOS products" FORCE)
+  endif()
+endif()
+
+project(AeylaVisualDmxProduct VERSION 0.3.3 LANGUAGES C CXX)
 
 include(FetchContent)
 
@@ -45,6 +66,44 @@ if(NOT EXISTS "${_aeyla_vst3_sdk_dir}/base/source/baseiids.cpp")
     "The pinned Steinberg VST3 SDK is incomplete: base/source/baseiids.cpp is missing.")
 endif()
 
+# The product binary uses the same pinned ZIP implementation and compile-time
+# limits as the core test build. It is deliberately built here rather than
+# relying on a system package, preserving Windows/macOS parity.
+FetchContent_Declare(
+  aeyla_product_miniz_source
+  GIT_REPOSITORY https://github.com/richgel999/miniz.git
+  GIT_TAG 77d0dce8627735138c51770d1799a1ef48f2117d
+  GIT_SHALLOW FALSE
+  SOURCE_SUBDIR _aeyla_no_project_cmake
+)
+FetchContent_MakeAvailable(aeyla_product_miniz_source)
+
+set(_aeyla_miniz_generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/miniz")
+file(MAKE_DIRECTORY "${_aeyla_miniz_generated_dir}")
+file(WRITE "${_aeyla_miniz_generated_dir}/miniz_export.h"
+  "#pragma once\n#define MINIZ_EXPORT\n")
+
+add_library(aeyla_product_miniz STATIC
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz.c"
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz_zip.c"
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz_tinfl.c"
+  "${aeyla_product_miniz_source_SOURCE_DIR}/miniz_tdef.c"
+)
+target_include_directories(aeyla_product_miniz PUBLIC
+  "${aeyla_product_miniz_source_SOURCE_DIR}"
+  "${_aeyla_miniz_generated_dir}"
+)
+target_compile_definitions(aeyla_product_miniz PUBLIC
+  MINIZ_NO_TIME
+  MINIZ_NO_ZLIB_APIS
+)
+if(MSVC)
+  target_compile_options(aeyla_product_miniz PRIVATE /W3)
+else()
+  target_compile_options(aeyla_product_miniz PRIVATE
+    -Wall -Wextra -Wno-unused-parameter)
+endif()
+
 # Compatibility patch for the pinned iPlug2 proof revision. IColor is a simple
 # four-integer value type, but its constructor is not marked constexpr.
 set(_aeyla_iplug_color_header "${IPLUG2_DIR}/IGraphics/IGraphicsStructs.h")
@@ -75,7 +134,7 @@ endif()
 # standalone host attempts to initialise DirectSound/ASIO before opening its
 # window, which can terminate silently on machines with unavailable or unusual
 # audio devices. Make no-I/O mode the standalone default. This does not affect
-# VST3 MIDI delivery inside Ableton. Standalone MIDI will be supplied by the
+# VST3/AUv2 MIDI delivery inside a DAW. Standalone MIDI will be supplied by the
 # dedicated AEYLA MIDI service rather than by the audio-host wrapper.
 set(_aeyla_iplug_app_main "${IPLUG2_DIR}/IPlug/APP/IPlugAPP_main.cpp")
 file(READ "${_aeyla_iplug_app_main}" _aeyla_iplug_app_main_source)

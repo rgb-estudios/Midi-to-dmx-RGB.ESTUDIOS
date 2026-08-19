@@ -15,9 +15,12 @@ enum class HostEventType : std::uint8_t {
 };
 
 // Compact event copied from the VST3 process callback into a bounded SPSC queue.
-// It intentionally owns no memory and performs no work. `sample_offset` is the
-// event position within the current host process block; `project_sample` is set
-// only when the host provides a valid project sample position.
+// It intentionally owns no memory and performs no work. MIDI `channel` is
+// normalized at the wrapper boundary to the authored/user convention 1..16.
+// `sample_offset` is the event position within the current host process block;
+// `project_sample` is set only when the host provides a valid project sample
+// position. Absolute host transport itself uses HostTransportMailbox rather
+// than this queue so a MIDI burst cannot hide Stop/Seek/Loop truth.
 struct HostEvent {
   HostEventType type{HostEventType::note_off};
   std::uint8_t channel{0};

@@ -4,9 +4,15 @@ Read this file before changing code, schemas, UI, fixtures, build files or docum
 
 ## 1. Product objective
 
-AEYLA Visual DMX maps visual material and reusable scenes to DMX lighting. The user edits projects in a free standalone application on **Windows or macOS** and sends a portable show file to a separate performance computer. Ableton Live on **Windows or macOS** loads a VST3 runtime and triggers executors with MIDI notes.
+AEYLA Visual DMX maps reusable Looks and Cues to deterministic DMX lighting. A
+single AEYLA instance owns the complete lighting show (up to 15 internal Songs)
+inside REAPER, Ableton Live or Logic Pro, while the DAW remains authoritative
+for audio and transport. The standalone application and every plugin format
+share the same authoring model, runtime and portable `.aeylashow` file.
 
-Windows standalone, macOS standalone, Windows Ableton/VST3 and macOS Ableton/VST3 are mandatory product paths from the first integrated milestone. They are not later ports.
+Windows standalone, macOS standalone, Windows REAPER/Ableton VST3, macOS
+REAPER/Ableton VST3 and Logic Pro AUv2 are mandatory product paths. They are not
+later ports.
 
 The application is **not**:
 
@@ -14,7 +20,7 @@ The application is **not**:
 - a replacement for a full lighting console;
 - a universal fixture library;
 - a video-output server for the projector;
-- an Ableton project editor.
+- a DAW project editor or audio player.
 
 ## 2. Invariants — do not break
 
@@ -24,7 +30,9 @@ The application is **not**:
 4. **Cross-platform parity:** Windows and macOS may use different OS adapters, packaging and signing, but must not fork artistic, semantic, project or executor behavior.
 5. **Portable project:** a `.aeylashow` package must contain all referenced media or explicitly mark externally linked media.
 6. **Safe startup:** dimmer, strobe, haze, macros and reset start safe; DMX output starts disarmed.
-7. **No audio dependency:** do not add audio input or audio analysis unless a separately approved product decision explicitly changes scope.
+7. **No audio dependency:** optional linked audio/waveform metadata may assist
+   visual authoring, but AEYLA never owns production playback, audio routing or
+   audio analysis unless a separately approved decision changes scope.
 8. **Visual quality:** do not reduce the editor to generic developer UI. Follow `docs/VISUAL_DESIGN_SYSTEM.md` on both Windows and macOS.
 9. **Determinism:** the same project, timestamp, MIDI state and fixture profile must generate the same semantic frame and DMX frame on standalone and VST3 across both operating systems.
 10. **Real-time isolation:** network/USB I/O, project I/O and media decoding must never block the host audio thread.
@@ -91,7 +99,8 @@ Never substitute “done” for these statuses. Never use an unqualified `Implem
 - `src/media`: image/video decoding and visual-frame providers through cross-platform interfaces.
 - `src/runtime`: executor state, layer mixing and show clock.
 - `apps/editor`: shared standalone editor plus thin Windows/macOS platform packaging.
-- `plugins/vst3`: thin host adapter only; no duplicated artistic logic.
+- `product/AeylaVisualDmx`: thin VST3/AUv2/standalone adapters and native UI;
+  no duplicated artistic logic.
 - `prototype/ui`: disposable interaction prototype; never treat as production implementation.
 
 ## 7. Platform acceptance gates
@@ -100,8 +109,9 @@ No integrated alpha or later milestone may pass unless:
 
 - Windows standalone launches and loads the canonical example project;
 - macOS standalone launches and loads the same project;
-- Windows Ableton scans and loads the VST3;
-- macOS Ableton scans and loads the VST3;
+- Windows REAPER and Ableton scan and load the VST3;
+- macOS REAPER and Ableton scan and load the universal VST3;
+- Logic Pro scans and loads the AUv2;
 - the same MIDI sequence produces matching executor state and DMX output in all four paths;
 - save/reopen and missing-project behavior are documented and tested;
 - output starts disarmed in all four paths.

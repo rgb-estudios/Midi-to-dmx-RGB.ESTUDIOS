@@ -1,25 +1,63 @@
 # AEYLA Visual DMX
 
-AEYLA Visual DMX is a Windows-first visual-to-DMX system designed for the Aeyla live show.
-It converts visual sources (solid colours, gradients, procedural animations, images and short videos) into semantic lighting attributes, then maps those attributes to fixture-specific DMX channels.
+AEYLA Visual DMX is a cross-platform lighting authoring and playback system for
+the Aeyla live show. It converts named Looks and Cues into semantic lighting
+attributes and then maps those attributes to fixture-specific DMX channels.
 
-The project has two products that share one engine and one portable show file:
+One logical AEYLA instance owns the whole lighting show:
 
-- **AEYLA Visual DMX Editor** — standalone editor used without Ableton.
-- **AEYLA Visual DMX Runtime** — VST3 runtime loaded in Ableton to receive MIDI notes and output DMX.
+- up to 15 internal Songs;
+- Rig 10 physical PAR / Rig 14 programmed PAR;
+- one DMX universe over Art-Net in v1;
+- VST3 for REAPER/Ableton on Windows and macOS;
+- AUv2 for Logic Pro on macOS;
+- the same authoring workflow in the standalone application.
+
+The DAW owns audio, stems, click and global transport. AEYLA owns Rig, Patch,
+Looks, Cues, lighting timeline, MIDI Learn, deterministic DMX and output safety.
+MIDI is a transport/control protocol, not the creative programming language.
 
 ## Current repository state
 
-This repository is an auditable **foundation and executable prototype**, not a finished show-ready VST3.
+This repository is an auditable **Alpha 0.3 development branch**, not a
+show-ready build.
 It currently includes:
 
 - C++ semantic lighting core.
 - DMX compiler and ArtDMX packet encoder.
 - Unit tests proving that fixture channel reordering does not alter programmed looks.
-- Interactive browser prototype of the standalone editor.
+- Native iPlug2 APP/VST3/AUv2 product surface under active integration.
+- A source-level `Look → Cue → Song` authoring slice with complete Look schema,
+  15-Song navigation and explicit DAW Song-start bindings.
+- An independent lighting runtime worker so musical state is not owned by the
+  editor's `OnIdle` callback, plus an offline-render disarm/blackout inhibit.
+- Configurable Art-Net unicast output at 40 FPS on its own network worker, with
+  startup-disarmed ownership, latest-frame publication and fail-closed send
+  errors.
 - JSON schemas for projects and fixture profiles.
 - Full architecture, product, visual, QA, release and agent documentation.
 - GitHub Actions CI configuration.
+
+Current hard limits remain: Art-Net is integrated in source but has not been
+validated with the named node/PAR hardware, node reachability is not yet
+monitored, the Windows standalone OpenGL startup P0 is unresolved, host
+save/reopen and editor-closed behavior require real REAPER/Ableton/Logic
+evidence, and no hardware or full-show soak has been performed.
+
+## Alpha installer outputs
+
+The native packaging lane produces exactly three user-facing files from one
+commit:
+
+1. Windows x64 `.exe` installer for the VST3 used by REAPER and Ableton.
+2. macOS 11+ universal `.pkg` installer for VST3 and Logic AUv2.
+3. Cross-platform manual VST3 pack with selective install, audit and uninstall
+   tools.
+
+Alpha installers are unsigned and explicitly labeled `UNSIGNED`. They are test
+candidates, not rehearsal or show releases. The Windows standalone is excluded
+while OpenGL issue #17 remains unresolved; packaging never waives a failed
+runtime gate.
 
 ## First test
 
@@ -53,12 +91,16 @@ The browser prototype is an interaction and visual-design reference, not the pro
 1. Looks target semantic attributes, never absolute DMX channels.
 2. Fixture profiles translate semantic attributes to physical slots and ranges.
 3. Standalone and VST3 load the same `.aeylashow` package.
-4. The VST3 does not analyse audio; it receives MIDI and optional host transport position only.
-5. Output backends are replaceable: Art-Net, DMX USB Pro compatible and Open DMX/FTDI.
+4. AEYLA does not reproduce or analyse production audio; it receives MIDI and
+   host transport position.
+5. Art-Net is the only output backend in v1. USB-DMX is explicitly out of v1.
 6. Safety states take precedence over artistic states.
 7. Visual design is part of the product specification and must be tested.
 
-See [`AGENTS.md`](AGENTS.md) before any automated edit and [`docs/INDEX.md`](docs/INDEX.md) for the complete documentation map.
+See [`AGENTS.md`](AGENTS.md),
+[`docs/AEYLA_WORKFLOW_CONTRACT_ES.md`](docs/AEYLA_WORKFLOW_CONTRACT_ES.md) and
+[`docs/AEYLA_VALIDATION_MATRIX.md`](docs/AEYLA_VALIDATION_MATRIX.md) before
+changing product behaviour.
 
 ## Canonical repository
 

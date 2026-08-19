@@ -20,6 +20,7 @@ void check(bool condition, const std::string& message) {
 using aeyla::runtime::PluginComponentState;
 using aeyla::runtime::PluginStateError;
 using aeyla::runtime::ProjectLocatorMode;
+using aeyla::runtime::SessionSongBinding;
 }  // namespace
 
 int main() {
@@ -36,6 +37,10 @@ int main() {
   state.blackout = true;
   state.locator_mode = ProjectLocatorMode::relative_companion;
   state.project_locator = "show/AEYLA_SHOW.aeylashow";
+  state.song_bindings = {
+      SessionSongBinding{"song-intro", 16.0},
+      SessionSongBinding{"song-final", 144.5},
+  };
 
   const auto encoded = aeyla::runtime::encode_plugin_component_state(state);
   check(encoded.ok(), "valid state should encode");
@@ -45,6 +50,8 @@ int main() {
   check(decoded.ok(), "valid encoded state should decode");
   check(decoded.state == state, "state should survive exact round trip");
   check(decoded.state.blackout, "blackout should persist as safe state");
+  check(decoded.state.song_bindings == state.song_bindings,
+        "all 15-song session bindings must survive host-state round trip");
 
   // Every truncated prefix must fail; no partial state may be accepted.
   for (std::size_t size = 0; size < encoded.bytes.size(); ++size) {
@@ -134,10 +141,53 @@ int main() {
           "oversized locator must be rejected");
   }
 
+  // Song-to-host bindings are bounded, unique and finite. They are session
+  // placement data and must never admit an ambiguous or corrupt mapping.
+  {
+    auto invalid = state;
+    invalid.song_bindings.push_back(SessionSongBinding{"song-intro", 32.0});
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_song_binding,
+          "duplicate song binding must be rejected");
+  }
+  {
+    auto invalid = state;
+    invalid.song_bindings.front().host_start_ppq =
+        std::numeric_limits<double>::quiet_NaN();
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_song_binding,
+          "non-finite host start PPQ must be rejected");
+  }
+
+  // Legacy format 1.0 contains no binding-count tail. It remains readable and
+  // migrates deterministically to an empty binding list (safe until SET START).
+  {
+    PluginComponentState legacy_state = state;
+    legacy_state.song_bindings.clear();
+    auto bytes = aeyla::runtime::encode_plugin_component_state(legacy_state).bytes;
+    check(bytes.size() >= 2U, "current empty-binding state must contain count tail");
+    bytes.resize(bytes.size() - 2U);
+    bytes[10] = 0U;
+    bytes[11] = 0U;
+    std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
+                                 (static_cast<std::uint32_t>(bytes[13]) << 8U) |
+                                 (static_cast<std::uint32_t>(bytes[14]) << 16U) |
+                                 (static_cast<std::uint32_t>(bytes[15]) << 24U);
+    payload_size -= 2U;
+    bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
+    bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
+    bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
+    const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    check(result.ok() && result.state == legacy_state,
+          "legacy 1.0 host state must migrate to no session bindings");
+  }
+
   // Same-major future minor payloads may append fields and remain readable.
   {
     auto bytes = encoded.bytes;
-    bytes[10] = 1;  // format minor = 1
+    bytes[10] = static_cast<std::uint8_t>(
+        aeyla::runtime::kPluginStateFormatMinor + 1U);
     bytes[11] = 0;
     std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
                                  (static_cast<std::uint32_t>(bytes[13]) << 8U) |

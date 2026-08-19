@@ -1,0 +1,94 @@
+#include "capture/artnet_capture_worker.h"
+#include "output/artnet_output_worker.h"
+
+#include <chrono>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+#include <thread>
+
+namespace {
+
+void require(bool condition, const char* message) {
+  if(!condition) {
+    std::cerr << "FAILED: " << message << '\n';
+    std::exit(1);
+  }
+}
+
+template <typename Predicate>
+bool wait_until(Predicate predicate,
+                std::chrono::milliseconds timeout = std::chrono::seconds(2)) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while(std::chrono::steady_clock::now() < deadline) {
+    if(predicate()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return predicate();
+}
+
+}  // namespace
+
+int main() {
+  constexpr std::uint16_t kPort = 16645U;
+  constexpr std::uint16_t kUniverse = 7U;
+
+  aeyla::capture::ArtNetCaptureWorker capture;
+  aeyla::capture::ArtNetCaptureConfig capture_config;
+  capture_config.listen_ipv4 = "127.0.0.1";
+  capture_config.udp_port = kPort;
+  capture_config.port_address = kUniverse;
+  capture_config.frames_per_second = 44U;
+
+  std::string error;
+  require(capture.start(capture_config, error), error.c_str());
+  require(wait_until([&]() { return capture.stats().running; }),
+          "capture worker did not enter running state");
+
+  aeyla::output::ArtNetOutputWorker output;
+  aeyla::output::ArtNetOutputConfig output_config;
+  output_config.source_ipv4 = "127.0.0.1";
+  output_config.target_ipv4 = "127.0.0.1";
+  output_config.udp_port = kPort;
+  output_config.port_address = kUniverse;
+  output_config.channel_count = 512U;
+  output_config.frames_per_second = 44U;
+  require(output.start(output_config, error), error.c_str());
+
+  aeyla::DmxUniverse expected{};
+  expected[0] = 17U;
+  expected[1] = 99U;
+  expected[44] = 200U;
+  expected[511] = 255U;
+  output.publish_latest(expected, 1U);
+  output.set_enabled(true);
+
+  require(wait_until([&]() { return capture.stats().packets_accepted >= 2U; }),
+          "capture worker did not accept loopback ArtDMX packets");
+
+  aeyla::DmxUniverse received{};
+  require(capture.latest_frame(received), "capture did not expose latest frame");
+  require(received == expected, "latest captured DMX frame differs from source");
+
+  require(capture.begin_recording(error), error.c_str());
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  auto take = capture.end_recording("Loopback Take");
+  require(take.has_value(), "recording did not produce a Take");
+  require(take->frames_per_second == 44U, "Take FPS changed from requested 44 Hz");
+  require(take->port_address == kUniverse, "Take universe differs from capture config");
+  require(take->source_ipv4 == "127.0.0.1", "Take source lock is incorrect");
+  require(take->frames.size() >= 5U, "fixed-rate recorder produced too few frames");
+  require(take->frames.back() == expected, "recorded Take frame differs from source");
+
+  const auto stats = capture.stats();
+  require(stats.invalid_packets == 0U, "valid loopback stream produced invalid packets");
+  require(stats.sequence_gaps == 0U, "continuous loopback stream produced sequence gaps");
+
+  output.set_enabled(false);
+  output.stop();
+  capture.stop();
+
+  std::cout << "Art-Net capture loopback PASS: " << take->frames.size()
+            << " normalized frames at 44 Hz\n";
+  return 0;
+}

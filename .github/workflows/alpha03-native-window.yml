@@ -1,0 +1,196 @@
+name: alpha03-native-window
+
+on:
+  pull_request:
+    paths:
+      - product/**
+      - src/core/**
+      - src/product/**
+      - src/runtime/**
+      - .github/workflows/alpha03-native-window.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  windows-native-window:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone pinned iPlug2 and VST3 SDK
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+
+          $sdkPath = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdkPath) { Remove-Item -Recurse -Force $sdkPath }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdkPath
+          git -C $sdkPath checkout $env:VST3SDK_COMMIT
+          git -C $sdkPath submodule update --init --recursive
+
+          if (-not (Test-Path "$sdkPath/pluginterfaces")) {
+            throw "Pinned Steinberg VST3 SDK is missing"
+          }
+
+      - name: Verify Windows application resources
+        shell: pwsh
+        run: |
+          $resource = "product/AeylaVisualDmx/resources/main.rc"
+          if (-not (Test-Path $resource)) {
+            throw "Windows resource script is missing"
+          }
+          $text = Get-Content $resource -Raw
+          foreach ($required in @("IDD_DIALOG_MAIN", "IDR_MENU1", "IDR_ACCELERATOR1")) {
+            if ($text -notmatch $required) {
+              throw "Windows resource script is missing $required"
+            }
+          }
+
+      - name: Configure source-built graphical product
+        shell: pwsh
+        run: >-
+          cmake -S product -B build-native-window
+          -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2"
+          -DIPLUG_DEPLOY_PLUGINS=OFF
+          -DIGRAPHICS_BACKEND=NANOVG
+
+      - name: Build source Windows standalone
+        run: cmake --build build-native-window --config Release --target AeylaVisualDmx-app
+
+      - name: Create a real native window
+        shell: pwsh
+        run: |
+          $app = Get-ChildItem -Path build-native-window -Recurse -File -Filter "AeylaVisualDmx.exe" | Select-Object -First 1
+          if (-not $app) { throw "Source-built graphical standalone was not produced" }
+
+          $evidenceDir = Join-Path (Resolve-Path build-native-window) "evidence"
+          New-Item -ItemType Directory -Force $evidenceDir | Out-Null
+          $evidence = Join-Path $evidenceDir "WINDOW_CREATION.txt"
+          $dumpDir = Join-Path $evidenceDir "dumps"
+          New-Item -ItemType Directory -Force $dumpDir | Out-Null
+
+          # Preserve a full user-mode dump for every startup crash. A numeric
+          # exit code alone cannot identify the failing module or stack frame.
+          $localDumps = "HKCU:\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\AeylaVisualDmx.exe"
+          New-Item -Path $localDumps -Force | Out-Null
+          New-ItemProperty -Path $localDumps -Name DumpFolder -PropertyType ExpandString -Value $dumpDir -Force | Out-Null
+          New-ItemProperty -Path $localDumps -Name DumpType -PropertyType DWord -Value 2 -Force | Out-Null
+
+          # Hosted runners may disable WER dump generation. ProcDump is the
+          # deterministic fallback: wait for this exact image and capture the
+          # unhandled exception with full process memory.
+          $procDumpZip = Join-Path $env:RUNNER_TEMP "procdump.zip"
+          $procDumpRoot = Join-Path $env:RUNNER_TEMP "procdump"
+          Invoke-WebRequest -Uri "https://download.sysinternals.com/files/Procdump.zip" -OutFile $procDumpZip
+          Expand-Archive -Path $procDumpZip -DestinationPath $procDumpRoot -Force
+          $procDump = Join-Path $procDumpRoot "procdump64.exe"
+          if (-not (Test-Path $procDump)) { throw "Microsoft ProcDump x64 was not found" }
+          $dumpMonitor = Start-Process -FilePath $procDump -ArgumentList @(
+            "-accepteula", "-ma", "-e", "-w", "AeylaVisualDmx.exe", $dumpDir
+          ) -PassThru -WindowStyle Hidden
+          Start-Sleep -Milliseconds 500
+
+          $process = Start-Process -FilePath $app.FullName -ArgumentList "--no-io" -PassThru
+          $windowCreated = $false
+          $handle = 0
+
+          for ($attempt = 0; $attempt -lt 40; $attempt++) {
+            Start-Sleep -Milliseconds 500
+            $process.Refresh()
+
+            if ($process.HasExited) {
+              # ProcDump/WER write asynchronously after process termination;
+              # allow the full dump to finish before preserving paths.
+              for ($dumpAttempt = 0; $dumpAttempt -lt 20; $dumpAttempt++) {
+                if (Get-ChildItem -Path $dumpDir -File -Filter "*.dmp" -ErrorAction SilentlyContinue) { break }
+                Start-Sleep -Milliseconds 500
+              }
+              if (-not $dumpMonitor.HasExited) {
+                Stop-Process -Id $dumpMonitor.Id -Force -ErrorAction SilentlyContinue
+              }
+              $dumpPaths = @(Get-ChildItem -Path $dumpDir -File -Filter "*.dmp" -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.FullName })
+              @(
+                "RESULT: FAILED - source-built process exited before creating a window"
+                "ExitCode: $($process.ExitCode)"
+                "Commit: $env:GITHUB_SHA"
+                "Executable: $($app.FullName)"
+                "CrashDumps: $($dumpPaths -join ', ')"
+              ) | Set-Content -Encoding UTF8 $evidence
+              throw "Source-built graphical APP exited with code $($process.ExitCode)"
+            }
+
+            if ($process.MainWindowHandle -ne 0) {
+              $windowCreated = $true
+              $handle = $process.MainWindowHandle
+              break
+            }
+          }
+
+          if (-not $windowCreated) {
+            @(
+              "RESULT: FAILED - process remained alive but created no native window"
+              "PID: $($process.Id)"
+              "Commit: $env:GITHUB_SHA"
+              "Executable: $($app.FullName)"
+            ) | Set-Content -Encoding UTF8 $evidence
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            if (-not $dumpMonitor.HasExited) {
+              Stop-Process -Id $dumpMonitor.Id -Force -ErrorAction SilentlyContinue
+            }
+            throw "Source-built graphical APP created no native window in 20 seconds"
+          }
+
+          @(
+            "RESULT: PASS - source-built native window created"
+            "PID: $($process.Id)"
+            "MainWindowHandle: $handle"
+            "Commit: $env:GITHUB_SHA"
+            "Executable: $($app.FullName)"
+            "OS: $([Environment]::OSVersion.VersionString)"
+          ) | Set-Content -Encoding UTF8 $evidence
+
+          Get-Content $evidence
+          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          if (-not $dumpMonitor.HasExited) {
+            Stop-Process -Id $dumpMonitor.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Collect validated source build
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package/Standalone | Out-Null
+          New-Item -ItemType Directory -Force package/Evidence | Out-Null
+
+          $app = Get-ChildItem -Path build-native-window -Recurse -File -Filter "AeylaVisualDmx.exe" | Select-Object -First 1
+          if ($app) { Copy-Item -Force $app.FullName package/Standalone/ }
+
+          $pdb = Get-ChildItem -Path build-native-window -Recurse -File -Filter "AeylaVisualDmx.pdb" | Select-Object -First 1
+          if ($pdb) { Copy-Item -Force $pdb.FullName package/Evidence/ }
+
+          if (Test-Path build-native-window/evidence/WINDOW_CREATION.txt) {
+            Copy-Item -Force build-native-window/evidence/WINDOW_CREATION.txt package/Evidence/
+          }
+          if (Test-Path build-native-window/evidence/dumps) {
+            Copy-Item -Recurse -Force build-native-window/evidence/dumps package/Evidence/
+          }
+
+          if (Test-Path package/Standalone/AeylaVisualDmx.exe) {
+            $hash = (Get-FileHash package/Standalone/AeylaVisualDmx.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  Standalone/AeylaVisualDmx.exe" | Set-Content -Encoding ASCII package/SHA256SUMS.txt
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AEYLA-0.3-alpha.1-Windows-source-native-window
+          path: package/**
+          if-no-files-found: error

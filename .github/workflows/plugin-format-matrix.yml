@@ -1,0 +1,163 @@
+name: plugin-format-matrix
+
+on:
+  pull_request:
+    paths:
+      - product/**
+      - src/**
+      - tests/**
+      - .github/workflows/plugin-format-matrix.yml
+  workflow_dispatch:
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  windows-vst3:
+    name: Windows x64 / VST3 / Steinberg Validator
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Configure AEYLA product
+        shell: pwsh
+        run: >-
+          cmake -S product -B build-product
+          -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2"
+          -DIPLUG_DEPLOY_PLUGINS=OFF
+          -DIGRAPHICS_BACKEND=NANOVG
+
+      - name: Build Windows VST3
+        run: cmake --build build-product --config Release --target AeylaVisualDmx-vst3
+
+      - name: Configure Steinberg Validator
+        shell: pwsh
+        run: >-
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK
+          -B build-validator
+          -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF
+          -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF
+          -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+
+      - name: Build Steinberg Validator
+        run: cmake --build build-validator --config Release --target validator
+
+      - name: Validate AEYLA VST3
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "AEYLA VST3 bundle not found" }
+          $validator = Get-ChildItem build-validator -Recurse -File -Filter "validator.exe" | Select-Object -First 1
+          if (-not $validator) { throw "Steinberg validator.exe not found" }
+          & $validator.FullName $bundle.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Steinberg Validator failed with exit code $LASTEXITCODE" }
+
+      - name: Inspect VST3 architecture
+        shell: pwsh
+        run: |
+          $binary = Get-ChildItem build-product -Recurse -File -Filter "AeylaVisualDmx.vst3" | Where-Object { $_.FullName -match 'x86_64-win' } | Select-Object -First 1
+          if (-not $binary) { throw "Windows x64 VST3 binary not found" }
+          Write-Host "VST3 binary: $($binary.FullName)"
+
+  macos-vst3-au:
+    name: macOS Universal / VST3 + AUv2 / Validators
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Configure universal AEYLA product
+        run: >-
+          cmake -S product -B build-product -G Xcode
+          -DIPLUG2_DIR="${GITHUB_WORKSPACE}/external/iPlug2"
+          -DIPLUG2_UNIVERSAL=ON
+          -DIPLUG_DEPLOY_PLUGINS=OFF
+          -DIGRAPHICS_BACKEND=NANOVG
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build VST3 and AUv2
+        run: cmake --build build-product --config Release --target AeylaVisualDmx-vst3 AeylaVisualDmx-au
+
+      - name: Verify universal binaries
+        run: |
+          vst3="$(find build-product -type f -path '*AeylaVisualDmx.vst3/Contents/MacOS/*' | head -n 1)"
+          au="$(find build-product -type f -path '*AeylaVisualDmx.component/Contents/MacOS/*' | head -n 1)"
+          test -n "$vst3" && test -n "$au"
+          # `-verify_arch` consumes every following argument as an architecture.
+          # Put the input file before the operation or lipo mistakes the path for
+          # a third architecture and reports a false failure.
+          lipo "$vst3" -verify_arch x86_64 arm64
+          lipo "$au" -verify_arch x86_64 arm64
+          file "$vst3"
+          file "$au"
+
+      - name: Configure Steinberg Validator
+        run: >-
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK
+          -B build-validator -G Xcode
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF
+          -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF
+          -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+
+      - name: Build Steinberg Validator
+        run: cmake --build build-validator --config Release --target validator
+
+      - name: Validate AEYLA VST3
+        run: |
+          bundle="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          test -n "$bundle" && test -n "$validator"
+          "$validator" "$bundle"
+
+      - name: Install ad-hoc AUv2 for validation
+        run: |
+          component="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
+          test -n "$component"
+          codesign --force --deep --sign - "$component"
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          rm -rf "$HOME/Library/Audio/Plug-Ins/Components/AeylaVisualDmx.component"
+          cp -R "$component" "$HOME/Library/Audio/Plug-Ins/Components/"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+
+      - name: Validate AUv2 with Apple auval
+        run: |
+          auval -a | grep -i "AyVD" || true
+          auval -v aumu AyVD RGBE
+
+      - name: Capture format evidence
+        if: always()
+        run: |
+          mkdir -p evidence
+          system_profiler SPSoftwareDataType > evidence/macos-system.txt
+          auval -a > evidence/auval-list.txt 2>&1 || true
+          find build-product -maxdepth 8 \( -name '*.vst3' -o -name '*.component' \) -print > evidence/bundles.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AEYLA-macOS-plugin-format-evidence
+          path: evidence/**
+          if-no-files-found: warn

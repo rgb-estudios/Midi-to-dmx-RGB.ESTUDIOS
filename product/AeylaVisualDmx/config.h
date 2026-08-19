@@ -1,7 +1,7 @@
 #define PLUG_NAME "AEYLA Visual DMX"
 #define PLUG_MFR "RGBEstudios"
-#define PLUG_VERSION_HEX 0x00020103
-#define PLUG_VERSION_STR "0.2.1-alpha.3"
+#define PLUG_VERSION_HEX 0x00000303
+#define PLUG_VERSION_STR "0.3.3-alpha"
 #define PLUG_UNIQUE_ID 'AyVD'
 #define PLUG_MFR_ID 'RGBE'
 #define PLUG_URL_STR "https://github.com/rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS"
@@ -21,7 +21,9 @@
 #define PLUG_DOES_MIDI_IN 1
 #define PLUG_DOES_MIDI_OUT 0
 #define PLUG_DOES_MPE 0
-#define PLUG_DOES_STATE_CHUNKS 0
+// Custom component chunks contain versioned AEYLA project identity and safe
+// preferences, followed by iPlug's parameter state. Output Arm is excluded.
+#define PLUG_DOES_STATE_CHUNKS 1
 
 #define PLUG_HAS_UI 1
 #define PLUG_WIDTH 1280
