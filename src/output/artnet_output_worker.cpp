@@ -74,8 +74,6 @@ bool parse_numeric_ipv4(std::string_view text,
 }
 
 bool valid_unicast_octets(const std::array<std::uint8_t, 4>& octets) noexcept {
-  // 0/8 is "this network" and 224/4 includes multicast plus the reserved
-  // high range. Neither is a deterministic explicit interface/destination.
   return octets[0] != 0U && octets[0] < 224U;
 }
 
@@ -150,6 +148,16 @@ bool validate_artnet_output_config(const ArtNetOutputConfig& config,
 class ArtNetOutputWorker::Impl final {
  public:
   ~Impl() { shutdown(); }
+
+  void set_preferred_source(std::string source) {
+    const std::scoped_lock lock(preferred_source_mutex_);
+    preferred_source_ipv4_ = std::move(source);
+  }
+
+  std::string preferred_source() const {
+    const std::scoped_lock lock(preferred_source_mutex_);
+    return preferred_source_ipv4_;
+  }
 
   bool acquire_lease(const ArtNetOutputConfig& next_config,
                      std::string& error_message) {
@@ -238,6 +246,7 @@ class ArtNetOutputWorker::Impl final {
   void launch() {
     stop_requested_.store(false, std::memory_order_release);
     enabled_.store(false, std::memory_order_release);
+    override_enabled_.store(false, std::memory_order_release);
     blackout_pending_.store(false, std::memory_order_release);
     sent_packets_.store(0U, std::memory_order_relaxed);
     blackout_packets_.store(0U, std::memory_order_relaxed);
@@ -250,6 +259,9 @@ class ArtNetOutputWorker::Impl final {
       latest_.fill(0U);
       latest_generation_ = 0U;
       has_frame_ = false;
+      override_latest_.fill(0U);
+      override_generation_ = 0U;
+      has_override_frame_ = false;
     }
 
     worker_ = std::thread([this]() { run(); });
@@ -257,15 +269,17 @@ class ArtNetOutputWorker::Impl final {
 
   void shutdown() noexcept {
     if (worker_.joinable()) {
-      const bool was_enabled =
-          enabled_.exchange(false, std::memory_order_acq_rel);
-      if (was_enabled)
+      const bool was_enabled = enabled_.exchange(false, std::memory_order_acq_rel);
+      const bool was_override =
+          override_enabled_.exchange(false, std::memory_order_acq_rel);
+      if (was_enabled || was_override)
         blackout_pending_.store(true, std::memory_order_release);
       stop_requested_.store(true, std::memory_order_release);
       wake_.notify_all();
       worker_.join();
     } else {
       enabled_.store(false, std::memory_order_release);
+      override_enabled_.store(false, std::memory_order_release);
       stop_requested_.store(true, std::memory_order_release);
     }
 
@@ -288,17 +302,40 @@ class ArtNetOutputWorker::Impl final {
     published_generation_.store(generation, std::memory_order_release);
   }
 
+  void publish_override(const DmxUniverse& universe, std::uint64_t generation) {
+    const std::scoped_lock lock(frame_mutex_);
+    override_latest_ = universe;
+    override_generation_ = generation;
+    has_override_frame_ = true;
+  }
+
   void set_enabled(bool next_enabled) noexcept {
     const bool previous = enabled_.exchange(next_enabled, std::memory_order_acq_rel);
-    if (previous && !next_enabled)
+    if (previous && !next_enabled &&
+        !override_enabled_.load(std::memory_order_acquire))
       blackout_pending_.store(true, std::memory_order_release);
     wake_.notify_all();
+  }
+
+  void set_override_enabled(bool next_enabled) noexcept {
+    const bool previous =
+        override_enabled_.exchange(next_enabled, std::memory_order_acq_rel);
+    if(next_enabled)
+      blackout_pending_.store(false, std::memory_order_release);
+    else if(previous && !enabled_.load(std::memory_order_acquire))
+      blackout_pending_.store(true, std::memory_order_release);
+    wake_.notify_all();
+  }
+
+  bool override_enabled() const noexcept {
+    return override_enabled_.load(std::memory_order_acquire);
   }
 
   ArtNetOutputStats stats() const noexcept {
     ArtNetOutputStats result;
     result.running = running_.load(std::memory_order_acquire);
     result.enabled = enabled_.load(std::memory_order_acquire);
+    result.override_enabled = override_enabled_.load(std::memory_order_acquire);
     result.published_generation =
         published_generation_.load(std::memory_order_relaxed);
     result.last_sent_generation =
@@ -327,6 +364,15 @@ class ArtNetOutputWorker::Impl final {
     if (!has_frame_) return false;
     universe = latest_;
     generation = latest_generation_;
+    return true;
+  }
+
+  bool snapshot_override(DmxUniverse& universe,
+                         std::uint64_t& generation) {
+    const std::scoped_lock lock(frame_mutex_);
+    if (!has_override_frame_) return false;
+    universe = override_latest_;
+    generation = override_generation_;
     return true;
   }
 
@@ -393,9 +439,12 @@ class ArtNetOutputWorker::Impl final {
         continue;
       }
 
-      if (enabled_.load(std::memory_order_acquire)) {
-        DmxUniverse latest{};
-        std::uint64_t generation = 0U;
+      DmxUniverse latest{};
+      std::uint64_t generation = 0U;
+      if (override_enabled_.load(std::memory_order_acquire)) {
+        if (snapshot_override(latest, generation))
+          (void) transmit(latest, generation, false);
+      } else if (enabled_.load(std::memory_order_acquire)) {
         if (snapshot_latest(latest, generation))
           (void) transmit(latest, generation, false);
       }
@@ -405,6 +454,9 @@ class ArtNetOutputWorker::Impl final {
 
     running_.store(false, std::memory_order_release);
   }
+
+  mutable std::mutex preferred_source_mutex_;
+  std::string preferred_source_ipv4_;
 
   ArtNetOutputConfig config_{};
   SocketHandle socket_{kInvalidSocket};
@@ -420,12 +472,16 @@ class ArtNetOutputWorker::Impl final {
   std::atomic<bool> stop_requested_{false};
   std::atomic<bool> running_{false};
   std::atomic<bool> enabled_{false};
+  std::atomic<bool> override_enabled_{false};
   std::atomic<bool> blackout_pending_{false};
 
   mutable std::mutex frame_mutex_;
   DmxUniverse latest_{};
   std::uint64_t latest_generation_{0U};
   bool has_frame_{false};
+  DmxUniverse override_latest_{};
+  std::uint64_t override_generation_{0U};
+  bool has_override_frame_{false};
 
   std::atomic<std::uint64_t> published_generation_{0U};
   std::atomic<std::uint64_t> last_sent_generation_{0U};
@@ -440,14 +496,22 @@ ArtNetOutputWorker::ArtNetOutputWorker() : impl_(std::make_unique<Impl>()) {}
 
 ArtNetOutputWorker::~ArtNetOutputWorker() = default;
 
+void ArtNetOutputWorker::set_preferred_source_ipv4(std::string source_ipv4) {
+  impl_->set_preferred_source(std::move(source_ipv4));
+}
+
 bool ArtNetOutputWorker::start(const ArtNetOutputConfig& config,
                                std::string& error_message) {
+  ArtNetOutputConfig effective = config;
+  if(effective.source_ipv4.empty())
+    effective.source_ipv4 = impl_->preferred_source();
+
   error_message.clear();
-  if (!validate_artnet_output_config(config, error_message)) return false;
+  if (!validate_artnet_output_config(effective, error_message)) return false;
 
   impl_->shutdown();
-  if (!impl_->acquire_lease(config, error_message)) return false;
-  if (!impl_->initialize_socket(config, error_message)) {
+  if (!impl_->acquire_lease(effective, error_message)) return false;
+  if (!impl_->initialize_socket(effective, error_message)) {
     impl_->shutdown();
     return false;
   }
@@ -471,6 +535,19 @@ void ArtNetOutputWorker::publish_latest(const DmxUniverse& universe,
 
 void ArtNetOutputWorker::set_enabled(bool enabled) noexcept {
   impl_->set_enabled(enabled);
+}
+
+void ArtNetOutputWorker::publish_override(const DmxUniverse& universe,
+                                          std::uint64_t generation) {
+  impl_->publish_override(universe, generation);
+}
+
+void ArtNetOutputWorker::set_override_enabled(bool enabled) noexcept {
+  impl_->set_override_enabled(enabled);
+}
+
+bool ArtNetOutputWorker::override_enabled() const noexcept {
+  return impl_->override_enabled();
 }
 
 ArtNetOutputStats ArtNetOutputWorker::stats() const noexcept {
