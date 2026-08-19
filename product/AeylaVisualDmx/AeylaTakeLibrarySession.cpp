@@ -9,6 +9,7 @@ namespace aeyla::take_library_session {
 namespace {
 
 struct SessionState {
+  std::string project_id;
   std::filesystem::path directory;
   std::map<std::string, std::filesystem::path> loaded_paths;
   std::string storage_message;
@@ -26,6 +27,15 @@ SessionState& state_for(const void* owner) {
 void clear(const void* owner) noexcept {
   const std::scoped_lock lock(gMutex);
   gSessions.erase(owner);
+}
+
+void ensure_scope(const void* owner, std::string_view project_id) {
+  const std::scoped_lock lock(gMutex);
+  auto& state = state_for(owner);
+  const std::string next(project_id);
+  if(state.project_id == next) return;
+  state = {};
+  state.project_id = next;
 }
 
 void set_directory(const void* owner, std::filesystem::path directory) {
