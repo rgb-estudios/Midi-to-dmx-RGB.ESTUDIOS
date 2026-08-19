@@ -29,8 +29,12 @@ bool DmxTakeScheduler::load_take(const DmxTake* take,
 
   const std::scoped_lock lock(mutex_);
   take_ = take;
-  range_start_frame_ = 0U;
-  range_end_frame_exclusive_ = take_->frames.size();
+  range_start_frame_ = take_->effective_start_frame();
+  range_end_frame_exclusive_ = take_->effective_end_frame_exclusive();
+  if(range_end_frame_exclusive_ <= range_start_frame_ + 1U) {
+    range_start_frame_ = 0U;
+    range_end_frame_exclusive_ = take_->frames.size();
+  }
   current_frame_ = range_start_frame_;
   hold_frame_ = take_->frames[current_frame_];
   hold_valid_ = true;
