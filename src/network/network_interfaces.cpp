@@ -30,11 +30,12 @@ std::string wide_to_utf8(const wchar_t* text) {
   const int required = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0,
                                            nullptr, nullptr);
   if(required <= 1) return {};
-  std::string result(static_cast<std::size_t>(required - 1), '\0');
+  std::string result(static_cast<std::size_t>(required), '\0');
   const int converted = WideCharToMultiByte(CP_UTF8, 0, text, -1,
-                                            result.data(), required - 1,
+                                            result.data(), required,
                                             nullptr, nullptr);
-  if(converted <= 0) return {};
+  if(converted <= 1) return {};
+  result.resize(static_cast<std::size_t>(converted - 1));
   return result;
 }
 #endif
@@ -73,6 +74,10 @@ std::vector<NetworkInterface> enumerate_ipv4_interfaces() {
   std::vector<NetworkInterface> result;
 
 #ifdef _WIN32
+  WSADATA winsock{};
+  if(WSAStartup(MAKEWORD(2, 2), &winsock) != 0)
+    return result;
+
   ULONG buffer_size = 16U * 1024U;
   std::vector<unsigned char> storage(buffer_size);
   auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data());
@@ -88,34 +93,35 @@ std::vector<NetworkInterface> enumerate_ipv4_interfaces() {
                      GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
         nullptr, adapters, &buffer_size);
   }
-  if(status != NO_ERROR) return result;
+  if(status == NO_ERROR) {
+    for(auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
+      if(adapter->OperStatus != IfOperStatusUp) continue;
+      const bool loopback = adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
+      std::string name = wide_to_utf8(adapter->FriendlyName);
+      if(name.empty() && adapter->AdapterName != nullptr)
+        name = adapter->AdapterName;
+      const std::string id = adapter->AdapterName == nullptr
+                                 ? name
+                                 : std::string(adapter->AdapterName);
 
-  for(auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
-    if(adapter->OperStatus != IfOperStatusUp) continue;
-    const bool loopback = adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
-    std::string name = wide_to_utf8(adapter->FriendlyName);
-    if(name.empty() && adapter->AdapterName != nullptr)
-      name = adapter->AdapterName;
-    const std::string id = adapter->AdapterName == nullptr
-                               ? name
-                               : std::string(adapter->AdapterName);
-
-    for(auto* address = adapter->FirstUnicastAddress;
-        address != nullptr; address = address->Next) {
-      if(address->Address.lpSockaddr == nullptr ||
-         address->Address.lpSockaddr->sa_family != AF_INET)
-        continue;
-      const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(
-          address->Address.lpSockaddr);
-      std::array<char, INET_ADDRSTRLEN> text{};
-      if(inet_ntop(AF_INET, &ipv4->sin_addr, text.data(), text.size()) == nullptr)
-        continue;
-      result.push_back({id, name, text.data(),
-                        static_cast<std::uint8_t>(
-                            std::min<ULONG>(address->OnLinkPrefixLength, 32U)),
-                        loopback});
+      for(auto* address = adapter->FirstUnicastAddress;
+          address != nullptr; address = address->Next) {
+        if(address->Address.lpSockaddr == nullptr ||
+           address->Address.lpSockaddr->sa_family != AF_INET)
+          continue;
+        const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(
+            address->Address.lpSockaddr);
+        std::array<char, INET_ADDRSTRLEN> text{};
+        if(inet_ntop(AF_INET, &ipv4->sin_addr, text.data(), text.size()) == nullptr)
+          continue;
+        result.push_back({id, name, text.data(),
+                          static_cast<std::uint8_t>(
+                              std::min<ULONG>(address->OnLinkPrefixLength, 32U)),
+                          loopback});
+      }
     }
   }
+  (void)WSACleanup();
 #else
   ifaddrs* addresses = nullptr;
   if(getifaddrs(&addresses) != 0 || addresses == nullptr)
