@@ -320,7 +320,7 @@ private:
     g.DrawText(IText(18.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
                title.c_str(), IRECT(work.L, work.T, work.R, work.T + 36.0F));
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "AUTHORING SOURCE  AVOLITES TITAN  →  ART-NET U1  →  TAKE",
+               "AUTHORING SOURCE  AVOLITES TITAN  →  ART-NET U1  →  .AEYLATAKE",
                IRECT(work.L, work.T + 39.0F, work.R, work.T + 61.0F));
 
     const std::string take = mPlug.ActiveTakeStatus();
@@ -366,14 +366,14 @@ private:
                "· first Art-Net source locks during each Take\n"
                "· STOP holds the current frame; DISARM is explicit\n"
                "· host heartbeat / offline render can auto-disarm output\n"
-               "· Takes are RAM-only in this PRETEST build",
+               "· .aeylatake persists to local / external storage",
                IRECT(work.L, infoTop + 27.0F, work.R,
                      std::min(work.B - 58.0F, infoTop + 140.0F)));
 
     const IRECT messageRect(work.L, work.B - 48.0F, work.R, work.B);
     g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
     const std::string message = mMessage.empty()
-        ? "Ready. Select a Song, confirm RX LIVE, record a Take, then test replay."
+        ? "Ready. REC/PLAY asks for a TAKE LIBRARY folder when needed."
         : mMessage;
     g.DrawText(IText(9.0F, mMessage.empty() ? kFaint : kWarn,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
