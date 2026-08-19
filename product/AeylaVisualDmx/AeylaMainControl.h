@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdio>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -17,7 +20,7 @@ public:
   , mPlug(plug)
   {
     (void)mPlug.RefreshNetworkInterfacesFromUI();
-    RestoreRouteFieldsFromBackend();
+    RestoreNetworkFieldFromSelectedTx();
   }
 
   void Draw(IGraphics& g) override
@@ -26,7 +29,7 @@ public:
     g.FillRect(kBackground, mRECT);
     DrawHeader(g);
     DrawSetlist(g);
-    DrawSongWorkspace(g);
+    DrawTakeEditor(g);
     DrawRouting(g);
   }
 
@@ -40,8 +43,8 @@ public:
       const bool enable = !mPlug.EffectiveBlackout();
       mPlug.SetBlackoutFromUI(enable);
       mMessage = enable
-          ? "BLACKOUT latched · outputs disarmed once. Disable BLACKOUT, then ARM manually."
-          : "BLACKOUT released · output remains DISARMED until you ARM it.";
+          ? "BLACKOUT ON · output disarmed."
+          : "BLACKOUT OFF · ARM remains manual.";
       SetDirty(false);
       return;
     }
@@ -56,13 +59,12 @@ public:
     const std::size_t songCount = mPlug.SongCount();
     for(std::size_t index = 0; index < songCount && index < mSongRows.size(); ++index)
     {
-      if(Contains(mSongRows[index], x, y))
-      {
-        if(!mPlug.SelectSongFromUI(index))
-          mMessage = "Song switch blocked while capture is active.";
-        SetDirty(false);
-        return;
-      }
+      if(!Contains(mSongRows[index], x, y))
+        continue;
+      if(!mPlug.SelectSongFromUI(index))
+        mMessage = "Song switch blocked while REC is active.";
+      SetDirty(false);
+      return;
     }
 
     if(Contains(mNewSongButton, x, y))
@@ -78,21 +80,29 @@ public:
       SetDirty(false);
       return;
     }
-
     if(Contains(mPlayButton, x, y))
     {
       Report(mPlug.ToggleActiveTakePlaybackFromUI());
       SetDirty(false);
       return;
     }
-
     if(Contains(mStopButton, x, y))
     {
       mPlug.StopActiveTakePlaybackFromUI();
-      mMessage = "Playback stopped · HOLD current DMX frame.";
+      mMessage = "STOP · HOLD current DMX frame.";
       SetDirty(false);
       return;
     }
+
+    if(Contains(mInMinus1, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(-1.0)); SetDirty(false); return; }
+    if(Contains(mInMinus01, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(-0.1)); SetDirty(false); return; }
+    if(Contains(mInPlus01, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(0.1)); SetDirty(false); return; }
+    if(Contains(mInPlus1, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(1.0)); SetDirty(false); return; }
+    if(Contains(mOutMinus1, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(-1.0)); SetDirty(false); return; }
+    if(Contains(mOutMinus01, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(-0.1)); SetDirty(false); return; }
+    if(Contains(mOutPlus01, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(0.1)); SetDirty(false); return; }
+    if(Contains(mOutPlus1, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(1.0)); SetDirty(false); return; }
+    if(Contains(mResetTrimButton, x, y)) { Report(mPlug.ResetActiveTakeTrimFromUI()); SetDirty(false); return; }
 
     if(Contains(mRxPrevious, x, y))
     {
@@ -111,46 +121,39 @@ public:
     if(Contains(mTxPrevious, x, y))
     {
       (void)mPlug.CycleTxInterfaceFromUI(-1);
-      mMessage = "TX NIC changed · route restarted DISARMED.";
+      RestoreNetworkFieldFromSelectedTx();
+      mMessage = "TX adapter changed · verify local IP/mask, then APPLY.";
       SetDirty(false);
       return;
     }
     if(Contains(mTxNext, x, y))
     {
       (void)mPlug.CycleTxInterfaceFromUI(1);
-      mMessage = "TX NIC changed · route restarted DISARMED.";
+      RestoreNetworkFieldFromSelectedTx();
+      mMessage = "TX adapter changed · verify local IP/mask, then APPLY.";
       SetDirty(false);
       return;
     }
 
-    if(Contains(mRouteNameField, x, y))
+    if(Contains(mLocalNetworkField, x, y))
     {
-      BeginTextEdit(EditKind::route_name, mRouteNameField,
-                    mRouteName.empty() ? "MAIN ARTNET" : mRouteName);
+      BeginTextEdit(EditKind::local_network, mLocalNetworkField,
+                    mLocalNetworkText);
       return;
     }
-    if(Contains(mTargetIpField, x, y))
+    if(Contains(mApplyNetworkButton, x, y))
     {
-      BeginTextEdit(EditKind::target_ip, mTargetIpField, mTargetIp);
-      return;
-    }
-    if(Contains(mUniverseField, x, y))
-    {
-      BeginTextEdit(EditKind::universe, mUniverseField,
-                    std::to_string(mUniverseDisplay));
-      return;
-    }
-    if(Contains(mApplyOutputButton, x, y))
-    {
-      ApplyOutputRoute();
+      ApplySimpleNetwork();
       SetDirty(false);
       return;
     }
-
     if(Contains(mRefreshNetworkButton, x, y))
     {
       if(mPlug.RefreshNetworkInterfacesFromUI())
-        mMessage = "Network adapters refreshed · verify RX/TX NIC before ARM.";
+      {
+        RestoreNetworkFieldFromSelectedTx();
+        mMessage = "Network adapters refreshed.";
+      }
       else
         mMessage = "No active IPv4 adapters detected.";
       SetDirty(false);
@@ -168,7 +171,7 @@ public:
         continue;
       if(mPlug.TakeRecording() || mPlug.TakePlaying())
       {
-        mMessage = "Stop REC/PLAY before renaming a Song.";
+        mMessage = "STOP REC/PLAY before renaming a Song.";
         SetDirty(false);
         return;
       }
@@ -182,47 +185,20 @@ public:
   void OnTextEntryCompletion(const char* str, int valIdx) override
   {
     (void)valIdx;
-    const std::string value = str == nullptr ? std::string{} : std::string(str);
-    switch(mEditKind)
+    const std::string value = str == nullptr ? std::string{} : Trim(str);
+    if(mEditKind == EditKind::song_name)
+      Report(mPlug.RenameSongFromUI(mEditingSongIndex, value));
+    else if(mEditKind == EditKind::local_network)
     {
-      case EditKind::song_name:
-        Report(mPlug.RenameSongFromUI(mEditingSongIndex, value));
-        break;
-      case EditKind::route_name:
-        mRouteName = Trim(value);
-        if(mRouteName.empty()) mRouteName = "MAIN ARTNET";
-        mMessage = "Route label updated · configuration unchanged.";
-        break;
-      case EditKind::target_ip:
-        mTargetIp = Trim(value);
-        mMessage = "Target edited · press APPLY / VALIDATE OUTPUT.";
-        break;
-      case EditKind::universe:
-      {
-        const std::string normalized = Trim(value);
-        unsigned parsed = 0U;
-        const auto result = std::from_chars(
-            normalized.data(), normalized.data() + normalized.size(), parsed);
-        if(result.ec != std::errc{} ||
-           result.ptr != normalized.data() + normalized.size() ||
-           parsed < 1U || parsed > 32768U)
-          mMessage = "Universe must be 1..32768. AEYLA uses Universe 1 for this show.";
-        else
-        {
-          mUniverseDisplay = parsed;
-          mMessage = "Universe edited · press APPLY / VALIDATE OUTPUT.";
-        }
-        break;
-      }
-      case EditKind::none:
-        break;
+      mLocalNetworkText = value;
+      mMessage = "Network edited · press APPLY NETWORK.";
     }
     mEditKind = EditKind::none;
     SetDirty(false);
   }
 
 private:
-  enum class EditKind { none, song_name, route_name, target_ip, universe };
+  enum class EditKind { none, song_name, local_network };
 
   inline static const IColor kBackground{255, 7, 8, 11};
   inline static const IColor kPanel{255, 14, 16, 21};
@@ -252,6 +228,76 @@ private:
     return std::string(value);
   }
 
+  static std::string FormatTime(double seconds)
+  {
+    if(!std::isfinite(seconds) || seconds < 0.0) seconds = 0.0;
+    const auto totalMs = static_cast<std::uint64_t>(std::llround(seconds * 1000.0));
+    const auto minutes = totalMs / 60000U;
+    const auto secondsPart = (totalMs / 1000U) % 60U;
+    const auto millis = totalMs % 1000U;
+    std::ostringstream stream;
+    stream << minutes << ':' << std::setw(2) << std::setfill('0') << secondsPart
+           << '.' << std::setw(3) << millis;
+    return stream.str();
+  }
+
+  static bool ParseIpv4(std::string_view text, std::uint32_t& result)
+  {
+    result = 0U;
+    std::size_t begin = 0U;
+    for(int index = 0; index < 4; ++index)
+    {
+      const std::size_t end = index == 3 ? text.size() : text.find('.', begin);
+      if(end == std::string_view::npos || end == begin) return false;
+      unsigned value = 0U;
+      const auto parsed = std::from_chars(text.data() + begin,
+                                          text.data() + end, value);
+      if(parsed.ec != std::errc{} || parsed.ptr != text.data() + end || value > 255U)
+        return false;
+      result = (result << 8U) | value;
+      begin = end + 1U;
+    }
+    return begin == text.size() + 1U;
+  }
+
+  static std::string FormatIpv4(std::uint32_t value)
+  {
+    return std::to_string((value >> 24U) & 0xFFU) + "." +
+           std::to_string((value >> 16U) & 0xFFU) + "." +
+           std::to_string((value >> 8U) & 0xFFU) + "." +
+           std::to_string(value & 0xFFU);
+  }
+
+  static std::string MaskFromPrefix(unsigned prefix)
+  {
+    if(prefix > 32U) prefix = 32U;
+    const std::uint32_t mask = prefix == 0U
+        ? 0U
+        : static_cast<std::uint32_t>(0xFFFFFFFFULL << (32U - prefix));
+    return FormatIpv4(mask);
+  }
+
+  static bool IsContiguousMask(std::uint32_t mask)
+  {
+    const std::uint32_t inverted = ~mask;
+    return (inverted & (inverted + 1U)) == 0U;
+  }
+
+  static bool SplitNetwork(const std::string& text,
+                           std::string& ipText,
+                           std::string& maskText,
+                           std::uint32_t& ip,
+                           std::uint32_t& mask)
+  {
+    const auto separator = text.find('/');
+    if(separator == std::string::npos) return false;
+    ipText = Trim(std::string_view(text).substr(0U, separator));
+    maskText = Trim(std::string_view(text).substr(separator + 1U));
+    if(!ParseIpv4(ipText, ip) || !ParseIpv4(maskText, mask)) return false;
+    if(mask == 0U || !IsContiguousMask(mask)) return false;
+    return true;
+  }
+
   static void Card(IGraphics& g, const IRECT& rect)
   {
     g.FillRoundRect(kPanel, rect, 9.0F);
@@ -264,7 +310,7 @@ private:
   {
     g.FillRoundRect(fill, rect, 6.0F);
     g.DrawRoundRect(border, rect, 6.0F, nullptr, 1.0F);
-    g.DrawText(IText(10.0F, text, "AeylaUI", EAlign::Center, EVAlign::Middle),
+    g.DrawText(IText(9.0F, text, "AeylaUI", EAlign::Center, EVAlign::Middle),
                label, rect.GetPadded(-4.0F));
   }
 
@@ -290,46 +336,84 @@ private:
                         rect, current.c_str(), kNoValIdx);
   }
 
-  void RestoreRouteFieldsFromBackend()
+  std::string SelectedTxIpFromStatus() const
   {
-    const std::string status = mPlug.OutputBackendStatus();
-    constexpr std::string_view prefix = "ARTNET ";
-    if(status.rfind(prefix.data(), 0U) != 0U)
-      return;
-    const auto separator = status.rfind('@');
-    if(separator == std::string::npos || separator <= prefix.size())
-      return;
-    mTargetIp = status.substr(prefix.size(), separator - prefix.size());
-    const std::string raw = status.substr(separator + 1U);
-    unsigned portAddress = 0U;
-    const auto parsed = std::from_chars(raw.data(), raw.data() + raw.size(), portAddress);
-    if(parsed.ec == std::errc{} && parsed.ptr == raw.data() + raw.size() &&
-       portAddress <= 32767U)
-      mUniverseDisplay = portAddress + 1U;
+    const std::string status = mPlug.TxInterfaceStatus();
+    const auto slash = status.rfind('/');
+    if(slash == std::string::npos) return {};
+    const auto delimiter = status.rfind(" · ", slash);
+    if(delimiter == std::string::npos) return {};
+    return status.substr(delimiter + 3U, slash - (delimiter + 3U));
   }
 
-  void ApplyOutputRoute()
+  void RestoreNetworkFieldFromSelectedTx()
   {
-    if(mTargetIp.empty())
-    {
-      mMessage = "Set TARGET IP first.";
+    const std::string status = mPlug.TxInterfaceStatus();
+    const auto slash = status.rfind('/');
+    if(slash == std::string::npos) return;
+    const auto delimiter = status.rfind(" · ", slash);
+    if(delimiter == std::string::npos) return;
+    const std::string ip = status.substr(delimiter + 3U, slash - (delimiter + 3U));
+    const std::string prefixText = status.substr(slash + 1U);
+    unsigned prefix = 0U;
+    const auto parsed = std::from_chars(prefixText.data(),
+                                        prefixText.data() + prefixText.size(), prefix);
+    if(parsed.ec != std::errc{} || parsed.ptr != prefixText.data() + prefixText.size())
       return;
-    }
-    if(mUniverseDisplay < 1U || mUniverseDisplay > 32768U)
+    mLocalNetworkText = ip + " / " + MaskFromPrefix(prefix);
+  }
+
+  void ApplySimpleNetwork()
+  {
+    if(mPlug.TakeRecording())
     {
-      mMessage = "Universe must be 1..32768.";
+      mMessage = "STOP REC before changing TX network.";
       return;
     }
 
-    const unsigned rawPortAddress = mUniverseDisplay - 1U;
-    const std::string specification =
-        mTargetIp + "@" + std::to_string(rawPortAddress);
-    const auto result = mPlug.ConfigureArtNetFromUI(specification);
+    // Network configuration is never hot-swapped while a Take owns output.
+    mPlug.StopActiveTakePlaybackFromUI();
+    if(mPlug.TakeOutputArmed())
+      (void)mPlug.ToggleTakeOutputArmFromUI();
+    mPlug.ForceDisarmFromUI();
+
+    std::string ipText;
+    std::string maskText;
+    std::uint32_t ip = 0U;
+    std::uint32_t mask = 0U;
+    if(!SplitNetwork(mLocalNetworkText, ipText, maskText, ip, mask))
+    {
+      mMessage = "Use: 2.0.0.20 / 255.0.0.0";
+      return;
+    }
+
+    const std::string selectedIp = SelectedTxIpFromStatus();
+    if(selectedIp.empty())
+    {
+      mMessage = "Select a valid TX adapter first.";
+      return;
+    }
+    if(selectedIp != ipText)
+    {
+      mMessage = "LOCAL IP must match selected TX adapter: " + selectedIp;
+      return;
+    }
+
+    const std::uint32_t broadcast = (ip & mask) | (~mask);
+    if(broadcast == ip || broadcast == 0xFFFFFFFFU)
+    {
+      mMessage = "Subnet mask does not produce a usable directed broadcast.";
+      return;
+    }
+
+    // AEYLA show contract: one universe only. User-facing U1 maps to Art-Net
+    // Port-Address 0. The directed broadcast is derived, never typed manually.
+    const std::string destination = FormatIpv4(broadcast);
+    const auto result = mPlug.ConfigureArtNetFromUI(destination + "@0");
     Report(result);
     if(result.succeeded)
-      mMessage = (mRouteName.empty() ? "MAIN ARTNET" : mRouteName) +
-          " · VALIDATED · " + mTargetIp + " · U" +
-          std::to_string(mUniverseDisplay) + " · DISARMED";
+      mMessage = "NETWORK READY · " + ipText + " / " + maskText +
+                 " · U1 · output DISARMED";
   }
 
   void BuildLayout()
@@ -338,8 +422,8 @@ private:
     constexpr float headerHeight = 70.0F;
     constexpr float footerReserve = 54.0F;
     constexpr float gap = 10.0F;
-    const float leftWidth = std::clamp(mRECT.W() * 0.22F, 218.0F, 286.0F);
-    const float rightWidth = std::clamp(mRECT.W() * 0.31F, 324.0F, 410.0F);
+    const float leftWidth = std::clamp(mRECT.W() * 0.21F, 210.0F, 270.0F);
+    const float rightWidth = std::clamp(mRECT.W() * 0.28F, 300.0F, 360.0F);
 
     mHeader = IRECT(mRECT.L + margin, mRECT.T + 8.0F,
                     mRECT.R - margin, mRECT.T + headerHeight);
@@ -370,42 +454,55 @@ private:
                            listBody.R, mSetlist.B - 12.0F);
 
     const IRECT work = mWorkspace.GetPadded(-16.0F);
-    mTimeline = IRECT(work.L, work.T + 128.0F, work.R, work.T + 166.0F);
-    const float buttonTop = mTimeline.B + 18.0F;
+    mTimeline = IRECT(work.L, work.T + 102.0F, work.R, work.T + 144.0F);
+    const float transportTop = mTimeline.B + 14.0F;
     const float transportGap = 8.0F;
     const float transportWidth = (work.W() - transportGap * 2.0F) / 3.0F;
-    mRecordButton = IRECT(work.L, buttonTop,
-                          work.L + transportWidth, buttonTop + 42.0F);
-    mPlayButton = IRECT(mRecordButton.R + transportGap, buttonTop,
+    mRecordButton = IRECT(work.L, transportTop,
+                          work.L + transportWidth, transportTop + 40.0F);
+    mPlayButton = IRECT(mRecordButton.R + transportGap, transportTop,
                         mRecordButton.R + transportGap + transportWidth,
-                        buttonTop + 42.0F);
-    mStopButton = IRECT(mPlayButton.R + transportGap, buttonTop,
-                        work.R, buttonTop + 42.0F);
+                        transportTop + 40.0F);
+    mStopButton = IRECT(mPlayButton.R + transportGap, transportTop,
+                        work.R, transportTop + 40.0F);
+
+    const float editorTop = mStopButton.B + 36.0F;
+    const float smallGap = 6.0F;
+    const float labelWidth = 48.0F;
+    const float buttonWidth = (work.W() - labelWidth - smallGap * 4.0F) / 4.0F;
+    float left = work.L + labelWidth;
+    mInMinus1 = IRECT(left, editorTop, left + buttonWidth, editorTop + 30.0F); left += buttonWidth + smallGap;
+    mInMinus01 = IRECT(left, editorTop, left + buttonWidth, editorTop + 30.0F); left += buttonWidth + smallGap;
+    mInPlus01 = IRECT(left, editorTop, left + buttonWidth, editorTop + 30.0F); left += buttonWidth + smallGap;
+    mInPlus1 = IRECT(left, editorTop, work.R, editorTop + 30.0F);
+
+    left = work.L + labelWidth;
+    const float outTop = editorTop + 48.0F;
+    mOutMinus1 = IRECT(left, outTop, left + buttonWidth, outTop + 30.0F); left += buttonWidth + smallGap;
+    mOutMinus01 = IRECT(left, outTop, left + buttonWidth, outTop + 30.0F); left += buttonWidth + smallGap;
+    mOutPlus01 = IRECT(left, outTop, left + buttonWidth, outTop + 30.0F); left += buttonWidth + smallGap;
+    mOutPlus1 = IRECT(left, outTop, work.R, outTop + 30.0F);
+    mResetTrimButton = IRECT(work.L, outTop + 45.0F, work.R, outTop + 76.0F);
 
     const IRECT route = mRouting.GetPadded(-12.0F);
-    const float cardTop = route.T + 42.0F;
-    mRxCard = IRECT(route.L, cardTop, route.R, cardTop + 96.0F);
-    mTxCard = IRECT(route.L, mRxCard.B + 8.0F,
-                    route.R, mRxCard.B + 104.0F);
+    const float cardTop = route.T + 46.0F;
+    mRxCard = IRECT(route.L, cardTop, route.R, cardTop + 108.0F);
+    mTxCard = IRECT(route.L, mRxCard.B + 10.0F, route.R, mRxCard.B + 118.0F);
     mRxPrevious = IRECT(mRxCard.L + 10.0F, mRxCard.B - 34.0F,
-                        mRxCard.L + 45.0F, mRxCard.B - 7.0F);
-    mRxNext = IRECT(mRxCard.R - 45.0F, mRxCard.B - 34.0F,
-                    mRxCard.R - 10.0F, mRxCard.B - 7.0F);
+                        mRxCard.L + 46.0F, mRxCard.B - 8.0F);
+    mRxNext = IRECT(mRxCard.R - 46.0F, mRxCard.B - 34.0F,
+                    mRxCard.R - 10.0F, mRxCard.B - 8.0F);
     mTxPrevious = IRECT(mTxCard.L + 10.0F, mTxCard.B - 34.0F,
-                        mTxCard.L + 45.0F, mTxCard.B - 7.0F);
-    mTxNext = IRECT(mTxCard.R - 45.0F, mTxCard.B - 34.0F,
-                    mTxCard.R - 10.0F, mTxCard.B - 7.0F);
+                        mTxCard.L + 46.0F, mTxCard.B - 8.0F);
+    mTxNext = IRECT(mTxCard.R - 46.0F, mTxCard.B - 34.0F,
+                    mTxCard.R - 10.0F, mTxCard.B - 8.0F);
 
-    const float fieldTop = mTxCard.B + 29.0F;
-    mRouteNameField = IRECT(route.L, fieldTop, route.R, fieldTop + 31.0F);
-    mTargetIpField = IRECT(route.L, mRouteNameField.B + 23.0F,
-                           route.R - 82.0F, mRouteNameField.B + 54.0F);
-    mUniverseField = IRECT(route.R - 72.0F, mRouteNameField.B + 23.0F,
-                           route.R, mRouteNameField.B + 54.0F);
-    mApplyOutputButton = IRECT(route.L, mTargetIpField.B + 10.0F,
-                               route.R, mTargetIpField.B + 43.0F);
-    mRefreshNetworkButton = IRECT(route.L, mApplyOutputButton.B + 8.0F,
-                                  route.R, mApplyOutputButton.B + 37.0F);
+    mLocalNetworkField = IRECT(route.L, mTxCard.B + 36.0F,
+                               route.R, mTxCard.B + 70.0F);
+    mApplyNetworkButton = IRECT(route.L, mLocalNetworkField.B + 12.0F,
+                                route.R, mLocalNetworkField.B + 46.0F);
+    mRefreshNetworkButton = IRECT(route.L, mApplyNetworkButton.B + 8.0F,
+                                  route.R, mApplyNetworkButton.B + 38.0F);
   }
 
   void DrawHeader(IGraphics& g)
@@ -413,10 +510,8 @@ private:
     g.DrawText(IText(20.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
                "AEYLA  /  SHOW PLAYER",
                IRECT(mHeader.L, mHeader.T, mHeader.L + 360.0F, mHeader.B - 20.0F));
-    const std::string project = mPlug.ProjectName();
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               ("RGB ESTUDIOS · " + project +
-                " · AVOLITES AUTHORING / DAW PLAYBACK").c_str(),
+               ("RGB ESTUDIOS · " + mPlug.ProjectName() + " · R03 PRETEST").c_str(),
                IRECT(mHeader.L, mHeader.B - 27.0F,
                      mHeader.L + 620.0F, mHeader.B));
 
@@ -426,19 +521,19 @@ private:
            blackout ? kAccent : kLineStrong,
            blackout ? kText : kGood);
 
-    const bool takeArmed = mPlug.TakeOutputArmed();
+    const bool armed = mPlug.TakeOutputArmed();
     Button(g, mTakeArmButton,
-           takeArmed ? "TAKE OUTPUT ARMED" : "ARM TAKE OUTPUT",
-           takeArmed ? kGood : kPanelRaised,
-           takeArmed ? kGood : kLineStrong,
-           takeArmed ? IColor(255, 8, 30, 20) : kText);
+           armed ? "TAKE OUTPUT ARMED" : "ARM TAKE OUTPUT",
+           armed ? kGood : kPanelRaised,
+           armed ? kGood : kLineStrong,
+           armed ? IColor(255, 8, 30, 20) : kText);
   }
 
   void DrawSetlist(IGraphics& g)
   {
     Card(g, mSetlist);
-    g.DrawText(IText(10.5F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "SETLIST · DOUBLE CLICK TO RENAME",
+    g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "SETLIST · DBL CLICK = RENAME",
                IRECT(mSetlist.L + 12.0F, mSetlist.T + 8.0F,
                      mSetlist.R - 12.0F, mSetlist.T + 36.0F));
 
@@ -452,25 +547,19 @@ private:
         g.DrawLine(kLine, row.L, row.B, row.R, row.B, nullptr, 1.0F);
         continue;
       }
-
       const bool selected = index == active;
-      if(selected)
-        g.FillRoundRect(kPanelSelected, row, 5.0F);
-      if(selected)
-        g.DrawRoundRect(kAccent, row, 5.0F, nullptr, 1.0F);
-
+      if(selected) g.FillRoundRect(kPanelSelected, row, 5.0F);
+      if(selected) g.DrawRoundRect(kAccent, row, 5.0F, nullptr, 1.0F);
       char number[8];
       std::snprintf(number, sizeof(number), "%02d", static_cast<int>(index + 1U));
       g.DrawText(IText(9.0F, selected ? kAccent : kFaint,
                        "AeylaUI", EAlign::Near, EVAlign::Middle),
-                 number,
-                 IRECT(row.L + 8.0F, row.T, row.L + 34.0F, row.B));
+                 number, IRECT(row.L + 8.0F, row.T, row.L + 34.0F, row.B));
       std::string name = mPlug.SongName(index);
       if(name.empty()) name = "Song";
       g.DrawText(IText(9.0F, selected ? kText : kMuted,
                        "AeylaUI", EAlign::Near, EVAlign::Middle),
-                 name.c_str(),
-                 IRECT(row.L + 38.0F, row.T, row.R - 8.0F, row.B));
+                 name.c_str(), IRECT(row.L + 38.0F, row.T, row.R - 8.0F, row.B));
     }
 
     Button(g, mNewSongButton,
@@ -478,79 +567,94 @@ private:
            kPanelRaised, kLineStrong, count >= 15U ? kFaint : kText);
   }
 
-  void DrawSongWorkspace(IGraphics& g)
+  void DrawTakeEditor(IGraphics& g)
   {
     Card(g, mWorkspace);
     const IRECT work = mWorkspace.GetPadded(-16.0F);
     const std::size_t count = mPlug.SongCount();
     const std::size_t active = mPlug.ActiveSongIndex();
-
     std::string title = "NO SONG SELECTED";
     if(count > 0U)
     {
-      char prefix[32];
-      std::snprintf(prefix, sizeof(prefix), "%02d / %02d  ·  ",
+      char prefix[24];
+      std::snprintf(prefix, sizeof(prefix), "%02d / %02d · ",
                     static_cast<int>(active + 1U), static_cast<int>(count));
       title = prefix + mPlug.SongName(active);
     }
     g.DrawText(IText(18.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               title.c_str(), IRECT(work.L, work.T, work.R, work.T + 36.0F));
-    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "AVOLITES TITAN  →  ART-NET U1  →  .AEYLATAKE",
-               IRECT(work.L, work.T + 39.0F, work.R, work.T + 61.0F));
-
-    const std::string take = mPlug.ActiveTakeStatus();
-    g.DrawText(IText(11.0F, mPlug.TakeRecording() ? kAccent : kText,
+               title.c_str(), IRECT(work.L, work.T, work.R, work.T + 34.0F));
+    g.DrawText(IText(10.0F, mPlug.TakeRecording() ? kAccent : kMuted,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
-               take.c_str(), IRECT(work.L, work.T + 74.0F,
-                                   work.R, work.T + 104.0F));
+               mPlug.ActiveTakeStatus().c_str(),
+               IRECT(work.L, work.T + 38.0F, work.R, work.T + 66.0F));
+
+    const double original = mPlug.ActiveTakeOriginalDurationSeconds();
+    const double inTime = mPlug.ActiveTakeInSeconds();
+    const double outTime = mPlug.ActiveTakeOutSeconds();
+    const double effective = mPlug.ActiveTakeEffectiveDurationSeconds();
 
     g.FillRoundRect(IColor(255, 9, 11, 15), mTimeline, 5.0F);
     g.DrawRoundRect(kLine, mTimeline, 5.0F, nullptr, 1.0F);
+    if(original > 0.0)
+    {
+      const float inX = mTimeline.L + static_cast<float>(std::clamp(inTime / original, 0.0, 1.0)) * mTimeline.W();
+      const float outX = mTimeline.L + static_cast<float>(std::clamp(outTime / original, 0.0, 1.0)) * mTimeline.W();
+      if(inX > mTimeline.L)
+        g.FillRect(IColor(255, 24, 25, 29), IRECT(mTimeline.L, mTimeline.T, inX, mTimeline.B));
+      if(outX < mTimeline.R)
+        g.FillRect(IColor(255, 24, 25, 29), IRECT(outX, mTimeline.T, mTimeline.R, mTimeline.B));
+      if(outX > inX)
+        g.DrawRect(kGood, IRECT(inX, mTimeline.T + 2.0F, outX, mTimeline.B - 2.0F), nullptr, 1.0F);
+    }
     const double progress = mPlug.ActiveTakePlaybackProgress();
     if(progress > 0.0)
     {
-      const float right = mTimeline.L +
-          static_cast<float>(std::clamp(progress, 0.0, 1.0)) * mTimeline.W();
-      g.FillRoundRect(kAccentDark,
-                      IRECT(mTimeline.L, mTimeline.T, right, mTimeline.B), 5.0F);
+      const float x = mTimeline.L + static_cast<float>(std::clamp(progress, 0.0, 1.0)) * mTimeline.W();
+      g.DrawLine(kAccent, x, mTimeline.T, x, mTimeline.B, nullptr, 2.0F);
     }
-    char percent[32];
-    std::snprintf(percent, sizeof(percent), "%03d%%",
-                  static_cast<int>(std::clamp(progress, 0.0, 1.0) * 100.0));
-    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Far, EVAlign::Middle),
-               percent, mTimeline.GetPadded(-10.0F));
 
     Button(g, mRecordButton,
            mPlug.TakeRecording() ? "STOP + SAVE TAKE" : "RECORD NEW TAKE",
            mPlug.TakeRecording() ? kAccentDark : kPanelRaised,
            mPlug.TakeRecording() ? kAccent : kLineStrong);
     Button(g, mPlayButton,
-           mPlug.TakePlaying() ? "STOP / HOLD" : "PLAY ACTIVE TAKE",
+           mPlug.TakePlaying() ? "PLAYING" : "PLAY ACTIVE TAKE",
            mPlug.TakePlaying() ? kGood : kPanelRaised,
            mPlug.TakePlaying() ? kGood : kLineStrong,
            mPlug.TakePlaying() ? IColor(255, 8, 30, 20) : kText);
     Button(g, mStopButton, "STOP / HOLD", kPanelRaised, kLineStrong);
 
-    const float infoTop = mStopButton.B + 28.0F;
+    const float editorTop = mInMinus1.T;
     g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "TAKE PLAYBACK",
-               IRECT(work.L, infoTop, work.R, infoTop + 24.0F));
-    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Top),
-               "· normalized DMX recording at 44 Hz\n"
-               "· Takes persist as portable .aeylatake files\n"
-               "· STOP holds the current frame; DISARM removes authority\n"
-               "· IN / OUT trim is the next gate after verified physical TX\n"
-               "· transition curves will affect only explicitly safe channels",
-               IRECT(work.L, infoTop + 27.0F, work.R,
-                     std::min(work.B - 58.0F, infoTop + 138.0F)));
+               "IN", IRECT(work.L, editorTop, work.L + 42.0F, editorTop + 30.0F));
+    Button(g, mInMinus1, "-1.0s", kPanelRaised, kLineStrong);
+    Button(g, mInMinus01, "-0.1s", kPanelRaised, kLineStrong);
+    Button(g, mInPlus01, "+0.1s", kPanelRaised, kLineStrong);
+    Button(g, mInPlus1, "+1.0s", kPanelRaised, kLineStrong);
+
+    const float outTop = mOutMinus1.T;
+    g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "OUT", IRECT(work.L, outTop, work.L + 42.0F, outTop + 30.0F));
+    Button(g, mOutMinus1, "-1.0s", kPanelRaised, kLineStrong);
+    Button(g, mOutMinus01, "-0.1s", kPanelRaised, kLineStrong);
+    Button(g, mOutPlus01, "+0.1s", kPanelRaised, kLineStrong);
+    Button(g, mOutPlus1, "+1.0s", kPanelRaised, kLineStrong);
+    Button(g, mResetTrimButton, "RESET IN / OUT", kPanelRaised, kLineStrong);
+
+    const float infoTop = mResetTrimButton.B + 14.0F;
+    const std::string times = "IN " + FormatTime(inTime) +
+        "   ·   OUT " + FormatTime(outTime) +
+        "   ·   PLAY " + FormatTime(effective) +
+        "   ·   ORIGINAL " + FormatTime(original);
+    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               times.c_str(), IRECT(work.L, infoTop, work.R, infoTop + 28.0F));
 
     const IRECT messageRect(work.L, work.B - 48.0F, work.R, work.B);
     g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
     const std::string message = mMessage.empty()
-        ? "Configure OUTPUT ROUTE, validate it, release BLACKOUT, ARM, then PLAY."
+        ? "REC from Avolites · clean IN/OUT · configure network · ARM · PLAY."
         : mMessage;
-    g.DrawText(IText(9.0F, mMessage.empty() ? kFaint : kWarn,
+    g.DrawText(IText(8.8F, mMessage.empty() ? kFaint : kWarn,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
                message.c_str(), messageRect.GetPadded(-10.0F));
   }
@@ -559,38 +663,33 @@ private:
   {
     Card(g, mRouting);
     g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "ROUTING / OUTPUT",
+               "ART-NET NETWORK · U1",
                IRECT(mRouting.L + 12.0F, mRouting.T + 8.0F,
                      mRouting.R - 12.0F, mRouting.T + 34.0F));
 
-    DrawRouteCard(g, mRxCard, "ART-NET INPUT / RX NIC",
+    DrawRouteCard(g, mRxCard, "INPUT / RX ADAPTER",
                   mPlug.RxInterfaceStatus(), mPlug.CaptureInputStatus(),
                   mRxPrevious, mRxNext,
                   mPlug.CaptureAcceptedPackets() > 0U ? kGood : kWarn);
-    DrawRouteCard(g, mTxCard, "ART-NET OUTPUT / TX NIC",
+    DrawRouteCard(g, mTxCard, "OUTPUT / TX ADAPTER",
                   mPlug.TxInterfaceStatus(), mPlug.OutputBackendStatus(),
                   mTxPrevious, mTxNext,
                   mPlug.BackendReady() ? kGood : kWarn);
 
-    Field(g, mRouteNameField, "ROUTE NAME", mRouteName,
-          mRouteName.empty() ? kFaint : kText);
-    Field(g, mTargetIpField, "TARGET IP / NODE",
-          mTargetIp.empty() ? "click to set" : mTargetIp,
-          mTargetIp.empty() ? kWarn : kText);
-    Field(g, mUniverseField, "UNIVERSE",
-          "U" + std::to_string(mUniverseDisplay));
-
-    Button(g, mApplyOutputButton, "APPLY / VALIDATE OUTPUT",
+    Field(g, mLocalNetworkField, "LOCAL IP / SUBNET MASK",
+          mLocalNetworkText.empty() ? "click to set" : mLocalNetworkText,
+          mLocalNetworkText.empty() ? kWarn : kText);
+    Button(g, mApplyNetworkButton, "APPLY NETWORK",
            mPlug.BackendReady() ? IColor(255, 18, 51, 38) : kPanelRaised,
            mPlug.BackendReady() ? kGood : kLineStrong,
            mPlug.BackendReady() ? kGood : kText);
-    Button(g, mRefreshNetworkButton, "REFRESH NETWORK ADAPTERS",
+    Button(g, mRefreshNetworkButton, "REFRESH ADAPTERS",
            kPanelRaised, kLineStrong);
 
-    const float infoTop = mRefreshNetworkButton.B + 8.0F;
-    char diagnostics[192];
+    const float infoTop = mRefreshNetworkButton.B + 12.0F;
+    char diagnostics[180];
     std::snprintf(diagnostics, sizeof(diagnostics),
-                  "RX %llu pkt · gap %llu   |   TX %llu pkt · err %llu   |   %s",
+                  "RX %llu · gap %llu   |   TX %llu · err %llu   |   %s",
                   static_cast<unsigned long long>(mPlug.CaptureAcceptedPackets()),
                   static_cast<unsigned long long>(mPlug.CaptureSequenceGaps()),
                   static_cast<unsigned long long>(mPlug.ArtNetSentPackets()),
@@ -601,14 +700,14 @@ private:
                      "AeylaUI", EAlign::Near, EVAlign::Top),
                diagnostics,
                IRECT(mRouting.L + 14.0F, infoTop,
-                     mRouting.R - 14.0F, infoTop + 28.0F));
+                     mRouting.R - 14.0F, infoTop + 30.0F));
 
     const std::string backendError = mPlug.OutputBackendError();
     if(!backendError.empty())
       g.DrawText(IText(8.2F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
                  backendError.c_str(),
-                 IRECT(mRouting.L + 14.0F, infoTop + 26.0F,
-                       mRouting.R - 14.0F, infoTop + 55.0F));
+                 IRECT(mRouting.L + 14.0F, infoTop + 28.0F,
+                       mRouting.R - 14.0F, infoTop + 72.0F));
   }
 
   void DrawRouteCard(IGraphics& g, const IRECT& rect,
@@ -621,9 +720,9 @@ private:
     g.DrawText(IText(8.5F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                title, IRECT(rect.L + 10.0F, rect.T + 5.0F,
                             rect.R - 10.0F, rect.T + 23.0F));
-    g.DrawText(IText(8.3F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(8.2F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
                adapter.c_str(), IRECT(rect.L + 10.0F, rect.T + 24.0F,
-                                      rect.R - 10.0F, rect.T + 47.0F));
+                                      rect.R - 10.0F, rect.T + 48.0F));
     g.DrawText(IText(8.0F, statusColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
                signal.c_str(), IRECT(rect.L + 52.0F, rect.B - 34.0F,
                                      rect.R - 52.0F, rect.B - 7.0F));
@@ -634,17 +733,14 @@ private:
   void Report(const aeyla::product::AuthoringResult& result)
   {
     mMessage = result.message;
-    if(result.succeeded)
-      return;
+    if(result.succeeded) return;
     if(auto* ui = GetUI())
       ui->ShowMessageBox(result.message.c_str(), "AEYLA · OPERATION BLOCKED", kMB_OK);
   }
 
   AeylaVisualDmx& mPlug;
   std::string mMessage;
-  std::string mRouteName{"MAIN ARTNET"};
-  std::string mTargetIp;
-  unsigned mUniverseDisplay{1U};
+  std::string mLocalNetworkText;
   EditKind mEditKind{EditKind::none};
   std::size_t mEditingSongIndex{0U};
 
@@ -660,15 +756,22 @@ private:
   IRECT mRecordButton{};
   IRECT mPlayButton{};
   IRECT mStopButton{};
+  IRECT mInMinus1{};
+  IRECT mInMinus01{};
+  IRECT mInPlus01{};
+  IRECT mInPlus1{};
+  IRECT mOutMinus1{};
+  IRECT mOutMinus01{};
+  IRECT mOutPlus01{};
+  IRECT mOutPlus1{};
+  IRECT mResetTrimButton{};
   IRECT mRxCard{};
   IRECT mTxCard{};
   IRECT mRxPrevious{};
   IRECT mRxNext{};
   IRECT mTxPrevious{};
   IRECT mTxNext{};
-  IRECT mRouteNameField{};
-  IRECT mTargetIpField{};
-  IRECT mUniverseField{};
-  IRECT mApplyOutputButton{};
+  IRECT mLocalNetworkField{};
+  IRECT mApplyNetworkButton{};
   IRECT mRefreshNetworkButton{};
 };
