@@ -31,7 +31,7 @@ function Assert-HostsClosed {
     }
   }
 
-  $blocked = $blocked | Sort-Object -Unique
+  $blocked = @($blocked | Sort-Object -Unique)
   if ($blocked.Count -gt 0) {
     throw "Cierra los hosts antes de mantener AEYLA: $($blocked -join ', ')"
   }
@@ -185,25 +185,55 @@ function Install-Aeyla {
   Write-Step "SHA256 binario: $hash"
 }
 
-Write-Step "Acción=$Action DryRun=$($DryRun.IsPresent) ResetReaperCache=$($ResetReaperCache.IsPresent)"
+$LogPath = Join-Path $PSScriptRoot 'AEYLA_INSTALL_LAST.log'
 
-switch ($Action) {
-  'Audit' {
-    Audit-Aeyla
+try {
+  $started = Get-Date
+  Write-Step "Acción=$Action DryRun=$($DryRun.IsPresent) ResetReaperCache=$($ResetReaperCache.IsPresent)"
+
+  switch ($Action) {
+    'Audit' {
+      Audit-Aeyla
+    }
+    'Clean' {
+      Clean-Aeyla
+      Audit-Aeyla
+    }
+    'Install' {
+      Install-Aeyla
+      Audit-Aeyla
+    }
+    'CleanInstall' {
+      Clean-Aeyla
+      Install-Aeyla
+      Audit-Aeyla
+    }
   }
-  'Clean' {
-    Clean-Aeyla
-    Audit-Aeyla
-  }
-  'Install' {
-    Install-Aeyla
-    Audit-Aeyla
-  }
-  'CleanInstall' {
-    Clean-Aeyla
-    Install-Aeyla
-    Audit-Aeyla
-  }
+
+  Write-Step 'Operación terminada. AEYLA nunca elimina archivos .aeylashow ni proyectos del DAW.'
+  $lines = @(
+    "RESULT=SUCCESS",
+    "ACTION=$Action",
+    "STARTED=$($started.ToString('o'))",
+    "FINISHED=$((Get-Date).ToString('o'))"
+  )
+  [System.IO.File]::WriteAllLines($LogPath, $lines, [System.Text.UTF8Encoding]::new($false))
+  exit 0
 }
-
-Write-Step 'Operación terminada. AEYLA nunca elimina archivos .aeylashow ni proyectos del DAW.'
+catch {
+  $message = $_.Exception.Message
+  $detail = ($_ | Out-String).Trim()
+  Write-Host ''
+  Write-Host "[AEYLA] ERROR: $message" -ForegroundColor Red
+  Write-Host "[AEYLA] Detalle guardado en: $LogPath" -ForegroundColor Yellow
+  $lines = @(
+    "RESULT=FAIL",
+    "ACTION=$Action",
+    "TIME=$((Get-Date).ToString('o'))",
+    "MESSAGE=$message",
+    '',
+    $detail
+  )
+  [System.IO.File]::WriteAllLines($LogPath, $lines, [System.Text.UTF8Encoding]::new($false))
+  exit 1
+}
