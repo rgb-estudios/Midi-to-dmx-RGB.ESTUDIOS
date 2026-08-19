@@ -12,8 +12,6 @@ struct ArtNetOutputConfig {
   // Optional numeric local IPv4 bind. Empty means let the OS route normally.
   // AEYLA Show Player sets this explicitly when the operator selects a TX NIC.
   std::string source_ipv4;
-  // Alpha v1 deliberately accepts a numeric IPv4 address only. Avoiding DNS in
-  // the runtime removes a blocking/failure-prone dependency from show output.
   std::string target_ipv4;
   std::uint16_t udp_port{6454U};
   std::uint16_t port_address{0U};
@@ -24,6 +22,7 @@ struct ArtNetOutputConfig {
 struct ArtNetOutputStats {
   bool running{false};
   bool enabled{false};
+  bool override_enabled{false};
   std::uint64_t published_generation{0U};
   std::uint64_t last_sent_generation{0U};
   std::uint64_t sent_packets{0U};
@@ -32,23 +31,19 @@ struct ArtNetOutputStats {
   std::uint64_t stale_publish_drops{0U};
 };
 
-// Pure, non-network preflight used before changing persisted output settings.
-// Alpha v1 accepts only explicit numeric unicast IPv4 targets: no DNS,
-// multicast or implicit destination discovery. source_ipv4 may be empty for OS
-// routing or a numeric local IPv4 when an explicit TX adapter is selected.
 [[nodiscard]] bool validate_artnet_output_config(
     const ArtNetOutputConfig& config, std::string& error_message) noexcept;
 
 // Dedicated non-realtime Art-Net transport.
 //
-// Contract:
-// - never call start/stop from an audio callback;
-// - publish_latest replaces one mailbox frame; it never queues history;
-// - while enabled the worker refreshes the latest frame at fixed FPS;
-// - disabling requests one zero-DMX ArtDMX packet and then stops refreshing;
-// - start begins disabled; a caller must explicitly enable output;
-// - no DNS, discovery, filesystem or UI work occurs in the worker;
-// - source_ipv4 binds the UDP socket to one selected local NIC when supplied.
+// There are two mutually prioritised frame authorities:
+// 1) normal semantic/model output (`publish_latest` + `set_enabled`), and
+// 2) captured Take output (`publish_override` + `set_override_enabled`).
+//
+// Take override wins while enabled. The ordinary runtime can continue to
+// publish model frames without corrupting a replay. Disabling the override
+// returns authority to the model; if neither authority is enabled, the worker
+// sends one explicit zero-DMX safety packet.
 class ArtNetOutputWorker final {
  public:
   ArtNetOutputWorker();
@@ -57,12 +52,20 @@ class ArtNetOutputWorker final {
   ArtNetOutputWorker(const ArtNetOutputWorker&) = delete;
   ArtNetOutputWorker& operator=(const ArtNetOutputWorker&) = delete;
 
+  // Used before start() when Routing selects an explicit TX NIC. A start config
+  // with an empty source_ipv4 inherits this preferred source.
+  void set_preferred_source_ipv4(std::string source_ipv4);
+
   [[nodiscard]] bool start(const ArtNetOutputConfig& config,
                            std::string& error_message);
   void stop() noexcept;
 
   void publish_latest(const DmxUniverse& universe, std::uint64_t generation);
   void set_enabled(bool enabled) noexcept;
+
+  void publish_override(const DmxUniverse& universe, std::uint64_t generation);
+  void set_override_enabled(bool enabled) noexcept;
+  [[nodiscard]] bool override_enabled() const noexcept;
 
   [[nodiscard]] ArtNetOutputStats stats() const noexcept;
 
