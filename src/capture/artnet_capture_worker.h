@@ -2,6 +2,7 @@
 
 #include "core/dmx_compiler.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -29,10 +30,39 @@ struct DmxTake {
   std::string source_ipv4;
   std::vector<DmxUniverse> frames;
 
+  // Non-destructive playback edit. trim_end_frame_exclusive == 0 means the
+  // original final frame boundary. The v1 .aeylatake payload remains untouched;
+  // these edit boundaries are runtime metadata for the current gate.
+  std::size_t trim_start_frame{0U};
+  std::size_t trim_end_frame_exclusive{0U};
+
+  [[nodiscard]] std::size_t effective_start_frame() const noexcept {
+    if(frames.empty()) return 0U;
+    return std::min(trim_start_frame, frames.size() - 1U);
+  }
+
+  [[nodiscard]] std::size_t effective_end_frame_exclusive() const noexcept {
+    if(frames.empty()) return 0U;
+    if(trim_end_frame_exclusive == 0U)
+      return frames.size();
+    return std::clamp(trim_end_frame_exclusive,
+                      effective_start_frame() + 1U, frames.size());
+  }
+
   [[nodiscard]] double duration_seconds() const noexcept {
     return frames_per_second == 0U
                ? 0.0
                : static_cast<double>(frames.size()) /
+                     static_cast<double>(frames_per_second);
+  }
+
+  [[nodiscard]] double effective_duration_seconds() const noexcept {
+    if(frames_per_second == 0U || frames.empty()) return 0.0;
+    const auto start = effective_start_frame();
+    const auto end = effective_end_frame_exclusive();
+    return end <= start
+               ? 0.0
+               : static_cast<double>(end - start) /
                      static_cast<double>(frames_per_second);
   }
 };
