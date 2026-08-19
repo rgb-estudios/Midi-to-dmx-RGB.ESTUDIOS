@@ -103,7 +103,7 @@ bool valid_config_ranges(const ArtNetOutputConfig& config,
   return true;
 }
 
-bool safe_unicast_target(const in_addr& address) noexcept {
+bool safe_artnet_target(const in_addr& address) noexcept {
   const std::uint32_t host = ntohl(address.s_addr);
   if (host == 0U || host == 0xFFFFFFFFU) return false;
   if ((host & 0xF0000000U) == 0xE0000000U) return false;
@@ -139,7 +139,7 @@ bool validate_artnet_output_config(const ArtNetOutputConfig& config,
     return false;
   }
   if (!valid_unicast_octets(octets)) {
-    error_message = "Art-Net Alpha v1 requires a unicast IPv4 target";
+    error_message = "Art-Net target must be IPv4 unicast or directed subnet broadcast";
     return false;
   }
   return true;
@@ -203,8 +203,8 @@ class ArtNetOutputWorker::Impl final {
       cleanup_winsock();
       return false;
     }
-    if (!safe_unicast_target(next_target.sin_addr)) {
-      error_message = "Art-Net Alpha v1 requires a unicast IPv4 target";
+    if (!safe_artnet_target(next_target.sin_addr)) {
+      error_message = "Art-Net target is invalid or multicast";
       cleanup_winsock();
       return false;
     }
@@ -212,6 +212,25 @@ class ArtNetOutputWorker::Impl final {
     SocketHandle next_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (next_socket == kInvalidSocket) {
       error_message = "could not create UDP socket";
+      cleanup_winsock();
+      return false;
+    }
+
+    // AEYLA's simplified one-universe route may use the directed broadcast
+    // derived from LOCAL IP + SUBNET MASK. Enabling SO_BROADCAST is harmless
+    // for unicast targets and required by Windows/POSIX stacks for broadcast.
+#ifdef _WIN32
+    const BOOL broadcastEnabled = TRUE;
+    if(setsockopt(next_socket, SOL_SOCKET, SO_BROADCAST,
+                  reinterpret_cast<const char*>(&broadcastEnabled),
+                  sizeof(broadcastEnabled)) != 0) {
+#else
+    const int broadcastEnabled = 1;
+    if(setsockopt(next_socket, SOL_SOCKET, SO_BROADCAST,
+                  &broadcastEnabled, sizeof(broadcastEnabled)) != 0) {
+#endif
+      close_socket(next_socket);
+      error_message = "could not enable Art-Net subnet broadcast on TX socket";
       cleanup_winsock();
       return false;
     }
