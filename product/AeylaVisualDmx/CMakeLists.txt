@@ -18,6 +18,7 @@ endif()
 iplug_add_plugin(${PROJECT_NAME}
   SOURCES
     AeylaVisualDmx.cpp
+    AeylaShowPlayerIntegration.cpp
     AeylaVisualDmx.h
     AeylaMainControl.h
     AeylaExecutorRuntimeControl.h
@@ -40,6 +41,9 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/product/project_identity.cpp
     ../../src/show/show_program.cpp
     ../../src/show/show_program_codec.cpp
+    ../../src/network/network_interfaces.cpp
+    ../../src/capture/artnet_capture_worker.cpp
+    ../../src/capture/dmx_take_scheduler.cpp
     ../../src/output/artnet_output_worker.cpp
   FORMATS
     ${AEYLA_PLUGIN_FORMATS}
@@ -47,10 +51,6 @@ iplug_add_plugin(${PROJECT_NAME}
     IGRAPHICS
 )
 
-# iPlug2's Windows APP/VST3 targets use the static MSVC runtime. The ZIP
-# library must use the identical CRT or its stdio imports resolve against the
-# dynamic UCRT and fail at link/load time. Keep this target-local so Linux and
-# macOS builds remain unchanged.
 if(MSVC)
   set_property(TARGET aeyla_product_miniz PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -67,14 +67,11 @@ foreach(target_name
     )
     target_link_libraries(${target_name} PRIVATE aeyla_product_miniz)
     if(WIN32)
-      target_link_libraries(${target_name} PRIVATE ws2_32)
+      target_link_libraries(${target_name} PRIVATE ws2_32 iphlpapi)
     endif()
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     if(MSVC)
       target_compile_options(${target_name} PRIVATE /W4 /permissive-)
-      # Keep optimized Windows alpha binaries symbolizable. The native-window
-      # gate packages the matching PDB only as crash evidence; it is not part of
-      # the user-facing plug-in bundle.
       target_link_options(${target_name} PRIVATE /DEBUG:FULL)
     else()
       target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
