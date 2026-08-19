@@ -3,6 +3,7 @@
 #include "capture/dmx_take_file_store.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <iomanip>
@@ -30,6 +31,17 @@ std::size_t WrapIndex(std::size_t current, int direction, std::size_t count)
   if(direction > 0)
     return (current + 1U) % count;
   return current == 0U ? count - 1U : current - 1U;
+}
+
+std::string TrimOperatorText(std::string_view value)
+{
+  while(!value.empty() &&
+        std::isspace(static_cast<unsigned char>(value.front())) != 0)
+    value.remove_prefix(1U);
+  while(!value.empty() &&
+        std::isspace(static_cast<unsigned char>(value.back())) != 0)
+    value.remove_suffix(1U);
+  return std::string(value);
 }
 
 std::optional<std::filesystem::path> PromptTakeLibraryDirectory(IGraphics* ui)
@@ -65,6 +77,65 @@ std::string AeylaVisualDmx::SongName(std::size_t songIndex) const
   if(songIndex >= show.songs.size())
     return {};
   return show.songs[songIndex].name;
+}
+
+aeyla::product::AuthoringResult AeylaVisualDmx::RenameSongFromUI(
+    std::size_t songIndex, std::string_view name)
+{
+  if(TakeRecording())
+    return {false, {}, "Stop recording before renaming a Song"};
+  if(TakePlaying())
+    return {false, {}, "Stop Take playback before renaming a Song"};
+
+  const std::string normalized = TrimOperatorText(name);
+  if(normalized.empty())
+    return {false, {}, "Song name cannot be empty"};
+  if(normalized.size() > 64U)
+    return {false, {}, "Song name must be 64 characters or fewer"};
+  if(std::any_of(normalized.begin(), normalized.end(), [](char value) {
+       const unsigned char byte = static_cast<unsigned char>(value);
+       return byte < 0x20U && value != '\t';
+     }))
+    return {false, {}, "Song name contains unsupported control characters"};
+
+  const std::scoped_lock lock(mModelMutex);
+  auto program = mModel.show_program();
+  if(songIndex >= program.songs.size())
+    return {false, {}, "Song no longer exists"};
+  if(program.songs[songIndex].name == normalized)
+    return {true, program.songs[songIndex].song_id, normalized};
+
+  const std::string songId = program.songs[songIndex].song_id;
+  program.songs[songIndex].name = normalized;
+  const auto validation = mModel.replace_show_program(program);
+  if(!validation.ok())
+    return {false, songId, "Renamed Song failed Show validation"};
+
+  mParamBlackout.store(true, std::memory_order_release);
+  mLastProjectedSongId.clear();
+  mLastProjectedTick = 0U;
+  SyncSnapshotToAtomicsLocked();
+  return {true, songId, "Song renamed · " + normalized};
+}
+
+void AeylaVisualDmx::SetBlackoutFromUI(bool enabled)
+{
+  // BLACKOUT is one deterministic authority boundary. It never calls the
+  // operator-facing ARM toggle, so it cannot recursively re-enter ARM/DISARM.
+  if(enabled)
+    mTakeScheduler.disarm();
+
+  GetParam(kParamBlackout)->Set(enabled ? 1.0 : 0.0);
+  mParamBlackout.store(enabled, std::memory_order_release);
+
+  const std::scoped_lock lock(mModelMutex);
+  mModel.release_transients();
+  if(enabled)
+    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::operator_disarm);
+  mModel.set_blackout(enabled);
+  SyncSnapshotToAtomicsLocked();
+  PublishOutputFrameLocked(
+      mRenderingOffline.load(std::memory_order_acquire));
 }
 
 bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
