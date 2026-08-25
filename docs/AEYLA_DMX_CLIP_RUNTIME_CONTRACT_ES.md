@@ -233,6 +233,8 @@ AEYLA no exige que `CANCIÓN 06` esté en el sexto track, en una posición fija 
 
 Para sesiones donde ya existe un trigger maestro por canción, `LAUNCH SONG n` es el camino recomendado. Para operación manual o ensayo también deben existir `SELECT`, `NEXT`, `PLAY`, `PAUSE/RESUME` y `STOP/RESET`.
 
+La consecuencia de producto es explícita: **la sesión de los músicos no debe reorganizarse para acomodar AEYLA**. AEYLA se adapta a sus triggers existentes.
+
 ## 11. RAM
 
 Objetivos de arquitectura:
