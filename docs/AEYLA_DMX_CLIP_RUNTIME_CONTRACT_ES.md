@@ -1,278 +1,333 @@
-# AEYLA — Contrato de runtime DMX Clip
+# AEYLA — Contrato de ejecución de muestra DMX
 
-Estado: **R06 / arquitectura corregida para integración MIDI**  
+Estado: **R07 / arquitectura congelada para integración MIDI**  
 Ámbito: captura Art-Net, persistencia, edición no destructiva, consolidación, reproducción por eventos MIDI y salida Art-Net de un universo.
 
-## 1. Modelo operativo bloqueado
+## 1. Principio de producto
 
 AEYLA no reemplaza al DAW ni a Avolites.
 
 ```text
 AVOLITES
-  autoría creativa / programación del show
+  autoría creativa / programación de iluminación
         ↓ Art-Net U1
-AEYLA CAPTURE
-  muestreo determinista 44 Hz
+AEYLA · CAPTURA
+  muestreo determinista a 44 Hz
         ↓
-TAKE RAW .aeylatake
-  fuente inmutable
+TOMA BRUTA .aeylatake
+  fuente original e inmutable
         ↓
-DMX CLIP EDITOR
-  trim / split / offset / hold / blackout / marcadores
+AEYLA · EDITOR DMX
+  entrada / salida / corte / desplazamiento / mantener / apagón / marcadores
         ↓
 CONSOLIDAR
-  IN/OUT pasan a ser 0 → duración del clip final
+  el punto de entrada pasa a ser 00:00 del archivo final
         ↓
-CLIP DMX CONSOLIDADO
+MUESTRA DMX CONSOLIDADA
         ↓
 DAW
-  audio / MIDI / triggers globales / video / otros plugins
+  audio / MIDI / disparos globales / video / otros complementos
         ↓ notas MIDI
-AEYLA PLAYER
-  selección + PLAY / PAUSE / NEXT / LAUNCH
+AEYLA · REPRODUCTOR
+  selección + reproducir / pausa / siguiente / lanzar
         ↓
-ART-NET TX
+ART-NET · SALIDA
   interfaz física elegida
         ↓
 NODO U1 → DMX
 ```
 
-El orden físico de tracks, escenas o clips dentro del DAW **no define la posición artística del DMX**. El DAW es host y router de eventos; AEYLA reproduce el clip DMX seleccionado desde su propio cursor relativo.
+El orden físico de pistas, escenas o clips dentro del DAW **no define la posición artística del DMX**. El DAW actúa como anfitrión y enrutador de eventos; AEYLA reproduce la muestra DMX seleccionada desde su propio cursor relativo.
 
 ## 2. Regla principal de tiempo
 
-La reproducción artística no depende de la posición absoluta de la timeline del DAW y tampoco usa reloj de pared.
+La reproducción artística no depende de la posición absoluta de la línea de tiempo del DAW y tampoco usa el reloj del sistema como reloj artístico.
 
-Después de consolidar, cada clip posee una timeline relativa propia:
-
-```text
-0 muestras ───────────────────────── final del clip
-```
-
-Al recibir PLAY/LAUNCH, AEYLA pone el cursor relativo en cero y avanza contando únicamente muestras de audio procesadas mientras el clip está en estado PLAYING.
+Después de consolidar, cada muestra posee una línea de tiempo relativa propia:
 
 ```text
-clipSampleCursor += processedSamples
-frame = floor(clipSampleCursor * dmxFps / sampleRate)
+0 muestras ───────────────────────── final de la muestra
 ```
 
-Un trigger MIDI dentro de un bloque debe respetar su `sampleOffset`: el cursor comienza exactamente en el punto del bloque donde ocurrió el evento, no al inicio arbitrario del bloque.
+Al recibir REPRODUCIR o LANZAR, AEYLA pone el cursor relativo en cero y avanza contando únicamente las muestras de audio procesadas mientras la muestra DMX se encuentra reproduciendo.
+
+```text
+cursorMuestras += muestrasProcesadas
+cuadroDMX = floor(cursorMuestras * cuadrosDMXPorSegundo / frecuenciaMuestreo)
+```
+
+Un evento MIDI dentro de un bloque debe respetar su desplazamiento exacto dentro del bloque (`sampleOffset` en el código). Las muestras anteriores al evento no pueden adelantar una reproducción recién lanzada.
 
 Consecuencias obligatorias:
 
-- PLAY/LAUNCH inicia el clip consolidado desde 0.
-- PAUSE conserva el cursor y mantiene el último frame válido.
-- RESUME continúa desde el mismo cursor relativo.
-- RETRIGGER/PLAY FROM START vuelve a 0 de forma determinista.
-- el final del clip entra en HOLD del último frame salvo una política explícita distinta.
-- mover, reordenar o renombrar tracks del DAW no desplaza el DMX.
-- hacer seek o loop en la timeline global no mueve el clip AEYLA por sí solo.
-- sólo un evento MIDI explícito cambia selección, transporte o posición del clip.
-- cerrar la interfaz gráfica no puede detener el runtime.
-- render offline inhibe siempre la salida física.
+- REPRODUCIR / LANZAR inicia la muestra consolidada desde 00:00.
+- PAUSA conserva el cursor y mantiene el último cuadro DMX válido.
+- REANUDAR continúa desde el mismo cursor relativo.
+- REINICIAR vuelve a 00:00 de forma determinista.
+- el final de la muestra mantiene el último cuadro válido salvo una política explícita diferente.
+- mover, reordenar o renombrar pistas del DAW no desplaza el DMX.
+- mover el cursor, crear bucles o saltar en la línea de tiempo global del DAW no reposiciona AEYLA por sí solo.
+- únicamente un comando MIDI explícito cambia selección, transporte o posición de la muestra DMX.
+- cerrar la interfaz gráfica no puede detener el motor de ejecución.
+- un renderizado sin reproducción en tiempo real inhibe siempre la salida física Art-Net.
 
-El reloj de pared queda prohibido para calcular la posición artística del DMX.
+El reloj del sistema queda prohibido para calcular la posición artística del DMX. Sólo puede utilizarse para supervisión de vida y seguridad.
 
 ## 3. Captura
 
 ### Entrada
 
 - Art-Net, un universo.
-- RX ligado explícitamente a una IPv4 local elegida.
+- recepción ligada explícitamente a una IPv4 local elegida.
 - tasa normalizada: **44 Hz**.
 - una fuente Art-Net queda autoritativa durante cada grabación.
 
 ### Persistencia de producción
 
-La grabación de producción no puede acumular el Take completo en RAM.
+La grabación de producción no puede acumular la toma completa en RAM.
 
 Ruta requerida:
 
 ```text
-sampler 44 Hz
+muestreador 44 Hz
    ↓
-cola SPSC fija 512 KiB
+cola SPSC fija de 512 KiB
    ↓
-thread de disco
+hilo dedicado de escritura
    ↓
 .aeylatake.tmp
-   ↓ STOP
-frame count final + checksum + fsync + validación
+   ↓ DETENER
+conteo final + suma de verificación + fsync + validación
    ↓
-rename atómico
+renombrado atómico
    ↓
 .aeylatake
 ```
 
-- `try_push_frame()` no asigna memoria, no espera y no hace I/O.
-- overflow de cola = fallo visible; nunca se omiten frames silenciosamente.
-- checkpoints durables periódicos.
-- un archivo incompleto nunca reemplaza al último Take válido.
+- la entrega de cuadros al escritor no asigna memoria, no espera y no hace operaciones de disco en el camino de tiempo crítico.
+- desborde de cola = falla visible; nunca se omiten cuadros silenciosamente.
+- puntos de control durables periódicos.
+- un archivo incompleto nunca reemplaza la última toma válida.
 
-## 4. Reproducción file-backed
+## 4. Reproducción respaldada por archivo
 
-Un Take histórico no se mantiene completo en memoria.
+Una toma histórica no se mantiene completa en memoria.
 
-- validación de checksum al abrir.
-- acceso aleatorio por índice de frame.
-- caché fija actual: **128 frames / 64 KiB**.
-- carga de clip no requiere mantener el payload completo en RAM.
-- I/O de archivo sólo en thread no realtime.
+- validación de suma de verificación al abrir.
+- acceso aleatorio por índice de cuadro.
+- caché fija actual: **128 cuadros / 64 KiB**.
+- cargar una muestra no requiere mantener todo el contenido en RAM.
+- las operaciones de archivo ocurren fuera del hilo de audio.
 
-El clip consolidado puede conservar una referencia al RAW + receta de edición o materializar un archivo optimizado de reproducción. La fuente RAW permanece inmutable.
+La muestra consolidada puede conservar una referencia a la toma bruta más una receta de edición o materializar un archivo optimizado de reproducción. La fuente bruta permanece inmutable.
 
 ## 5. Selección y transporte por MIDI
 
-La interfaz de control mínima del show es independiente de la timeline del DAW.
+La interfaz de control mínima del show es independiente de la línea de tiempo del DAW.
 
-Comandos mínimos:
+Comandos visibles mínimos:
 
-- `SELECT SONG n`: deja una canción/clip preparada.
-- `NEXT SONG`: avanza la selección preparada.
-- `PREVIOUS SONG`: opcional pero recomendado.
-- `PLAY / RETRIGGER`: inicia la selección desde 0.
-- `PAUSE`: congela cursor y DMX en el último frame.
-- `RESUME`: continúa desde el cursor congelado.
-- `STOP / RESET`: recomendado para volver a estado preparado sin depender de un toggle ambiguo.
+- **SELECCIONAR CANCIÓN**: deja una canción preparada.
+- **SIGUIENTE CANCIÓN**: avanza la selección preparada.
+- **CANCIÓN ANTERIOR**: retrocede la selección preparada.
+- **REPRODUCIR / REINICIAR**: inicia la selección desde 00:00.
+- **PAUSA**: congela cursor y DMX en el último cuadro válido.
+- **REANUDAR**: continúa desde el cursor congelado.
+- **DETENER / REINICIAR**: detiene y vuelve al estado preparado.
+- **LANZAR CANCIÓN N**: selecciona una canción concreta y la inicia desde 00:00 en el mismo instante MIDI.
 
-También se permite un comando atómico `LAUNCH SONG n` que equivale a seleccionar + iniciar desde 0 en el mismo instante MIDI. Este camino es preferible cuando un playback global del show debe disparar luz, video y otros elementos simultáneamente.
+**LANZAR CANCIÓN N** es el camino recomendado cuando un disparo global de la sesión debe activar simultáneamente audio, luz, video y otros elementos.
 
-Los números de nota no se fijan en el motor; deben ser asignables/MIDI Learn para integrarse con una sesión ya existente.
+Los números de nota no se fijan en el motor. Deben ser asignables mediante **APRENDER MIDI** para integrarse con una sesión existente sin obligar a reorganizarla.
 
-## 6. Canción activa vs canción preparada
+## 6. Canción activa y canción preparada
 
-Para evitar cortes accidentales, AEYLA distingue:
+Para evitar cortes accidentales, AEYLA distingue dos estados funcionales:
 
-- `ACTIVE`: clip que está sonando o en pausa.
-- `QUEUED`: canción seleccionada para el próximo PLAY/LAUNCH.
+- **ACTIVA**: muestra que está reproduciéndose o en pausa.
+- **PREPARADA**: canción seleccionada para el próximo REPRODUCIR / LANZAR.
 
-`NEXT SONG` y `SELECT SONG` modifican QUEUED sin interrumpir ACTIVE. `PLAY/LAUNCH` convierte QUEUED en ACTIVE y comienza desde 0.
+SIGUIENTE CANCIÓN y SELECCIONAR CANCIÓN modifican la canción PREPARADA sin interrumpir la ACTIVA. REPRODUCIR / LANZAR convierte la PREPARADA en ACTIVA y comienza desde 00:00.
 
 Esto permite preparar la siguiente canción durante la ejecución de la actual sin modificar el DMX que está saliendo.
 
 ## 7. Autoridad de salida
 
-La salida Art-Net tiene dos autoridades mutuamente priorizadas:
+La salida Art-Net mantiene dos autoridades mutuamente priorizadas:
 
-1. salida semántica/modelo;
-2. reproducción de DMX Clip.
+1. salida del modelo semántico interno;
+2. reproducción de muestra DMX.
 
-Mientras el DMX Clip está armado y posee un estado ACTIVE válido, su autoridad override gana.
+Mientras la reproducción DMX está armada y posee una canción ACTIVA válida, la muestra DMX tiene prioridad.
 
-Estados mínimos:
+Estados visibles mínimos:
 
-- `DISARMED`: sin autoridad física de clip.
-- `ARMED / READY`: sistema preparado, canción QUEUED disponible.
-- `PLAYING`: cursor relativo avanzando.
-- `PAUSED / HOLD`: cursor congelado; mantiene último frame.
-- `ENDED / HOLD`: clip terminado; mantiene último frame.
-- `OFFLINE`: salida física inhibida.
-- `FAULT`: error de archivo, host o storage; fail-closed.
+- **DESARMADO**: sin autoridad física de reproducción.
+- **ARMADO / LISTO**: sistema preparado; canción PREPARADA disponible.
+- **REPRODUCIENDO**: cursor relativo avanzando.
+- **PAUSADO / MANTENER**: cursor congelado; conserva el último cuadro.
+- **FINALIZADO / MANTENER**: muestra terminada; conserva el último cuadro.
+- **SALIDA INHIBIDA**: no se permite transmisión física.
+- **FALLA**: error de archivo, anfitrión o almacenamiento; cierre por seguridad.
 
-## 8. Host y watchdog
+## 8. DAW y supervisor de vida
 
-El DAW sigue siendo necesario como host de plugin y fuente de eventos MIDI, pero su posición absoluta no gobierna el clip.
+El DAW sigue siendo necesario como anfitrión del complemento y fuente de eventos MIDI, pero su posición absoluta no gobierna la muestra DMX.
 
-El callback de audio cumple tres funciones:
+El bloque de audio cumple tres funciones:
 
-1. entregar bloques de muestras para avanzar el cursor relativo;
-2. entregar eventos MIDI con su `sampleOffset` exacto;
-3. demostrar que el host sigue vivo.
+1. entregar la cantidad de muestras procesadas para avanzar el cursor relativo;
+2. entregar eventos MIDI con su desplazamiento exacto dentro del bloque;
+3. demostrar que el anfitrión sigue vivo.
 
-El reloj de pared sólo se permite como vigilancia de vida:
+El reloj del sistema sólo se permite como vigilancia de vida:
 
-- cada callback coherente actualiza heartbeat;
-- si el callback desaparece por el umbral de seguridad, AEYLA entra en política fail-closed;
-- heartbeat jamás calcula el frame artístico.
+- cada bloque válido actualiza la señal de vida;
+- si el anfitrión deja de procesar por el umbral de seguridad, AEYLA inhibe la autoridad física;
+- la señal de vida jamás calcula qué cuadro artístico corresponde.
 
-Un STOP/SEEK/LOOP de la timeline del DAW no reposiciona AEYLA salvo que la sesión envíe además un comando MIDI definido para hacerlo.
+DETENER, mover el cursor o crear un bucle en la línea de tiempo del DAW no reposiciona AEYLA salvo que la sesión envíe además un comando MIDI definido para hacerlo.
 
 ## 9. Editor DMX
 
-El editor debe comportarse como editor de un sample, no como un DAW paralelo.
+El editor debe comportarse como editor de una muestra, no como un DAW paralelo.
 
 Primera etapa segura:
 
-- timeline temporal;
-- playhead;
-- zoom y desplazamiento;
-- IN / OUT;
-- split;
-- crop;
-- offset;
-- HOLD;
-- BLACKOUT;
+- línea de tiempo temporal;
+- cursor de reproducción;
+- ampliación y desplazamiento;
+- punto de entrada;
+- punto de salida;
+- dividir;
+- recortar;
+- desplazar;
+- mantener estado;
+- apagón;
 - marcadores;
 - actividad DMX resumida;
-- volver al RAW;
+- volver a la toma bruta;
 - consolidar una nueva versión.
 
-Después de CONSOLIDAR, el punto IN pasa a ser tiempo 0 del clip final. El reproductor de show no necesita conocer la posición que ese fragmento ocupaba originalmente en la grabación RAW.
+Después de CONSOLIDAR, el punto de entrada pasa a ser 00:00 de la muestra final. El reproductor del show no necesita conocer la posición que ese fragmento ocupaba originalmente dentro de la toma bruta.
 
-### Prohibición inicial
+### Restricción inicial de seguridad
 
-No interpolar linealmente los 512 canales para crear fades genéricos.
+No interpolar linealmente los 512 canales para fabricar transiciones genéricas.
 
-Canales de strobe, modo, macro o funciones discretas podrían atravesar valores inválidos. Las transiciones continuas sólo podrán habilitarse después de clasificar canales/atributos seguros.
+Canales de estrobo, modo, macro u otras funciones discretas podrían atravesar valores no deseados. Las transiciones continuas sólo podrán habilitarse después de clasificar canales y atributos seguros.
 
-## 10. Integración con la sesión del show
+## 10. Integración con la sesión existente
 
-La sesión puede conservar su estructura existente.
+La sesión de los músicos puede conservar su estructura actual.
 
 Ejemplo conceptual:
 
 ```text
-PLAY GLOBAL CANCIÓN 06
-   ├─ audio/playback existente
+DISPARO GLOBAL · CANCIÓN 06
+   ├─ audio / playback existente
    ├─ video / visuales
-   ├─ otros triggers
-   └─ MIDI → AEYLA: LAUNCH SONG 06
+   ├─ otros disparos
+   └─ MIDI → AEYLA: LANZAR CANCIÓN 06
 ```
 
-AEYLA no exige que `CANCIÓN 06` esté en el sexto track, en una posición fija de Arrangement ni en un orden particular de escenas. La identidad del clip se resuelve por comando/ID MIDI.
+AEYLA no exige que CANCIÓN 06 esté en la sexta pista, en una posición fija del arreglo ni en un orden particular de escenas. La identidad de la muestra se resuelve por comando MIDI.
 
-Para sesiones donde ya existe un trigger maestro por canción, `LAUNCH SONG n` es el camino recomendado. Para operación manual o ensayo también deben existir `SELECT`, `NEXT`, `PLAY`, `PAUSE/RESUME` y `STOP/RESET`.
+Para sesiones donde ya existe un disparo maestro por canción, LANZAR CANCIÓN N es el camino recomendado. Para operación manual o ensayo también deben existir SELECCIONAR, SIGUIENTE, ANTERIOR, REPRODUCIR, PAUSA, REANUDAR y DETENER.
 
-La consecuencia de producto es explícita: **la sesión de los músicos no debe reorganizarse para acomodar AEYLA**. AEYLA se adapta a sus triggers existentes.
+La consecuencia de producto queda bloqueada: **la sesión de los músicos no debe reorganizarse para acomodar AEYLA. AEYLA se adapta a los disparos existentes.**
 
-## 11. RAM
+## 11. RAM y estabilidad
 
 Objetivos de arquitectura:
 
 - cola de captura: 512 KiB fija;
 - caché de lectura: 64 KiB fija;
-- históricos: índice/metadata en disco, no vectores de frames;
-- crecimiento de RAM por duración de Take: aproximadamente plano;
-- cambiar de Song/Take no debe acumular payloads históricos.
+- históricos: índice y metadatos en disco, no vectores completos de cuadros;
+- crecimiento de RAM por duración de toma: aproximadamente plano;
+- cambiar de canción o toma no debe acumular contenidos históricos.
 
-La implementación heredada basada en `std::vector<DmxUniverse>` permanece sólo como compatibilidad temporal y debe salir del camino de producto antes de declarar Show Candidate.
+La implementación heredada basada en `std::vector<DmxUniverse>` permanece únicamente como compatibilidad temporal y debe salir del camino de producto antes de declarar una versión candidata para show.
 
-## 12. Gates antes de prueba oficial
+## 12. Idioma y lenguaje de producto
 
-### P0
+**Toda superficie visible para el usuario debe estar en español.** Esta regla es P0 y forma parte del criterio de aceptación del producto.
 
-1. Captura de producto conectada al writer stream-to-disk.
-2. Reemplazar el player sample-locked a timeline absoluta por cursor relativo accionado por MIDI.
-3. integrar `sampleOffset` real de los eventos MIDI dentro del bloque de audio.
-4. implementar ACTIVE/QUEUED + SELECT/NEXT/PLAY/PAUSE/RESUME/STOP + LAUNCH SONG n.
-5. eliminación del cache de múltiples Takes completos por Song.
-6. salida Art-Net física repetida con NIC seleccionada, nodo U1 y DMX real.
-7. funcionamiento con editor gráfico cerrado.
-8. campañas repetidas LAUNCH / PAUSE / RESUME / RETRIGGER / NEXT / save-reopen.
-9. pérdida y recuperación de red/nodo sin crash.
-10. fallo de almacenamiento visible y fail-closed.
+Incluye:
 
-### Resistencia
+- nombres de botones;
+- estados;
+- mensajes de error;
+- avisos de seguridad;
+- ventanas de configuración;
+- selector de red;
+- editor DMX;
+- biblioteca de canciones y tomas;
+- instalador;
+- ayuda contextual;
+- manual y documentación entregable.
+
+Se permiten en inglés únicamente nombres propios, protocolos, formatos, extensiones y términos técnicos cuya traducción perjudique claridad o compatibilidad, por ejemplo: Art-Net, DMX, MIDI, VST3, AUv2, Ableton Live, REAPER, Avolites, IPv4 y nombres de funciones internas de código.
+
+El código fuente puede conservar identificadores internos en inglés cuando sea técnicamente conveniente; **ninguno de esos identificadores debe filtrarse a la interfaz visible**.
+
+Vocabulario visible bloqueado:
+
+- Capture → **CAPTURA**
+- Take → **TOMA**
+- Raw Take → **TOMA BRUTA**
+- Clip → **MUESTRA DMX** cuando corresponda al archivo reproducible
+- Player → **REPRODUCTOR**
+- Play → **REPRODUCIR**
+- Pause → **PAUSA**
+- Resume → **REANUDAR**
+- Stop → **DETENER**
+- Next Song → **SIGUIENTE CANCIÓN**
+- Previous Song → **CANCIÓN ANTERIOR**
+- Select Song → **SELECCIONAR CANCIÓN**
+- Launch Song → **LANZAR CANCIÓN**
+- Active → **ACTIVA**
+- Queued → **PREPARADA**
+- Armed → **ARMADO**
+- Disarmed → **DESARMADO**
+- Hold → **MANTENER**
+- Fault → **FALLA**
+- Blackout → **APAGÓN**
+- MIDI Learn → **APRENDER MIDI**
+
+No se incorporarán nuevas etiquetas visibles en inglés sin una razón técnica explícita.
+
+## 13. P0 antes de prueba oficial
+
+1. conectar la captura principal al camino directo a disco;
+2. conectar el reproductor principal al cursor relativo gobernado por comandos MIDI;
+3. respetar el desplazamiento exacto de eventos MIDI dentro de cada bloque;
+4. implementar ACTIVA / PREPARADA + SELECCIONAR / SIGUIENTE / ANTERIOR / REPRODUCIR / PAUSA / REANUDAR / DETENER / LANZAR CANCIÓN;
+5. eliminar la caché de múltiples tomas completas por canción;
+6. repetir salida Art-Net física con interfaz seleccionada, nodo U1 y DMX real;
+7. verificar funcionamiento con la interfaz gráfica cerrada;
+8. campañas repetidas LANZAR / PAUSA / REANUDAR / REINICIAR / SIGUIENTE / guardar / reabrir;
+9. pérdida y recuperación de red o nodo sin cierre inesperado;
+10. falla de almacenamiento visible y cierre por seguridad;
+11. auditar todas las cadenas visibles y eliminar inglés de la interfaz.
+
+## 14. Pruebas de resistencia
 
 - sesión completa de 10 canciones;
-- campañas repetidas REC / STOP / LOAD / CONSOLIDATE / LAUNCH;
-- 50 min captura y playback con RAM plana;
-- triggers MIDI simultáneos con otros elementos del show;
-- 8 h de soak;
-- medir RAM, CPU, threads, handles, errores TX y stale drops.
+- campañas repetidas CAPTURAR / DETENER / CARGAR / CONSOLIDAR / LANZAR;
+- 50 minutos de captura y reproducción con RAM aproximadamente plana;
+- disparos MIDI simultáneos con otros elementos del show;
+- prueba prolongada mínima de 8 horas;
+- medir RAM, CPU, hilos, identificadores abiertos, errores de transmisión y cuadros obsoletos descartados.
 
-## 13. Límite de estado actual
+## 15. Estado congelado de esta revisión
 
-Las primitivas de captura streamed y lectura file-backed ya pueden existir y pasar CI antes de estar conectadas a la interfaz principal. El motor sample-locked a posición absoluta del DAW construido en R05 se considera ahora **arquitectura transitoria reemplazada en la rama R06 por cursor relativo**; todavía falta conectar ese motor al flujo VST3 visible y a los eventos MIDI reales del host.
+Las primitivas de captura directa a disco y lectura respaldada por archivo ya existen en la rama de desarrollo. La arquitectura anterior que vinculaba la posición artística del DMX a la posición absoluta de la línea de tiempo del DAW queda **descartada**.
 
-La aceptación final depende de integrar el cursor relativo MIDI-driven en VST3/AUv2, probarlo en REAPER/Ableton con la sesión real, verificar NIC física + nodo + luminarias y completar pruebas prolongadas.
+La dirección válida desde R07 es:
+
+**Avolites programa → AEYLA captura una toma bruta → AEYLA edita y consolida una muestra DMX → la sesión existente envía comandos MIDI → AEYLA reproduce desde un cursor relativo propio → Art-Net sale por la interfaz física seleccionada → nodo U1 → DMX.**
+
+Esta revisión congela además el español como idioma visible obligatorio del producto.
+
+Todavía no se declara la rama lista para show. La aceptación depende de integrar este flujo en el complemento visible, probarlo en REAPER y Ableton Live con la sesión real, verificar interfaz física + nodo + luminarias y completar las pruebas prolongadas.
