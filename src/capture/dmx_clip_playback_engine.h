@@ -2,7 +2,6 @@
 
 #include "capture/dmx_take_file_reader.h"
 #include "output/artnet_output_worker.h"
-#include "runtime/host_transport_mailbox.h"
 
 #include <atomic>
 #include <chrono>
@@ -15,29 +14,43 @@
 
 namespace aeyla::capture {
 
+enum class DmxClipTransportState : std::uint8_t {
+  ready = 0,
+  playing,
+  paused,
+  ended,
+  fault,
+};
+
 struct DmxClipPlaybackStatus {
   bool running{false};
   bool loaded{false};
   bool armed{false};
-  bool triggered{false};
-  bool playing{false};
   bool hold_valid{false};
   bool host_heartbeat_ok{false};
   bool rendering_offline{false};
+  DmxClipTransportState transport{DmxClipTransportState::ready};
   std::uint64_t current_frame{0U};
   std::uint64_t range_start_frame{0U};
   std::uint64_t range_end_frame_exclusive{0U};
-  std::int64_t clip_start_sample{-1};
+  std::uint64_t cursor_samples{0U};
   double progress{0.0};
   std::string error;
 };
 
-// File-backed, DAW-sample-locked DMX clip player.
+// File-backed DMX clip player driven by a RELATIVE sample cursor.
 //
-// The host sample position is the sole artistic clock. The worker never advances
-// the clip from wall time; wall time is used only to detect a dead host callback.
-// STOP therefore holds the last valid frame, while seek/loop/restart reconstruct
-// from absolute host samples without cumulative drift.
+// Product contract R06:
+// - the absolute DAW arrangement position is not the artistic clock;
+// - PLAY/RETRIGGER starts the consolidated clip at sample cursor 0;
+// - PAUSE holds cursor + DMX, RESUME continues from that cursor;
+// - advance_samples() is fed by the audio callback and is the only way the
+//   artistic cursor advances;
+// - wall clock is reserved for host-liveness watchdogs in the integration
+//   layer, never for artistic playback position.
+//
+// This keeps a clip independent from track order, Arrangement position and
+// host seeks while preserving sample-derived timing.
 class DmxClipPlaybackEngine final {
  public:
   DmxClipPlaybackEngine();
@@ -46,8 +59,7 @@ class DmxClipPlaybackEngine final {
   DmxClipPlaybackEngine(const DmxClipPlaybackEngine&) = delete;
   DmxClipPlaybackEngine& operator=(const DmxClipPlaybackEngine&) = delete;
 
-  void attach(output::ArtNetOutputWorker* output,
-              const runtime::HostTransportMailbox* host) noexcept;
+  void attach(output::ArtNetOutputWorker* output) noexcept;
 
   [[nodiscard]] bool load_clip(const std::filesystem::path& path,
                                double sample_rate,
@@ -59,14 +71,27 @@ class DmxClipPlaybackEngine final {
                                     std::string& error_message);
   void reset_play_range() noexcept;
 
-  // Called from a non-realtime bridge after a DAW MIDI/event trigger has been
-  // translated to an absolute host sample: blockStart + event.sampleOffset.
-  [[nodiscard]] bool trigger_at_sample(std::int64_t absolute_sample,
-                                       std::string& error_message);
-  void clear_trigger() noexcept;
-
   [[nodiscard]] bool arm(std::string& error_message);
   void disarm() noexcept;
+
+  // Runtime transport commands. These are intended to be called by the
+  // non-realtime bridge after MIDI events have been ordered by sampleOffset.
+  [[nodiscard]] bool play_from_start(std::string& error_message);
+  [[nodiscard]] bool pause(std::string& error_message);
+  [[nodiscard]] bool resume(std::string& error_message);
+  void stop_and_reset() noexcept;
+
+  // Advance the relative artistic cursor by exactly the number of processed
+  // host samples that occur while transport == playing. The integration layer
+  // must account for a MIDI event's sampleOffset so samples before the event do
+  // not advance a newly launched clip.
+  void advance_samples(std::uint32_t processed_samples,
+                       bool rendering_offline) noexcept;
+
+  // Host callback watchdog state is supplied by the integration layer. A dead
+  // host disables physical clip authority but never changes the artistic
+  // cursor by wall time.
+  void set_host_heartbeat_ok(bool ok) noexcept;
 
   [[nodiscard]] DmxClipPlaybackStatus status() const;
 
@@ -76,15 +101,15 @@ class DmxClipPlaybackEngine final {
   void run() noexcept;
   void set_error(std::string message) noexcept;
   [[nodiscard]] std::string error() const;
+  [[nodiscard]] bool publish_cursor_frame_locked();
 
   mutable std::mutex mutex_;
   output::ArtNetOutputWorker* output_{nullptr};
-  const runtime::HostTransportMailbox* host_{nullptr};
   DmxTakeFileReader reader_{};
   double sample_rate_{0.0};
   std::uint64_t range_start_frame_{0U};
   std::uint64_t range_end_frame_exclusive_{0U};
-  std::int64_t clip_start_sample_{-1};
+  std::uint64_t cursor_samples_{0U};
   DmxUniverse hold_frame_{};
   bool hold_valid_{false};
   std::uint64_t generation_{3000000000ULL};
@@ -97,10 +122,9 @@ class DmxClipPlaybackEngine final {
   std::atomic<bool> running_{false};
   std::atomic<bool> loaded_{false};
   std::atomic<bool> armed_{false};
-  std::atomic<bool> triggered_{false};
-  std::atomic<bool> playing_{false};
   std::atomic<bool> heartbeat_ok_{false};
   std::atomic<bool> rendering_offline_{false};
+  std::atomic<DmxClipTransportState> transport_{DmxClipTransportState::ready};
   std::atomic<std::uint64_t> current_frame_{0U};
   std::atomic<double> progress_{0.0};
 };
