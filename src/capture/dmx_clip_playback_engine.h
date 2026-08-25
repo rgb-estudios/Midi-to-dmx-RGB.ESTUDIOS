@@ -41,11 +41,11 @@ struct DmxClipPlaybackStatus {
 // File-backed DMX clip player driven by a RELATIVE sample cursor.
 //
 // Product contract R06:
-// - the absolute DAW arrangement position is not the artistic clock;
+// - the absolute DAW arrangement position is NOT the artistic clock;
+// - the DAW supplies MIDI commands and processed sample blocks;
 // - PLAY/RETRIGGER starts the consolidated clip at sample cursor 0;
 // - PAUSE holds cursor + DMX, RESUME continues from that cursor;
-// - advance_samples() is fed by the audio callback and is the only way the
-//   artistic cursor advances;
+// - advance_samples() is the only way the artistic cursor advances;
 // - wall clock is reserved for host-liveness watchdogs in the integration
 //   layer, never for artistic playback position.
 //
