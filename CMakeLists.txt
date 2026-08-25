@@ -95,6 +95,7 @@ add_library(aeyla_runtime
   src/capture/artnet_capture_worker.cpp
   src/capture/dmx_take_file_store.cpp
   src/capture/dmx_take_scheduler.cpp
+  src/capture/dmx_take_transport.cpp
   src/output/artnet_output_worker.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
@@ -140,6 +141,7 @@ aeyla_add_strict_test(aeyla_programmer_tests tests/test_programmer.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
 aeyla_add_strict_test(aeyla_artnet_capture_worker_tests tests/test_artnet_capture_worker.cpp)
 aeyla_add_strict_test(aeyla_dmx_take_file_store_tests tests/test_dmx_take_file_store.cpp)
+aeyla_add_strict_test(aeyla_dmx_take_transport_tests tests/test_dmx_take_transport.cpp)
 
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)
