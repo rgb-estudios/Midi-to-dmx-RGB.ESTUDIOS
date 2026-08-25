@@ -46,8 +46,12 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/show/show_program_codec.cpp
     ../../src/network/network_interfaces.cpp
     ../../src/capture/artnet_capture_worker.cpp
+    ../../src/capture/dmx_clip_playback_engine.cpp
+    ../../src/capture/dmx_take_file_reader.cpp
     ../../src/capture/dmx_take_file_store.cpp
     ../../src/capture/dmx_take_scheduler.cpp
+    ../../src/capture/dmx_take_stream_writer.cpp
+    ../../src/capture/dmx_take_transport.cpp
     ../../src/output/artnet_output_worker.cpp
   FORMATS
     ${AEYLA_PLUGIN_FORMATS}
