@@ -200,8 +200,10 @@ class ArtNetCaptureWorker::Impl final {
 
   void shutdown() noexcept {
     recording_.store(false, std::memory_order_release);
+    streamed_mode_.store(false, std::memory_order_release);
     stop_requested_.store(true, std::memory_order_release);
     if(worker_.joinable()) worker_.join();
+    stream_writer_.abort();
     running_.store(false, std::memory_order_release);
     close_socket(socket_);
     socket_ = kInvalidSocket;
@@ -219,6 +221,8 @@ class ArtNetCaptureWorker::Impl final {
       return false;
     }
 
+    stream_writer_.abort();
+    streamed_mode_.store(false, std::memory_order_release);
     {
       const std::scoped_lock lock(record_mutex_);
       recording_frames_.clear();
@@ -233,6 +237,8 @@ class ArtNetCaptureWorker::Impl final {
   }
 
   std::optional<DmxTake> end_recording(std::string name) {
+    if(streamed_mode_.load(std::memory_order_acquire))
+      return std::nullopt;
     if(!recording_.exchange(false, std::memory_order_acq_rel))
       return std::nullopt;
 
@@ -250,8 +256,77 @@ class ArtNetCaptureWorker::Impl final {
     return result;
   }
 
+  bool begin_streamed_recording(const DmxTakeStreamConfig& stream_config,
+                                std::string& error_message) {
+    error_message.clear();
+    if(!running_.load(std::memory_order_acquire)) {
+      error_message = "Art-Net capture input is not running";
+      return false;
+    }
+    if(recording_.load(std::memory_order_acquire)) {
+      error_message = "A DMX Take is already recording";
+      return false;
+    }
+    if(stream_config.port_address != config_.port_address ||
+       stream_config.frames_per_second != config_.frames_per_second) {
+      error_message = "Streamed Take metadata must match active capture universe and FPS";
+      return false;
+    }
+    if(stream_config.source_ipv4.empty()) {
+      error_message = "Streamed Take requires the current Art-Net source IPv4";
+      return false;
+    }
+
+    {
+      const std::scoped_lock lock(record_mutex_);
+      recording_frames_.clear();
+      recording_source_ = stream_config.source_ipv4;
+      overflowed_.store(false, std::memory_order_release);
+      recorded_frames_.store(0U, std::memory_order_relaxed);
+    }
+
+    if(!stream_writer_.start(stream_config, error_message)) {
+      const std::scoped_lock lock(record_mutex_);
+      recording_source_.clear();
+      return false;
+    }
+
+    streamed_mode_.store(true, std::memory_order_release);
+    recording_.store(true, std::memory_order_release);
+    return true;
+  }
+
+  bool end_streamed_recording(std::string& error_message) {
+    error_message.clear();
+    if(!streamed_mode_.exchange(false, std::memory_order_acq_rel)) {
+      error_message = "No streamed DMX Take is active";
+      return false;
+    }
+
+    recording_.store(false, std::memory_order_release);
+    const bool finalized = stream_writer_.finalize(error_message);
+    const auto writer_status = stream_writer_.status();
+    recorded_frames_.store(writer_status.frames_written,
+                           std::memory_order_relaxed);
+    if(!finalized || writer_status.failed)
+      overflowed_.store(true, std::memory_order_release);
+    {
+      const std::scoped_lock lock(record_mutex_);
+      recording_source_.clear();
+    }
+    return finalized;
+  }
+
+  bool streamed_recording_active() const noexcept {
+    return streamed_mode_.load(std::memory_order_acquire);
+  }
+
   void discard_recording() noexcept {
     recording_.store(false, std::memory_order_release);
+    const bool was_streamed =
+        streamed_mode_.exchange(false, std::memory_order_acq_rel);
+    if(was_streamed)
+      stream_writer_.abort();
     const std::scoped_lock lock(record_mutex_);
     recording_frames_.clear();
     recording_source_.clear();
@@ -270,6 +345,7 @@ class ArtNetCaptureWorker::Impl final {
     ArtNetCaptureStats result;
     result.running = running_.load(std::memory_order_acquire);
     result.recording = recording_.load(std::memory_order_acquire);
+    result.streaming_to_disk = streamed_mode_.load(std::memory_order_acquire);
     result.overflowed = overflowed_.load(std::memory_order_acquire);
     result.packets_received = packets_received_.load(std::memory_order_relaxed);
     result.packets_accepted = packets_accepted_.load(std::memory_order_relaxed);
@@ -279,6 +355,13 @@ class ArtNetCaptureWorker::Impl final {
     result.sequence_gaps = sequence_gaps_.load(std::memory_order_relaxed);
     result.listen_ipv4 = config_.listen_ipv4;
     result.port_address = config_.port_address;
+
+    const auto storage = stream_writer_.status();
+    result.storage_failed = storage.failed;
+    result.storage_error = storage.error;
+    result.peak_buffered_frames = storage.peak_buffered_frames;
+    if(result.streaming_to_disk || storage.frames_written > result.recorded_frames)
+      result.recorded_frames = storage.frames_written;
 
     std::chrono::steady_clock::time_point last_packet;
     {
@@ -307,6 +390,8 @@ class ArtNetCaptureWorker::Impl final {
   }
 
   void reset_state() {
+    stream_writer_.abort();
+    streamed_mode_.store(false, std::memory_order_release);
     packets_received_.store(0U, std::memory_order_relaxed);
     packets_accepted_.store(0U, std::memory_order_relaxed);
     invalid_packets_.store(0U, std::memory_order_relaxed);
@@ -378,6 +463,16 @@ class ArtNetCaptureWorker::Impl final {
     {
       const std::scoped_lock lock(frame_mutex_);
       if(has_latest_) frame = latest_;
+    }
+
+    if(streamed_mode_.load(std::memory_order_acquire)) {
+      if(!stream_writer_.try_push_frame(frame)) {
+        overflowed_.store(true, std::memory_order_release);
+        recording_.store(false, std::memory_order_release);
+        return;
+      }
+      recorded_frames_.fetch_add(1U, std::memory_order_relaxed);
+      return;
     }
 
     const std::size_t maximum = static_cast<std::size_t>(
@@ -465,6 +560,7 @@ class ArtNetCaptureWorker::Impl final {
   std::atomic<bool> stop_requested_{true};
   std::atomic<bool> running_{false};
   std::atomic<bool> recording_{false};
+  std::atomic<bool> streamed_mode_{false};
 
   mutable std::mutex frame_mutex_;
   DmxUniverse latest_{};
@@ -475,6 +571,7 @@ class ArtNetCaptureWorker::Impl final {
   mutable std::mutex record_mutex_;
   std::vector<DmxUniverse> recording_frames_;
   std::string recording_source_;
+  DmxTakeStreamWriter stream_writer_{};
 
   std::atomic<std::uint64_t> packets_received_{0U};
   std::atomic<std::uint64_t> packets_accepted_{0U};
@@ -503,6 +600,20 @@ bool ArtNetCaptureWorker::begin_recording(std::string& error_message) {
 
 std::optional<DmxTake> ArtNetCaptureWorker::end_recording(std::string name) {
   return impl_->end_recording(std::move(name));
+}
+
+bool ArtNetCaptureWorker::begin_streamed_recording(
+    const DmxTakeStreamConfig& config,
+    std::string& error_message) {
+  return impl_->begin_streamed_recording(config, error_message);
+}
+
+bool ArtNetCaptureWorker::end_streamed_recording(std::string& error_message) {
+  return impl_->end_streamed_recording(error_message);
+}
+
+bool ArtNetCaptureWorker::streamed_recording_active() const noexcept {
+  return impl_->streamed_recording_active();
 }
 
 void ArtNetCaptureWorker::discard_recording() noexcept {
