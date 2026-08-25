@@ -271,6 +271,6 @@ La implementación heredada basada en `std::vector<DmxUniverse>` permanece sólo
 
 ## 13. Límite de estado actual
 
-Las primitivas de captura streamed y lectura file-backed ya pueden existir y pasar CI antes de estar conectadas a la interfaz principal. El motor sample-locked a posición absoluta del DAW construido en R05 se considera ahora **arquitectura transitoria a reemplazar**, no comportamiento final de producto.
+Las primitivas de captura streamed y lectura file-backed ya pueden existir y pasar CI antes de estar conectadas a la interfaz principal. El motor sample-locked a posición absoluta del DAW construido en R05 se considera ahora **arquitectura transitoria reemplazada en la rama R06 por cursor relativo**; todavía falta conectar ese motor al flujo VST3 visible y a los eventos MIDI reales del host.
 
 La aceptación final depende de integrar el cursor relativo MIDI-driven en VST3/AUv2, probarlo en REAPER/Ableton con la sesión real, verificar NIC física + nodo + luminarias y completar pruebas prolongadas.
