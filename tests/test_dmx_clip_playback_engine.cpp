@@ -3,7 +3,6 @@
 #include "capture/dmx_take_file_store.h"
 #include "capture/dmx_take_stream_writer.h"
 #include "output/artnet_output_worker.h"
-#include "runtime/host_transport_mailbox.h"
 
 #include <chrono>
 #include <cstdint>
@@ -47,13 +46,6 @@ aeyla::DmxUniverse expected_frame(std::uint64_t index) {
   return frame;
 }
 
-void publish_host(aeyla::runtime::HostTransportMailbox& host,
-                  bool running,
-                  bool offline,
-                  std::int64_t sample) {
-  host.publish(running, offline, static_cast<double>(sample), 0.0, 120.0);
-}
-
 }  // namespace
 
 int main() {
@@ -66,9 +58,9 @@ int main() {
 
   constexpr std::uint64_t kFrames = 44U * 3U;
   DmxTakeStreamConfig stream_config;
-  stream_config.target_path = directory / "SampleLocked.aeylatake";
-  stream_config.song_id = "song-sample-lock";
-  stream_config.song_name = "Sample Lock";
+  stream_config.target_path = directory / "MidiRelative.aeylatake";
+  stream_config.song_id = "song-midi-relative";
+  stream_config.song_name = "MIDI Relative";
   stream_config.take_name = "Take 01";
   stream_config.source_ipv4 = "2.0.0.10";
   stream_config.port_address = 0U;
@@ -102,81 +94,94 @@ int main() {
   output_config.frames_per_second = 44U;
   require(output.start(output_config, error), error);
 
-  runtime::HostTransportMailbox host;
   DmxClipPlaybackEngine engine;
-  engine.attach(&output, &host);
+  engine.attach(&output);
   require(engine.load_clip(stream_config.target_path, 48000.0, error), error);
-  require(engine.trigger_at_sample(1000, error), error);
+  engine.set_host_heartbeat_ok(true);
   require(engine.arm(error), error);
+  require(engine.play_from_start(error), error);
 
-  publish_host(host, true, false, 1000);
   require(wait_until([&]() {
     return engine.status().current_frame == 0U && output.override_enabled();
-  }), "clip start did not resolve to frame zero");
+  }), "PLAY did not start consolidated clip at frame zero");
   require(wait_until([&]() {
     DmxUniverse received{};
     return receiver.latest_frame(received) && received == expected_frame(0U);
   }), "physical Art-Net path did not receive frame zero");
 
-  publish_host(host, true, false, 1000 + 48000);
+  // One processed host second advances exactly one relative second regardless
+  // of where the DAW Arrangement playhead lives.
+  engine.advance_samples(48000U, false);
   require(wait_until([&]() { return engine.status().current_frame == 44U; }),
-          "one host second did not resolve to frame 44");
+          "one processed second did not resolve to frame 44");
   require(wait_until([&]() {
     DmxUniverse received{};
     return receiver.latest_frame(received) && received == expected_frame(44U);
-  }), "Art-Net output did not follow one-second host seek");
+  }), "Art-Net output did not follow relative clip cursor");
 
-  // Backward seek is the critical no-drift property.
-  publish_host(host, true, false, 1000 + 24000);
-  require(wait_until([&]() { return engine.status().current_frame == 22U; }),
-          "backward host seek did not reconstruct frame 22");
-  require(wait_until([&]() {
-    DmxUniverse received{};
-    return receiver.latest_frame(received) && received == expected_frame(22U);
-  }), "physical output did not follow backward DMX seek");
-
-  publish_host(host, false, false, 1000 + 24000);
-  require(wait_until([&]() {
-    const auto status = engine.status();
-    return !status.playing && status.hold_valid && output.override_enabled();
-  }), "DAW STOP must HOLD the last DMX clip frame");
-
-  // Move while stopped: HOLD must remain authoritative until transport runs.
-  publish_host(host, false, false, 1000 + 96000);
+  // PAUSE freezes the cursor and holds the last DMX frame even while callbacks
+  // continue to process more samples.
+  require(engine.pause(error), error);
+  const auto paused_cursor = engine.status().cursor_samples;
+  engine.advance_samples(96000U, false);
   std::this_thread::sleep_for(std::chrono::milliseconds(40));
-  require(engine.status().current_frame == 22U,
-          "stopped playhead movement must not destroy HOLD state");
+  require(engine.status().cursor_samples == paused_cursor,
+          "PAUSE must freeze the relative sample cursor");
+  require(engine.status().current_frame == 44U && output.override_enabled(),
+          "PAUSE must HOLD the last DMX frame");
 
-  publish_host(host, true, false, 1000 + 96000);
-  require(wait_until([&]() { return engine.status().current_frame == 88U; }),
-          "transport restart at new absolute sample did not reconstruct frame 88");
+  require(engine.resume(error), error);
+  engine.advance_samples(24000U, false);
+  require(wait_until([&]() { return engine.status().current_frame == 66U; }),
+          "RESUME did not continue from the paused cursor");
 
-  publish_host(host, true, false, 1000 + 4 * 48000);
+  // Retrigger is independent from absolute host position: it deterministically
+  // returns the consolidated clip to zero.
+  require(engine.play_from_start(error), error);
+  require(wait_until([&]() { return engine.status().current_frame == 0U; }),
+          "RETRIGGER did not return clip to frame zero");
+
+  engine.advance_samples(4U * 48000U, false);
   require(wait_until([&]() {
     const auto status = engine.status();
-    return !status.playing && status.current_frame == kFrames - 1U &&
-           status.progress == 1.0;
-  }), "position after clip must HOLD the final source frame");
+    return status.transport == DmxClipTransportState::ended &&
+           status.current_frame == kFrames - 1U && status.progress == 1.0 &&
+           output.override_enabled();
+  }), "clip end must HOLD the final source frame");
 
-  publish_host(host, true, true, 1000 + 48000);
-  require(wait_until([&]() {
-    const auto status = engine.status();
-    return status.rendering_offline && !output.override_enabled();
-  }), "offline render must inhibit physical DMX clip output");
-
-  publish_host(host, true, false, 1000 + 48000);
+  // Offline render never emits physical Art-Net and does not consume artistic
+  // cursor time.
+  require(engine.play_from_start(error), error);
+  const auto before_offline = engine.status().cursor_samples;
+  engine.advance_samples(48000U, true);
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "offline render must inhibit physical DMX output");
+  require(engine.status().cursor_samples == before_offline,
+          "offline render must not advance the live clip cursor");
+  engine.advance_samples(0U, false);
   require(wait_until([&]() { return output.override_enabled(); }),
           "physical output did not recover after offline render ended");
 
-  // A dead host callback must fail closed. Wall time is used only for liveness,
-  // never to advance the artistic frame index.
-  require(wait_until([&]() {
-    return !engine.status().host_heartbeat_ok && !output.override_enabled();
-  }, std::chrono::milliseconds(1200)),
-          "stale host heartbeat did not disable physical clip authority");
+  // Host heartbeat is purely a liveness gate. Losing it disables physical
+  // authority without changing the artistic cursor.
+  const auto before_dead_host = engine.status().cursor_samples;
+  engine.set_host_heartbeat_ok(false);
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "dead host heartbeat did not fail closed");
+  require(engine.status().cursor_samples == before_dead_host,
+          "heartbeat must not alter artistic clip position");
+
+  engine.set_host_heartbeat_ok(true);
+  require(wait_until([&]() { return output.override_enabled(); }),
+          "clip authority did not recover after host heartbeat returned");
+
+  engine.stop_and_reset();
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "STOP/RESET must remove physical clip authority");
+  require(engine.status().cursor_samples == 0U,
+          "STOP/RESET must return cursor to zero");
 
   engine.disarm();
-  require(!output.override_enabled(), "explicit DISARM must disable Take authority");
   engine.unload();
   output.stop();
   receiver.stop();
@@ -184,6 +189,6 @@ int main() {
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
 
-  std::cout << "AEYLA DMX clip engine PASS: sample-lock, seek, HOLD, offline, heartbeat\n";
+  std::cout << "AEYLA DMX clip engine PASS: MIDI-relative play/pause/resume/retrigger\n";
   return EXIT_SUCCESS;
 }
