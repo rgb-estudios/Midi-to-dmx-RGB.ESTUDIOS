@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -113,9 +114,9 @@ public:
       const float inX = XAtBoundary(snapshot.start_frame, snapshot.frame_count);
       const float outX = XAtBoundary(snapshot.end_frame_exclusive,
                                      snapshot.frame_count);
-      if(std::abs(x - inX) <= 9.0F)
+      if(x >= inX - 6.0F && x <= inX + 32.0F)
         mDragKind = DragKind::in_handle;
-      else if(std::abs(x - outX) <= 9.0F)
+      else if(x >= outX - 37.0F && x <= outX + 6.0F)
         mDragKind = DragKind::out_handle;
       else
       {
@@ -127,14 +128,29 @@ public:
       return;
     }
 
-    if(Contains(mInMinus1, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(-1.0)); SetDirty(false); return; }
-    if(Contains(mInMinus01, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(-0.1)); SetDirty(false); return; }
-    if(Contains(mInPlus01, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(0.1)); SetDirty(false); return; }
-    if(Contains(mInPlus1, x, y)) { Report(mPlug.AdjustActiveTakeInFromUI(1.0)); SetDirty(false); return; }
-    if(Contains(mOutMinus1, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(-1.0)); SetDirty(false); return; }
-    if(Contains(mOutMinus01, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(-0.1)); SetDirty(false); return; }
-    if(Contains(mOutPlus01, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(0.1)); SetDirty(false); return; }
-    if(Contains(mOutPlus1, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(1.0)); SetDirty(false); return; }
+    const auto editor = mPlug.ActiveTakeEditorSnapshot();
+    if(Contains(mInTimeField, x, y) && editor.available)
+    {
+      BeginTextEdit(EditKind::take_in_time, mInTimeField,
+                    FormatTime(static_cast<double>(editor.start_frame) /
+                               editor.frames_per_second));
+      return;
+    }
+    if(Contains(mOutTimeField, x, y) && editor.available)
+    {
+      BeginTextEdit(EditKind::take_out_time, mOutTimeField,
+                    FormatTime(static_cast<double>(editor.end_frame_exclusive) /
+                               editor.frames_per_second));
+      return;
+    }
+    if(Contains(mMarkInButton, x, y) && editor.available) { Report(mPlug.SetActiveTakeInFrameFromUI(editor.current_frame)); SetDirty(false); return; }
+    if(Contains(mMarkOutButton, x, y) && editor.available) { Report(mPlug.SetActiveTakeOutFrameFromUI(std::min(editor.current_frame + 1U, editor.frame_count))); SetDirty(false); return; }
+    if(Contains(mGoInButton, x, y) && editor.available) { ReportInline(mPlug.SeekActiveTakeFrameFromUI(editor.start_frame)); SetDirty(false); return; }
+    if(Contains(mGoOutButton, x, y) && editor.available) { ReportInline(mPlug.SeekActiveTakeFrameFromUI(editor.end_frame_exclusive - 1U)); SetDirty(false); return; }
+    if(Contains(mInFrameMinus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeInFrameFromUI(editor.start_frame == 0U ? 0U : editor.start_frame - 1U)); SetDirty(false); return; }
+    if(Contains(mInFramePlus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeInFrameFromUI(editor.start_frame + 1U)); SetDirty(false); return; }
+    if(Contains(mOutFrameMinus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeOutFrameFromUI(editor.end_frame_exclusive - 1U)); SetDirty(false); return; }
+    if(Contains(mOutFramePlus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeOutFrameFromUI(std::min(editor.end_frame_exclusive + 1U, editor.frame_count))); SetDirty(false); return; }
     if(Contains(mResetTrimButton, x, y)) { Report(mPlug.ResetActiveTakeTrimFromUI()); SetDirty(false); return; }
     if(Contains(mConsolidateButton, x, y)) { Report(mPlug.ConsolidateActiveTakeFromUI()); SetDirty(false); return; }
 
@@ -274,12 +290,37 @@ public:
       mLocalNetworkText = value;
       mMessage = "Red editada · presiona APLICAR RED.";
     }
+    else if(mEditKind == EditKind::take_in_time ||
+            mEditKind == EditKind::take_out_time)
+    {
+      double seconds = 0.0;
+      const auto editor = mPlug.ActiveTakeEditorSnapshot();
+      if(!editor.available || editor.frames_per_second == 0U)
+        mMessage = "No hay una toma DMX disponible para editar.";
+      else if(!ParseTime(value, seconds))
+        mMessage = "Tiempo inválido · usa MM:SS.mmm o segundos.";
+      else
+      {
+        const auto frame = static_cast<std::uint64_t>(std::llround(
+            seconds * static_cast<double>(editor.frames_per_second)));
+        if(mEditKind == EditKind::take_in_time)
+          Report(mPlug.SetActiveTakeInFrameFromUI(frame));
+        else
+          Report(mPlug.SetActiveTakeOutFrameFromUI(frame));
+      }
+    }
     mEditKind = EditKind::none;
     SetDirty(false);
   }
 
 private:
-  enum class EditKind { none, song_name, local_network };
+  enum class EditKind {
+    none,
+    song_name,
+    local_network,
+    take_in_time,
+    take_out_time
+  };
   enum class DragKind { none, in_handle, out_handle, playhead, pan };
 
   inline static const IColor kBackground{255, 7, 8, 11};
@@ -353,6 +394,40 @@ private:
     stream << minutes << ':' << std::setw(2) << std::setfill('0') << secondsPart
            << '.' << std::setw(3) << millis;
     return stream.str();
+  }
+
+  static bool ParseTime(std::string_view text, double& seconds)
+  {
+    std::string normalized = Trim(text);
+    std::replace(normalized.begin(), normalized.end(), ',', '.');
+    if(normalized.empty()) return false;
+    const auto colon = normalized.find(':');
+    if(colon != std::string::npos &&
+       normalized.find(':', colon + 1U) != std::string::npos)
+      return false;
+
+    double minutes = 0.0;
+    std::string secondsText = normalized;
+    if(colon != std::string::npos)
+    {
+      const std::string minutesText = normalized.substr(0U, colon);
+      if(minutesText.empty()) return false;
+      char* minutesEnd = nullptr;
+      minutes = std::strtod(minutesText.c_str(), &minutesEnd);
+      if(minutesEnd == nullptr || *minutesEnd != '\0' || minutes < 0.0 ||
+         std::floor(minutes) != minutes)
+        return false;
+      secondsText = normalized.substr(colon + 1U);
+    }
+    if(secondsText.empty()) return false;
+    char* secondsEnd = nullptr;
+    const double parsedSeconds = std::strtod(secondsText.c_str(), &secondsEnd);
+    if(secondsEnd == nullptr || *secondsEnd != '\0' ||
+       !std::isfinite(parsedSeconds) || parsedSeconds < 0.0 ||
+       (colon != std::string::npos && parsedSeconds >= 60.0))
+      return false;
+    seconds = minutes * 60.0 + parsedSeconds;
+    return std::isfinite(seconds);
   }
 
   static bool ParseIpv4(std::string_view text, std::uint32_t& result)
@@ -595,20 +670,34 @@ private:
 
     const float editorTop = mStopButton.B + 36.0F;
     const float smallGap = 6.0F;
-    const float labelWidth = 48.0F;
-    const float buttonWidth = (work.W() - labelWidth - smallGap * 4.0F) / 4.0F;
+    const float timeWidth = std::clamp(work.W() * 0.20F, 112.0F, 150.0F);
+    const float frameWidth = 36.0F;
+    const float goWidth = std::clamp(work.W() * 0.13F, 72.0F, 94.0F);
+    const float labelWidth = 40.0F;
+    const float markWidth = work.W() - labelWidth - timeWidth -
+                            frameWidth * 2.0F - goWidth - smallGap * 5.0F;
     float left = work.L + labelWidth;
-    mInMinus1 = IRECT(left, editorTop, left + buttonWidth, editorTop + 30.0F); left += buttonWidth + smallGap;
-    mInMinus01 = IRECT(left, editorTop, left + buttonWidth, editorTop + 30.0F); left += buttonWidth + smallGap;
-    mInPlus01 = IRECT(left, editorTop, left + buttonWidth, editorTop + 30.0F); left += buttonWidth + smallGap;
-    mInPlus1 = IRECT(left, editorTop, work.R, editorTop + 30.0F);
+    mInTimeField = IRECT(left, editorTop, left + timeWidth, editorTop + 32.0F);
+    left = mInTimeField.R + smallGap;
+    mInFrameMinus = IRECT(left, editorTop, left + frameWidth, editorTop + 32.0F);
+    left = mInFrameMinus.R + smallGap;
+    mInFramePlus = IRECT(left, editorTop, left + frameWidth, editorTop + 32.0F);
+    left = mInFramePlus.R + smallGap;
+    mMarkInButton = IRECT(left, editorTop, left + markWidth, editorTop + 32.0F);
+    left = mMarkInButton.R + smallGap;
+    mGoInButton = IRECT(left, editorTop, work.R, editorTop + 32.0F);
 
-    left = work.L + labelWidth;
     const float outTop = editorTop + 48.0F;
-    mOutMinus1 = IRECT(left, outTop, left + buttonWidth, outTop + 30.0F); left += buttonWidth + smallGap;
-    mOutMinus01 = IRECT(left, outTop, left + buttonWidth, outTop + 30.0F); left += buttonWidth + smallGap;
-    mOutPlus01 = IRECT(left, outTop, left + buttonWidth, outTop + 30.0F); left += buttonWidth + smallGap;
-    mOutPlus1 = IRECT(left, outTop, work.R, outTop + 30.0F);
+    left = work.L + labelWidth;
+    mOutTimeField = IRECT(left, outTop, left + timeWidth, outTop + 32.0F);
+    left = mOutTimeField.R + smallGap;
+    mOutFrameMinus = IRECT(left, outTop, left + frameWidth, outTop + 32.0F);
+    left = mOutFrameMinus.R + smallGap;
+    mOutFramePlus = IRECT(left, outTop, left + frameWidth, outTop + 32.0F);
+    left = mOutFramePlus.R + smallGap;
+    mMarkOutButton = IRECT(left, outTop, left + markWidth, outTop + 32.0F);
+    left = mMarkOutButton.R + smallGap;
+    mGoOutButton = IRECT(left, outTop, work.R, outTop + 32.0F);
     mResetTrimButton = IRECT(work.L, outTop + 45.0F, work.R, outTop + 76.0F);
     mConsolidateButton = IRECT(work.L, mResetTrimButton.B + 8.0F,
                                work.R, mResetTrimButton.B + 43.0F);
@@ -798,12 +887,31 @@ private:
                                 mTimeline.B - 1.0F), nullptr, 1.0F);
       g.DrawLine(kGood, inX, mTimeline.T, inX, mTimeline.B, nullptr, 3.0F);
       g.DrawLine(kGood, outX, mTimeline.T, outX, mTimeline.B, nullptr, 3.0F);
+      const IRECT inGrip(inX, mTimeline.T + 3.0F,
+                         std::min(inX + 31.0F, mTimeline.R),
+                         mTimeline.T + 23.0F);
+      const IRECT outGrip(std::max(outX - 36.0F, mTimeline.L),
+                          mTimeline.T + 3.0F, outX, mTimeline.T + 23.0F);
+      g.FillRoundRect(kGood, inGrip, 4.0F);
+      g.FillRoundRect(kGood, outGrip, 4.0F);
+      g.DrawText(IText(8.0F, IColor(255, 7, 24, 16), "AeylaUI",
+                       EAlign::Center, EVAlign::Middle),
+                 "IN", inGrip);
+      g.DrawText(IText(8.0F, IColor(255, 7, 24, 16), "AeylaUI",
+                       EAlign::Center, EVAlign::Middle),
+                 "OUT", outGrip);
 
       const float playheadX = XAtBoundary(
           std::min(editor.current_frame, editor.frame_count), editor.frame_count);
       if(playheadX >= mTimeline.L && playheadX <= mTimeline.R)
+      {
         g.DrawLine(kAccent, playheadX, mTimeline.T, playheadX,
                    mTimeline.B, nullptr, 2.0F);
+        g.FillTriangle(kAccent,
+                       playheadX - 6.0F, mTimeline.T,
+                       playheadX + 6.0F, mTimeline.T,
+                       playheadX, mTimeline.T + 8.0F);
+      }
 
       const double viewStartTime = mViewStart * original;
       const double viewEndTime = mViewEnd * original;
@@ -828,21 +936,31 @@ private:
            mPlug.TakePlaying() ? IColor(255, 8, 30, 20) : kText);
     Button(g, mStopButton, "DETENER / MANTENER", kPanelRaised, kLineStrong);
 
-    const float editorTop = mInMinus1.T;
+    const float editorTop = mInTimeField.T;
     g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "ENT.", IRECT(work.L, editorTop, work.L + 42.0F, editorTop + 30.0F));
-    Button(g, mInMinus1, "-1.0s", kPanelRaised, kLineStrong);
-    Button(g, mInMinus01, "-0.1s", kPanelRaised, kLineStrong);
-    Button(g, mInPlus01, "+0.1s", kPanelRaised, kLineStrong);
-    Button(g, mInPlus1, "+1.0s", kPanelRaised, kLineStrong);
+               "IN", IRECT(work.L, editorTop, work.L + 34.0F, editorTop + 32.0F));
+    g.FillRoundRect(IColor(255, 10, 12, 17), mInTimeField, 5.0F);
+    g.DrawRoundRect(kGood, mInTimeField, 5.0F, nullptr, 1.0F);
+    g.DrawText(IText(9.0F, kText, "AeylaUI", EAlign::Center, EVAlign::Middle),
+               FormatTime(inTime).c_str(), mInTimeField.GetPadded(-5.0F));
+    Button(g, mInFrameMinus, "-1f", kPanelRaised, kLineStrong);
+    Button(g, mInFramePlus, "+1f", kPanelRaised, kLineStrong);
+    Button(g, mMarkInButton, "MARCAR IN EN CABEZAL",
+           IColor(255, 18, 51, 38), kGood, kGood);
+    Button(g, mGoInButton, "IR A IN", kPanelRaised, kLineStrong);
 
-    const float outTop = mOutMinus1.T;
+    const float outTop = mOutTimeField.T;
     g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "SAL.", IRECT(work.L, outTop, work.L + 42.0F, outTop + 30.0F));
-    Button(g, mOutMinus1, "-1.0s", kPanelRaised, kLineStrong);
-    Button(g, mOutMinus01, "-0.1s", kPanelRaised, kLineStrong);
-    Button(g, mOutPlus01, "+0.1s", kPanelRaised, kLineStrong);
-    Button(g, mOutPlus1, "+1.0s", kPanelRaised, kLineStrong);
+               "OUT", IRECT(work.L, outTop, work.L + 34.0F, outTop + 32.0F));
+    g.FillRoundRect(IColor(255, 10, 12, 17), mOutTimeField, 5.0F);
+    g.DrawRoundRect(kGood, mOutTimeField, 5.0F, nullptr, 1.0F);
+    g.DrawText(IText(9.0F, kText, "AeylaUI", EAlign::Center, EVAlign::Middle),
+               FormatTime(outTime).c_str(), mOutTimeField.GetPadded(-5.0F));
+    Button(g, mOutFrameMinus, "-1f", kPanelRaised, kLineStrong);
+    Button(g, mOutFramePlus, "+1f", kPanelRaised, kLineStrong);
+    Button(g, mMarkOutButton, "MARCAR OUT EN CABEZAL",
+           IColor(255, 18, 51, 38), kGood, kGood);
+    Button(g, mGoOutButton, "IR A OUT", kPanelRaised, kLineStrong);
     Button(g, mResetTrimButton, "RESTAURAR ENTRADA / SALIDA", kPanelRaised, kLineStrong);
     Button(g, mConsolidateButton, "CONSOLIDAR CLIP",
            IColor(255, 18, 51, 38), kGood, kGood);
@@ -858,7 +976,7 @@ private:
     const IRECT messageRect(work.L, work.B - 48.0F, work.R, work.B);
     g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
     const std::string message = mMessage.empty()
-        ? "GRABA desde Avolites · ajusta ENTRADA/SALIDA · CONSOLIDA · ARMA · REPRODUCE."
+        ? "CLIC/ARRASTRE = CABEZAL · ARRASTRA IN/OUT · RUEDA = ZOOM · SHIFT+ARRASTRE = PAN."
         : mMessage;
     g.DrawText(IText(8.8F, mMessage.empty() ? kFaint : kWarn,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
@@ -977,14 +1095,16 @@ private:
   IRECT mRecordButton{};
   IRECT mPlayButton{};
   IRECT mStopButton{};
-  IRECT mInMinus1{};
-  IRECT mInMinus01{};
-  IRECT mInPlus01{};
-  IRECT mInPlus1{};
-  IRECT mOutMinus1{};
-  IRECT mOutMinus01{};
-  IRECT mOutPlus01{};
-  IRECT mOutPlus1{};
+  IRECT mInTimeField{};
+  IRECT mInFrameMinus{};
+  IRECT mInFramePlus{};
+  IRECT mMarkInButton{};
+  IRECT mGoInButton{};
+  IRECT mOutTimeField{};
+  IRECT mOutFrameMinus{};
+  IRECT mOutFramePlus{};
+  IRECT mMarkOutButton{};
+  IRECT mGoOutButton{};
   IRECT mResetTrimButton{};
   IRECT mConsolidateButton{};
   IRECT mRxCard{};

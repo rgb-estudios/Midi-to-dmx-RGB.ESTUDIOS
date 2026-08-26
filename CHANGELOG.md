@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed — R07 free-point Take marking
+
+- Replaced the prominent second-based trim controls with a playhead-first
+  workflow: freely click/drag the timeline, then mark IN or OUT at the current
+  DMX frame.
+- Added large labelled IN/OUT grips, editable `MM:SS.mmm` fields, direct
+  navigation to each boundary and one-frame nudging (about 22.7 ms at 44 Hz).
+- Expanded handle hit targets so the visible grip, not only its three-pixel
+  boundary line, owns the drag interaction.
+
 ### Added — R07 advanced DMX Take editor
 
 - Replaced the duration-only trim bar with a bounded, file-backed activity

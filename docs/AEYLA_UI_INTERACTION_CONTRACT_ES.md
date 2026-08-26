@@ -22,6 +22,12 @@ No se aceptan botones, menús, sliders, pads o selectores "muertos" que parezcan
 | GUARDAR COMO | guardar nueva ruta | funcional; fuerza extensión `.aeylashow` |
 | ARMAR SALIDA | habilitar salida física | nunca silencioso: arma o muestra causa exacta del bloqueo |
 | APAGÓN | alternar apagón | funcional y con prioridad de seguridad |
+| TIMELINE DMX | posicionar el cabezal | clic/arrastre libre; scrub local sólo con salida física desarmada |
+| HANDLE IN / OUT | delimitar el rango no destructivo | grip visible y arrastrable; no depende de botones por segundos |
+| MARCAR IN / OUT EN CABEZAL | fijar un punto exacto | usa la posición actual del cabezal con precisión de un cuadro DMX |
+| TIEMPO IN / OUT | introducir un punto numérico | campo editable `MM:SS.mmm` o segundos; cuantiza al cuadro DMX más cercano |
+| AJUSTE ±1f | corregir un punto | mueve un cuadro DMX, aproximadamente 22,7 ms a 44 Hz |
+| ZOOM / PAN | navegar una toma extensa | rueda o controles `-/+`; `Shift` + arrastre para paneo horizontal |
 | CONSOLIDAR CLIP | materializar el rango ENTRADA/SALIDA | funcional; crea otro `.aeylatake`, conserva el RAW y deja el clip nuevo listo para reproducir |
 | RIG 10/14 | cambiar fixtures habilitados | funcional y persistente |
 | SOLID / GRADIENT / WAVE / NOISE / CHASE | seleccionar fuente de preview/look | funcional |
@@ -71,6 +77,9 @@ Cada PRETEST que cambie UI debe comprobar manualmente en REAPER/Windows:
 8. entrada MIDI física;
 9. ARMAR bloqueado con causa visible mientras backend esté desactivado;
 10. abrir/cerrar UI repetidamente sin perder interacción.
-11. ajustar ENTRADA/SALIDA, consolidar y comprobar que el RAW no cambia.
+11. mover libremente el cabezal y marcar IN/OUT desde posiciones no redondas;
+12. arrastrar ambos handles, editar ambos timecodes y ajustar ±1 cuadro;
+13. usar zoom + paneo y comprobar que los puntos conservan su posición;
+14. consolidar y comprobar que el RAW no cambia.
 
 Un screenshot correcto no constituye PASS de interacción. Se requiere click/input real en host.
