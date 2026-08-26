@@ -38,19 +38,18 @@ struct DmxClipPlaybackStatus {
   std::string error;
 };
 
-// File-backed DMX clip player driven by a RELATIVE sample cursor.
+// Reproductor DMX respaldado por archivo y gobernado por un cursor RELATIVO.
 //
-// Product contract R06:
-// - the absolute DAW arrangement position is NOT the artistic clock;
-// - the DAW supplies MIDI commands and processed sample blocks;
-// - PLAY/RETRIGGER starts the consolidated clip at sample cursor 0;
-// - PAUSE holds cursor + DMX, RESUME continues from that cursor;
-// - advance_samples() is the only way the artistic cursor advances;
-// - wall clock is reserved for host-liveness watchdogs in the integration
-//   layer, never for artistic playback position.
+// Contrato de producto R07:
+// - la posición absoluta del arreglo del DAW NO es el reloj artístico;
+// - el DAW entrega comandos MIDI y bloques de muestras procesadas;
+// - REPRODUCIR/REINICIAR comienza en cursor 0;
+// - PAUSA mantiene cursor + DMX y REANUDAR continúa desde ese punto;
+// - advance_samples() es la única vía para avanzar el tiempo artístico;
+// - el reloj de pared sólo puede usarse como vigilancia de vida del host.
 //
-// This keeps a clip independent from track order, Arrangement position and
-// host seeks while preserving sample-derived timing.
+// advance_samples() está diseñado para el callback de audio: sólo opera sobre
+// atómicos, no toma mutex, no asigna memoria y no realiza E/S de archivo/red.
 class DmxClipPlaybackEngine final {
  public:
   DmxClipPlaybackEngine();
@@ -74,23 +73,20 @@ class DmxClipPlaybackEngine final {
   [[nodiscard]] bool arm(std::string& error_message);
   void disarm() noexcept;
 
-  // Runtime transport commands. These are intended to be called by the
-  // non-realtime bridge after MIDI events have been ordered by sampleOffset.
+  // Comandos de transporte. Deben invocarse fuera del callback de audio.
   [[nodiscard]] bool play_from_start(std::string& error_message);
   [[nodiscard]] bool pause(std::string& error_message);
   [[nodiscard]] bool resume(std::string& error_message);
   void stop_and_reset() noexcept;
 
-  // Advance the relative artistic cursor by exactly the number of processed
-  // host samples that occur while transport == playing. The integration layer
-  // must account for a MIDI event's sampleOffset so samples before the event do
-  // not advance a newly launched clip.
+  // Ruta de tiempo de audio en tiempo real. El integrador debe respetar el
+  // sampleOffset de un evento MIDI al decidir cuántas muestras se contabilizan
+  // antes/después del comando.
   void advance_samples(std::uint32_t processed_samples,
                        bool rendering_offline) noexcept;
 
-  // Host callback watchdog state is supplied by the integration layer. A dead
-  // host disables physical clip authority but never changes the artistic
-  // cursor by wall time.
+  // El integrador publica la vida del host. Perder heartbeat deshabilita la
+  // autoridad física, pero nunca mueve el cursor artístico.
   void set_host_heartbeat_ok(bool ok) noexcept;
 
   [[nodiscard]] DmxClipPlaybackStatus status() const;
@@ -109,7 +105,6 @@ class DmxClipPlaybackEngine final {
   double sample_rate_{0.0};
   std::uint64_t range_start_frame_{0U};
   std::uint64_t range_end_frame_exclusive_{0U};
-  std::uint64_t cursor_samples_{0U};
   DmxUniverse hold_frame_{};
   bool hold_valid_{false};
   std::uint64_t generation_{3000000000ULL};
@@ -125,6 +120,7 @@ class DmxClipPlaybackEngine final {
   std::atomic<bool> heartbeat_ok_{false};
   std::atomic<bool> rendering_offline_{false};
   std::atomic<DmxClipTransportState> transport_{DmxClipTransportState::ready};
+  std::atomic<std::uint64_t> cursor_samples_{0U};
   std::atomic<std::uint64_t> current_frame_{0U};
   std::atomic<double> progress_{0.0};
 };
