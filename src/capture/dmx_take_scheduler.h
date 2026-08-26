@@ -1,6 +1,7 @@
 #pragma once
 
 #include "capture/artnet_capture_worker.h"
+#include "capture/dmx_clip_playback_engine.h"
 #include "output/artnet_output_worker.h"
 #include "runtime/host_transport_mailbox.h"
 
@@ -8,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -18,6 +20,9 @@ struct DmxTakeSchedulerStatus {
   bool running{false};
   bool armed{false};
   bool playing{false};
+  bool paused{false};
+  bool ended{false};
+  bool file_backed{false};
   bool hold_valid{false};
   bool host_heartbeat_ok{false};
   double progress{0.0};
@@ -27,14 +32,12 @@ struct DmxTakeSchedulerStatus {
   std::string error;
 };
 
-// Non-realtime scheduler for captured DMX Takes.
+// Puente de compatibilidad del reproductor de tomas.
 //
-// The scheduler is independent from the plug-in editor and never touches the
-// audio callback. It advances a selected Take from steady clock for the first
-// capture/replay hardware gate, while the DAW host transport mailbox acts as a
-// liveness/offline safety heartbeat. Playback range is non-destructive: IN/OUT
-// only constrain which source frames are emitted; the recorded Take remains
-// byte-identical on disk.
+// El camino de producción R07 usa load_take_file(): archivo respaldado en disco,
+// cursor relativo por muestras y transporte independiente de la posición global
+// del DAW. El camino load_take() en RAM permanece temporalmente para pruebas y
+// compatibilidad mientras se retira la arquitectura antigua.
 class DmxTakeScheduler final {
  public:
   DmxTakeScheduler();
@@ -46,15 +49,30 @@ class DmxTakeScheduler final {
   void attach(output::ArtNetOutputWorker* output,
               const runtime::HostTransportMailbox* host) noexcept;
 
+  // Compatibilidad heredada en RAM.
   [[nodiscard]] bool load_take(const DmxTake* take,
                                std::string& error_message);
+
+  // Camino de producto: no carga el payload completo en RAM.
+  [[nodiscard]] bool load_take_file(const std::filesystem::path& path,
+                                    double sample_rate,
+                                    std::string& error_message);
+
   [[nodiscard]] bool set_play_range(std::size_t start_frame,
                                     std::size_t end_frame_exclusive,
                                     std::string& error_message);
   void reset_play_range() noexcept;
 
   [[nodiscard]] bool play(std::string& error_message);
+  [[nodiscard]] bool pause(std::string& error_message);
+  [[nodiscard]] bool resume(std::string& error_message);
   void stop_hold() noexcept;
+  void stop_reset() noexcept;
+
+  // Seguro para callback de audio en modo file-backed: sólo suma muestras a un
+  // contador atómico del reproductor relativo.
+  void advance_samples(std::uint32_t processed_samples,
+                       bool rendering_offline) noexcept;
 
   [[nodiscard]] bool arm(std::string& error_message);
   void disarm() noexcept;
@@ -80,6 +98,9 @@ class DmxTakeScheduler final {
   std::chrono::steady_clock::time_point play_started_{};
   std::uint64_t generation_{2000000000ULL};
   std::string error_;
+
+  DmxClipPlaybackEngine file_player_{};
+  std::atomic<bool> file_mode_{false};
 
   std::thread worker_;
   std::atomic<bool> stop_requested_{false};
