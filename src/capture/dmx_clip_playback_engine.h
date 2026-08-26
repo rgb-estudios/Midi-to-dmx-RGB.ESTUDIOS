@@ -77,6 +77,11 @@ class DmxClipPlaybackEngine final {
   [[nodiscard]] bool play_from_start(std::string& error_message);
   [[nodiscard]] bool pause(std::string& error_message);
   [[nodiscard]] bool resume(std::string& error_message);
+  // Previsualización segura del editor: lee un cuadro desde disco y mueve el
+  // cursor relativo sin publicar Art-Net. Sólo se admite con salida desarmada
+  // y transporte detenido.
+  [[nodiscard]] bool seek_frame(std::uint64_t frame_index,
+                                std::string& error_message);
   void stop_and_reset() noexcept;
 
   // Ruta de tiempo de audio en tiempo real. El integrador debe respetar el

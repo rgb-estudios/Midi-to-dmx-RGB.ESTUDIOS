@@ -97,8 +97,23 @@ int main() {
   DmxClipPlaybackEngine engine;
   engine.attach(&output);
   require(engine.load_clip(stream_config.target_path, 48000.0, error), error);
+
+  // El scrub del editor es una previsualización local y segura: actualiza el
+  // cuadro retenido y el cursor relativo, sin obtener autoridad Art-Net.
+  require(engine.seek_frame(88U, error), error);
+  auto scrubbed = engine.status();
+  require(scrubbed.current_frame == 88U && scrubbed.cursor_samples == 96000U &&
+              scrubbed.transport == DmxClipTransportState::paused &&
+              scrubbed.hold_valid && !output.override_enabled(),
+          "safe editor scrub did not resolve frame 88 at two relative seconds");
+  require(!engine.seek_frame(kFrames, error),
+          "editor scrub accepted a frame outside the selected range");
+  engine.stop_and_reset();
+
   engine.set_host_heartbeat_ok(true);
   require(engine.arm(error), error);
+  require(!engine.seek_frame(44U, error),
+          "editor scrub must fail closed while physical DMX is armed");
   require(engine.play_from_start(error), error);
 
   require(wait_until([&]() {

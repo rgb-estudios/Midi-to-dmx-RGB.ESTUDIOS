@@ -200,6 +200,61 @@ bool DmxClipPlaybackEngine::resume(std::string& error_message) {
   return true;
 }
 
+bool DmxClipPlaybackEngine::seek_frame(std::uint64_t frame_index,
+                                       std::string& error_message) {
+  error_message.clear();
+  if(armed_.load(std::memory_order_acquire)) {
+    error_message = "Desarma la salida DMX antes de mover el cabezal del editor";
+    return false;
+  }
+  if(transport_.load(std::memory_order_acquire) ==
+     DmxClipTransportState::playing) {
+    error_message = "Pausa o detén el clip DMX antes de mover el cabezal";
+    return false;
+  }
+
+  const std::scoped_lock lock(mutex_);
+  const auto info = reader_.info();
+  if(!loaded_.load(std::memory_order_acquire) || !info.open ||
+     !valid_sample_rate(sample_rate_)) {
+    error_message = "Carga un clip DMX antes de mover el cabezal";
+    return false;
+  }
+  if(frame_index < range_start_frame_ ||
+     frame_index >= range_end_frame_exclusive_) {
+    error_message = "El cabezal del editor está fuera del rango ENTRADA / SALIDA";
+    return false;
+  }
+
+  DmxUniverse frame{};
+  if(!reader_.read_frame(frame_index, frame, error_message)) {
+    error_message = "No se pudo previsualizar el cuadro DMX · " + error_message;
+    return false;
+  }
+
+  const auto offset = frame_index - range_start_frame_;
+  const long double samples =
+      static_cast<long double>(offset) *
+      static_cast<long double>(sample_rate_) /
+      static_cast<long double>(info.frames_per_second);
+  const auto effective_frames =
+      range_end_frame_exclusive_ - range_start_frame_;
+  const double progress = effective_frames <= 1U
+      ? 1.0
+      : std::clamp(static_cast<double>(offset) /
+                       static_cast<double>(effective_frames - 1U),
+                   0.0, 1.0);
+
+  hold_frame_ = frame;
+  hold_valid_ = true;
+  cursor_samples_.store(static_cast<std::uint64_t>(std::llround(samples)),
+                        std::memory_order_relaxed);
+  current_frame_.store(frame_index, std::memory_order_relaxed);
+  progress_.store(progress, std::memory_order_relaxed);
+  transport_.store(DmxClipTransportState::paused, std::memory_order_release);
+  return true;
+}
+
 void DmxClipPlaybackEngine::stop_and_reset() noexcept {
   transport_.store(DmxClipTransportState::ready, std::memory_order_release);
   const std::scoped_lock lock(mutex_);

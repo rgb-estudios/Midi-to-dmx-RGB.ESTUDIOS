@@ -186,6 +186,15 @@ bool DmxTakeScheduler::resume(std::string& error_message) {
   return false;
 }
 
+bool DmxTakeScheduler::seek_frame(std::size_t frame_index,
+                                  std::string& error_message) {
+  if(file_mode_.load(std::memory_order_acquire))
+    return file_player_.seek_frame(frame_index, error_message);
+  error_message =
+      "El cabezal del editor sólo está disponible para tomas respaldadas en disco";
+  return false;
+}
+
 void DmxTakeScheduler::stop_hold() noexcept {
   if(file_mode_.load(std::memory_order_acquire)) {
     const auto current = file_player_.status().transport;

@@ -78,6 +78,21 @@ std::optional<aeyla::capture::TakeFileIndexEntry> NewestTake(
   return scan.entries.front();
 }
 
+const aeyla::capture::TakeFileIndexEntry& SelectedTake(
+    const void* owner,
+    std::string_view songId,
+    const aeyla::capture::TakeLibraryScanResult& scan)
+{
+  const auto edited = aeyla::take_library_session::edit_state(owner, songId);
+  if(edited.has_value()) {
+    const auto found = std::find_if(
+        scan.entries.begin(), scan.entries.end(),
+        [&](const auto& entry) { return entry.path == edited->path; });
+    if(found != scan.entries.end()) return *found;
+  }
+  return scan.entries.front();
+}
+
 }  // namespace
 
 std::size_t AeylaVisualDmx::SongCount() const
@@ -374,6 +389,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
       return {false, {}, "La grabación terminó, pero no se pudo indexar el archivo final"};
 
     const auto& newest = scan.entries.front();
+    aeyla::take_library_session::clear_edit_state(this, songId);
     aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
     aeyla::take_library_session::set_storage_message(
         this, "GUARDADA EN DISCO · " + newest.path.filename().string());
@@ -513,14 +529,12 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
 
   std::string projectId;
   std::string songId;
-  std::string songName;
   std::uint16_t outputUniverse = 0U;
   {
     const std::scoped_lock modelLock(mModelMutex);
     const auto snapshot = mModel.snapshot();
     projectId = snapshot.project_id;
     songId = snapshot.active_song_id;
-    songName = snapshot.active_song_name;
     outputUniverse = mModel.project_document().output.universe;
   }
   if(songId.empty())
@@ -540,30 +554,41 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
     aeyla::take_library_session::set_directory(this, library);
   }
 
-  std::string findError;
-  const auto newest = NewestTake(library, songId, findError);
-  if(!newest.has_value())
-    return {false, {}, findError};
-  if(newest->port_address != outputUniverse)
+  const auto scan = aeyla::capture::scan_take_directory(library, songId);
+  if(!scan.ok() || scan.entries.empty())
+    return {false, {}, scan.ok()
+        ? "No hay tomas DMX guardadas para esta canción" : scan.error};
+  const auto& selected = SelectedTake(this, songId, scan);
+  if(selected.port_address != outputUniverse)
     return {false, {}, "El universo de la toma no coincide con la salida del proyecto"};
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   std::string error;
-  if(!mTakeScheduler.load_take_file(newest->path, GetSampleRate(), error))
+  if(!mTakeScheduler.load_take_file(selected.path, GetSampleRate(), error))
     return {false, {}, "La toma no superó la validación · " + error};
-  aeyla::take_library_session::set_loaded_path(this, songId, newest->path);
+  const auto edited = aeyla::take_library_session::edit_state(this, songId);
+  if(edited.has_value() && edited->path == selected.path &&
+     !mTakeScheduler.set_play_range(
+         static_cast<std::size_t>(edited->start_frame),
+         static_cast<std::size_t>(edited->end_frame_exclusive), error))
+    return {false, {}, "El rango ENTRADA / SALIDA no pudo cargarse · " + error};
+  aeyla::take_library_session::set_loaded_path(this, songId, selected.path);
   aeyla::take_library_session::set_storage_message(
-      this, "CARGADA DESDE DISCO · " + newest->path.filename().string());
+      this, "CARGADA DESDE DISCO · " + selected.path.filename().string());
 
   if(!mTakeScheduler.play(error))
     return {false, {}, error};
 
-  const double duration = newest->frames_per_second == 0U
+  const std::uint64_t selectedFrames = edited.has_value() &&
+          edited->path == selected.path
+      ? edited->end_frame_exclusive - edited->start_frame
+      : selected.frame_count;
+  const double duration = selected.frames_per_second == 0U
       ? 0.0
-      : static_cast<double>(newest->frame_count) /
-            static_cast<double>(newest->frames_per_second);
-  return {true, newest->take_name,
-          "Reproduciendo " + newest->take_name + " · " + FormatDuration(duration) +
+      : static_cast<double>(selectedFrames) /
+            static_cast<double>(selected.frames_per_second);
+  return {true, selected.take_name,
+          "Reproduciendo " + selected.take_name + " · " + FormatDuration(duration) +
               " · cursor relativo por muestras"};
 }
 
@@ -609,27 +634,34 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
 
   aeyla::take_library_session::ensure_scope(this, projectId);
   const auto library = aeyla::take_library_session::directory(this);
-  std::string findError;
-  const auto newest = NewestTake(library, songId, findError);
-  if(!newest.has_value())
-    return {false, {}, findError};
-  if(newest->port_address != outputUniverse)
+  const auto scan = aeyla::capture::scan_take_directory(library, songId);
+  if(!scan.ok() || scan.entries.empty())
+    return {false, {}, scan.ok()
+        ? "No hay tomas DMX guardadas para esta canción" : scan.error};
+  const auto& selected = SelectedTake(this, songId, scan);
+  if(selected.port_address != outputUniverse)
     return {false, {}, "El universo de la toma no coincide con la salida del proyecto"};
 
   const auto loaded = aeyla::take_library_session::loaded_path(this, songId);
-  if(loaded != newest->path || !mTakeScheduler.status().file_backed)
+  if(loaded != selected.path || !mTakeScheduler.status().file_backed)
   {
     std::string loadError;
     mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
-    if(!mTakeScheduler.load_take_file(newest->path, GetSampleRate(), loadError))
+    if(!mTakeScheduler.load_take_file(selected.path, GetSampleRate(), loadError))
       return {false, {}, "No fue posible preparar la toma desde disco · " + loadError};
-    aeyla::take_library_session::set_loaded_path(this, songId, newest->path);
+    const auto edited = aeyla::take_library_session::edit_state(this, songId);
+    if(edited.has_value() && edited->path == selected.path &&
+       !mTakeScheduler.set_play_range(
+           static_cast<std::size_t>(edited->start_frame),
+           static_cast<std::size_t>(edited->end_frame_exclusive), loadError))
+      return {false, {}, "No fue posible aplicar ENTRADA / SALIDA · " + loadError};
+    aeyla::take_library_session::set_loaded_path(this, songId, selected.path);
   }
 
   std::string error;
   if(!mTakeScheduler.arm(error))
     return {false, {}, error};
-  return {true, newest->take_name,
+  return {true, selected.take_name,
           "SALIDA DMX ARMADA · " + TxInterfaceStatus()};
 }
 
@@ -664,7 +696,7 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
   if(!scan.ok()) return "ERROR DE BIBLIOTECA · " + scan.error;
   if(scan.entries.empty()) return "SIN TOMA · GRABA UNA TOMA DMX";
 
-  const auto& take = scan.entries.front();
+  const auto& take = SelectedTake(this, songId, scan);
   const double duration = take.frames_per_second == 0U
       ? 0.0
       : static_cast<double>(take.frame_count) /

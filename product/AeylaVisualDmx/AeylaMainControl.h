@@ -35,7 +35,6 @@ public:
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
-    (void)mod;
     BuildLayout();
 
     if(Contains(mBlackoutButton, x, y))
@@ -90,6 +89,40 @@ public:
     {
       mPlug.StopActiveTakePlaybackFromUI();
       mMessage = "DETENER · se mantiene el cuadro DMX actual.";
+      SetDirty(false);
+      return;
+    }
+
+    if(Contains(mVersionPrevious, x, y)) { Report(mPlug.CycleActiveTakeVersionFromUI(-1)); SetDirty(false); return; }
+    if(Contains(mVersionNext, x, y)) { Report(mPlug.CycleActiveTakeVersionFromUI(1)); SetDirty(false); return; }
+    if(Contains(mReturnRawButton, x, y)) { Report(mPlug.ReturnToRawTakeFromUI()); SetDirty(false); return; }
+    if(Contains(mZoomOutButton, x, y)) { ZoomAt(2.0, 0.5F); SetDirty(false); return; }
+    if(Contains(mZoomResetButton, x, y)) { mViewStart = 0.0; mViewEnd = 1.0; SetDirty(false); return; }
+    if(Contains(mZoomInButton, x, y)) { ZoomAt(0.5, 0.5F); SetDirty(false); return; }
+
+    if(Contains(mTimeline, x, y))
+    {
+      const auto snapshot = mPlug.ActiveTakeEditorSnapshot();
+      if(!snapshot.available || snapshot.frame_count == 0U) return;
+      if(mod.S)
+      {
+        mDragKind = DragKind::pan;
+        SetDirty(false);
+        return;
+      }
+      const float inX = XAtBoundary(snapshot.start_frame, snapshot.frame_count);
+      const float outX = XAtBoundary(snapshot.end_frame_exclusive,
+                                     snapshot.frame_count);
+      if(std::abs(x - inX) <= 9.0F)
+        mDragKind = DragKind::in_handle;
+      else if(std::abs(x - outX) <= 9.0F)
+        mDragKind = DragKind::out_handle;
+      else
+      {
+        mDragKind = DragKind::playhead;
+        ReportInline(mPlug.SeekActiveTakeFrameFromUI(
+            FrameAtX(x, snapshot.frame_count)));
+      }
       SetDirty(false);
       return;
     }
@@ -162,6 +195,53 @@ public:
     }
   }
 
+  void OnMouseDrag(float x, float y, float dX, float dY,
+                   const IMouseMod& mod) override
+  {
+    (void)y;
+    (void)dY;
+    (void)mod;
+    if(mDragKind == DragKind::none) return;
+    if(mDragKind == DragKind::pan)
+    {
+      const double span = mViewEnd - mViewStart;
+      const double delta = -static_cast<double>(dX / std::max(1.0F, mTimeline.W())) * span;
+      mViewStart = std::clamp(mViewStart + delta, 0.0, 1.0 - span);
+      mViewEnd = mViewStart + span;
+      SetDirty(false);
+      return;
+    }
+    const auto snapshot = mPlug.ActiveTakeEditorSnapshot();
+    if(!snapshot.available || snapshot.frame_count == 0U) return;
+    const auto frame = FrameAtX(x, snapshot.frame_count);
+    if(mDragKind == DragKind::in_handle)
+      ReportInline(mPlug.SetActiveTakeInFrameFromUI(frame));
+    else if(mDragKind == DragKind::out_handle)
+      ReportInline(mPlug.SetActiveTakeOutFrameFromUI(
+          std::min(frame + 1U, snapshot.frame_count)));
+    else if(mDragKind == DragKind::playhead)
+      ReportInline(mPlug.SeekActiveTakeFrameFromUI(frame));
+    SetDirty(false);
+  }
+
+  void OnMouseUp(float x, float y, const IMouseMod& mod) override
+  {
+    (void)x;
+    (void)y;
+    (void)mod;
+    mDragKind = DragKind::none;
+  }
+
+  void OnMouseWheel(float x, float y, const IMouseMod& mod, float d) override
+  {
+    (void)mod;
+    if(!Contains(mTimeline, x, y)) return;
+    const float anchor = std::clamp((x - mTimeline.L) /
+                                    std::max(1.0F, mTimeline.W()), 0.0F, 1.0F);
+    ZoomAt(d > 0.0F ? 0.8 : 1.25, anchor);
+    SetDirty(false);
+  }
+
   void OnMouseDblClick(float x, float y, const IMouseMod& mod) override
   {
     BuildLayout();
@@ -200,6 +280,7 @@ public:
 
 private:
   enum class EditKind { none, song_name, local_network };
+  enum class DragKind { none, in_handle, out_handle, playhead, pan };
 
   inline static const IColor kBackground{255, 7, 8, 11};
   inline static const IColor kPanel{255, 14, 16, 21};
@@ -218,6 +299,38 @@ private:
   static bool Contains(const IRECT& rect, float x, float y) noexcept
   {
     return x >= rect.L && x <= rect.R && y >= rect.T && y <= rect.B;
+  }
+
+  float XAtBoundary(std::uint64_t boundary, std::uint64_t frameCount) const
+  {
+    if(frameCount == 0U) return mTimeline.L;
+    const double normalized = std::clamp(
+        static_cast<double>(boundary) / static_cast<double>(frameCount),
+        mViewStart, mViewEnd);
+    return mTimeline.L + static_cast<float>(
+        (normalized - mViewStart) / (mViewEnd - mViewStart)) * mTimeline.W();
+  }
+
+  std::uint64_t FrameAtX(float x, std::uint64_t frameCount) const
+  {
+    if(frameCount == 0U) return 0U;
+    const double local = std::clamp(
+        static_cast<double>((x - mTimeline.L) / std::max(1.0F, mTimeline.W())),
+        0.0, 1.0);
+    const double normalized = mViewStart + local * (mViewEnd - mViewStart);
+    return std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(std::floor(normalized * frameCount)),
+        frameCount - 1U);
+  }
+
+  void ZoomAt(double factor, float anchor)
+  {
+    const double oldSpan = mViewEnd - mViewStart;
+    const double nextSpan = std::clamp(oldSpan * factor, 0.05, 1.0);
+    const double local = std::clamp(static_cast<double>(anchor), 0.0, 1.0);
+    const double fixed = mViewStart + local * oldSpan;
+    mViewStart = std::clamp(fixed - local * nextSpan, 0.0, 1.0 - nextSpan);
+    mViewEnd = mViewStart + nextSpan;
   }
 
   static std::string Trim(std::string_view value)
@@ -455,7 +568,20 @@ private:
                            listBody.R, mSetlist.B - 12.0F);
 
     const IRECT work = mWorkspace.GetPadded(-16.0F);
-    mTimeline = IRECT(work.L, work.T + 102.0F, work.R, work.T + 144.0F);
+    const float versionTop = work.T + 70.0F;
+    mReturnRawButton = IRECT(work.L, versionTop, work.L + 124.0F,
+                             versionTop + 26.0F);
+    mVersionPrevious = IRECT(mReturnRawButton.R + 8.0F, versionTop,
+                             mReturnRawButton.R + 42.0F, versionTop + 26.0F);
+    mVersionNext = IRECT(mVersionPrevious.R + 5.0F, versionTop,
+                         mVersionPrevious.R + 39.0F, versionTop + 26.0F);
+    mZoomInButton = IRECT(work.R - 34.0F, versionTop,
+                          work.R, versionTop + 26.0F);
+    mZoomResetButton = IRECT(mZoomInButton.L - 54.0F, versionTop,
+                             mZoomInButton.L - 5.0F, versionTop + 26.0F);
+    mZoomOutButton = IRECT(mZoomResetButton.L - 39.0F, versionTop,
+                           mZoomResetButton.L - 5.0F, versionTop + 26.0F);
+    mTimeline = IRECT(work.L, work.T + 104.0F, work.R, work.T + 198.0F);
     const float transportTop = mTimeline.B + 14.0F;
     const float transportGap = 8.0F;
     const float transportWidth = (work.W() - transportGap * 2.0F) / 3.0F;
@@ -591,29 +717,104 @@ private:
                mPlug.ActiveTakeStatus().c_str(),
                IRECT(work.L, work.T + 38.0F, work.R, work.T + 66.0F));
 
-    const double original = mPlug.ActiveTakeOriginalDurationSeconds();
-    const double inTime = mPlug.ActiveTakeInSeconds();
-    const double outTime = mPlug.ActiveTakeOutSeconds();
-    const double effective = mPlug.ActiveTakeEffectiveDurationSeconds();
+    const auto editor = mPlug.ActiveTakeEditorSnapshot();
+    if(editor.path != mLastEditorPath)
+    {
+      mLastEditorPath = editor.path;
+      mViewStart = 0.0;
+      mViewEnd = 1.0;
+    }
+    const double fps = editor.frames_per_second == 0U
+        ? 1.0 : static_cast<double>(editor.frames_per_second);
+    const double original = static_cast<double>(editor.frame_count) / fps;
+    const double inTime = static_cast<double>(editor.start_frame) / fps;
+    const double outTime = static_cast<double>(editor.end_frame_exclusive) / fps;
+    const double effective = static_cast<double>(
+        editor.end_frame_exclusive >= editor.start_frame
+            ? editor.end_frame_exclusive - editor.start_frame : 0U) / fps;
+
+    Button(g, mReturnRawButton,
+           editor.raw_source ? "TOMA ORIGINAL" : "VOLVER A RAW",
+           editor.raw_source ? IColor(255, 18, 51, 38) : kPanelRaised,
+           editor.raw_source ? kGood : kLineStrong,
+           editor.raw_source ? kGood : kText);
+    Button(g, mVersionPrevious, "<", kPanelRaised, kLineStrong);
+    Button(g, mVersionNext, ">", kPanelRaised, kLineStrong);
+    Button(g, mZoomOutButton, "-", kPanelRaised, kLineStrong);
+    Button(g, mZoomResetButton, "1:1", kPanelRaised, kLineStrong);
+    Button(g, mZoomInButton, "+", kPanelRaised, kLineStrong);
+    const std::string version = editor.available
+        ? "VERSIÓN " + std::to_string(editor.version_index + 1U) + " / " +
+              std::to_string(editor.version_count) + " · " + editor.take_name
+        : "SIN TOMA DMX";
+    g.DrawText(IText(8.4F, editor.raw_source ? kMuted : kGood,
+                     "AeylaUI", EAlign::Near, EVAlign::Middle),
+               version.c_str(),
+               IRECT(mVersionNext.R + 8.0F, mVersionNext.T,
+                     mZoomOutButton.L - 8.0F, mVersionNext.B));
 
     g.FillRoundRect(IColor(255, 9, 11, 15), mTimeline, 5.0F);
     g.DrawRoundRect(kLine, mTimeline, 5.0F, nullptr, 1.0F);
-    if(original > 0.0)
+    if(editor.available && editor.frame_count > 0U)
     {
-      const float inX = mTimeline.L + static_cast<float>(std::clamp(inTime / original, 0.0, 1.0)) * mTimeline.W();
-      const float outX = mTimeline.L + static_cast<float>(std::clamp(outTime / original, 0.0, 1.0)) * mTimeline.W();
+      const float graphTop = mTimeline.T + 14.0F;
+      const float graphBottom = mTimeline.B - 17.0F;
+      for(std::size_t index = 0U; index < editor.activity_count; ++index)
+      {
+        const double bucketStart = static_cast<double>(index) /
+                                   static_cast<double>(editor.activity_count);
+        const double bucketEnd = static_cast<double>(index + 1U) /
+                                 static_cast<double>(editor.activity_count);
+        if(bucketEnd < mViewStart || bucketStart > mViewEnd) continue;
+        const float left = mTimeline.L + static_cast<float>(
+            (std::max(bucketStart, mViewStart) - mViewStart) /
+            (mViewEnd - mViewStart)) * mTimeline.W();
+        const float right = mTimeline.L + static_cast<float>(
+            (std::min(bucketEnd, mViewEnd) - mViewStart) /
+            (mViewEnd - mViewStart)) * mTimeline.W();
+        const float level = static_cast<float>(editor.activity_level[index]) / 255.0F;
+        const float motion = static_cast<float>(editor.activity_motion[index]) / 255.0F;
+        const float levelTop = graphBottom - level * (graphBottom - graphTop);
+        g.FillRect(IColor(255, 60, 72, 89),
+                   IRECT(left, levelTop, std::max(left + 1.0F, right), graphBottom));
+        if(motion > 0.0F)
+        {
+          const float motionTop = graphBottom - motion * (graphBottom - graphTop);
+          g.FillRect(IColor(220, 229, 48, 61),
+                     IRECT(left, motionTop, std::max(left + 1.0F, right),
+                           std::min(graphBottom, motionTop + 2.0F)));
+        }
+      }
+
+      const float inX = XAtBoundary(editor.start_frame, editor.frame_count);
+      const float outX = XAtBoundary(editor.end_frame_exclusive,
+                                     editor.frame_count);
       if(inX > mTimeline.L)
-        g.FillRect(IColor(255, 24, 25, 29), IRECT(mTimeline.L, mTimeline.T, inX, mTimeline.B));
+        g.FillRect(IColor(190, 8, 9, 12), IRECT(mTimeline.L, mTimeline.T, inX, mTimeline.B));
       if(outX < mTimeline.R)
-        g.FillRect(IColor(255, 24, 25, 29), IRECT(outX, mTimeline.T, mTimeline.R, mTimeline.B));
+        g.FillRect(IColor(190, 8, 9, 12), IRECT(outX, mTimeline.T, mTimeline.R, mTimeline.B));
       if(outX > inX)
-        g.DrawRect(kGood, IRECT(inX, mTimeline.T + 2.0F, outX, mTimeline.B - 2.0F), nullptr, 1.0F);
-    }
-    const double progress = mPlug.ActiveTakePlaybackProgress();
-    if(progress > 0.0)
-    {
-      const float x = mTimeline.L + static_cast<float>(std::clamp(progress, 0.0, 1.0)) * mTimeline.W();
-      g.DrawLine(kAccent, x, mTimeline.T, x, mTimeline.B, nullptr, 2.0F);
+        g.DrawRect(kGood, IRECT(inX, mTimeline.T + 1.0F, outX,
+                                mTimeline.B - 1.0F), nullptr, 1.0F);
+      g.DrawLine(kGood, inX, mTimeline.T, inX, mTimeline.B, nullptr, 3.0F);
+      g.DrawLine(kGood, outX, mTimeline.T, outX, mTimeline.B, nullptr, 3.0F);
+
+      const float playheadX = XAtBoundary(
+          std::min(editor.current_frame, editor.frame_count), editor.frame_count);
+      if(playheadX >= mTimeline.L && playheadX <= mTimeline.R)
+        g.DrawLine(kAccent, playheadX, mTimeline.T, playheadX,
+                   mTimeline.B, nullptr, 2.0F);
+
+      const double viewStartTime = mViewStart * original;
+      const double viewEndTime = mViewEnd * original;
+      g.DrawText(IText(7.5F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Middle),
+                 FormatTime(viewStartTime).c_str(),
+                 IRECT(mTimeline.L + 5.0F, mTimeline.B - 17.0F,
+                       mTimeline.L + 82.0F, mTimeline.B));
+      g.DrawText(IText(7.5F, kFaint, "AeylaUI", EAlign::Far, EVAlign::Middle),
+                 FormatTime(viewEndTime).c_str(),
+                 IRECT(mTimeline.R - 82.0F, mTimeline.B - 17.0F,
+                       mTimeline.R - 5.0F, mTimeline.B));
     }
 
     Button(g, mRecordButton,
@@ -743,11 +944,20 @@ private:
       ui->ShowMessageBox(result.message.c_str(), "AEYLA · OPERACIÓN BLOQUEADA", kMB_OK);
   }
 
+  void ReportInline(const aeyla::product::AuthoringResult& result)
+  {
+    mMessage = result.message;
+  }
+
   AeylaVisualDmx& mPlug;
   std::string mMessage;
   std::string mLocalNetworkText;
   EditKind mEditKind{EditKind::none};
+  DragKind mDragKind{DragKind::none};
   std::size_t mEditingSongIndex{0U};
+  std::filesystem::path mLastEditorPath;
+  double mViewStart{0.0};
+  double mViewEnd{1.0};
 
   IRECT mHeader{};
   IRECT mSetlist{};
@@ -757,6 +967,12 @@ private:
   IRECT mTakeArmButton{};
   std::array<IRECT, 15> mSongRows{};
   IRECT mNewSongButton{};
+  IRECT mReturnRawButton{};
+  IRECT mVersionPrevious{};
+  IRECT mVersionNext{};
+  IRECT mZoomOutButton{};
+  IRECT mZoomResetButton{};
+  IRECT mZoomInButton{};
   IRECT mTimeline{};
   IRECT mRecordButton{};
   IRECT mPlayButton{};

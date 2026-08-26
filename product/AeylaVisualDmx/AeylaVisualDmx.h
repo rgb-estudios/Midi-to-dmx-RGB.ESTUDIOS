@@ -3,6 +3,7 @@
 #include "IPlug_include_in_plug_hdr.h"
 #include "IControls.h"
 #include "capture/artnet_capture_worker.h"
+#include "capture/dmx_take_activity.h"
 #include "capture/dmx_take_scheduler.h"
 #include "network/network_interfaces.h"
 #include "product/application_model.h"
@@ -51,6 +52,26 @@ enum EControlTags
 
 using namespace iplug;
 using namespace igraphics;
+
+struct AeylaTakeEditorSnapshot
+{
+  bool available{false};
+  bool raw_source{true};
+  std::filesystem::path path;
+  std::string take_name;
+  std::size_t version_index{0U};
+  std::size_t version_count{0U};
+  std::uint64_t frame_count{0U};
+  std::uint64_t start_frame{0U};
+  std::uint64_t end_frame_exclusive{0U};
+  std::uint64_t current_frame{0U};
+  std::uint16_t frames_per_second{0U};
+  std::array<std::uint8_t, aeyla::capture::kMaximumTakeActivityBuckets>
+      activity_level{};
+  std::array<std::uint8_t, aeyla::capture::kMaximumTakeActivityBuckets>
+      activity_motion{};
+  std::size_t activity_count{0U};
+};
 
 class AeylaVisualDmx final : public Plugin
 {
@@ -134,6 +155,16 @@ public:
       double deltaSeconds);
   [[nodiscard]] aeyla::product::AuthoringResult ResetActiveTakeTrimFromUI();
   [[nodiscard]] aeyla::product::AuthoringResult ConsolidateActiveTakeFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult SetActiveTakeInFrameFromUI(
+      std::uint64_t frameIndex);
+  [[nodiscard]] aeyla::product::AuthoringResult SetActiveTakeOutFrameFromUI(
+      std::uint64_t frameIndexExclusive);
+  [[nodiscard]] aeyla::product::AuthoringResult SeekActiveTakeFrameFromUI(
+      std::uint64_t frameIndex);
+  [[nodiscard]] aeyla::product::AuthoringResult CycleActiveTakeVersionFromUI(
+      int direction);
+  [[nodiscard]] aeyla::product::AuthoringResult ReturnToRawTakeFromUI();
+  [[nodiscard]] AeylaTakeEditorSnapshot ActiveTakeEditorSnapshot() const;
   [[nodiscard]] double ActiveTakeInSeconds() const;
   [[nodiscard]] double ActiveTakeOutSeconds() const;
   [[nodiscard]] double ActiveTakeOriginalDurationSeconds() const;

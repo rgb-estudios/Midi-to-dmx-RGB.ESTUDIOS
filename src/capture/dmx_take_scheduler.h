@@ -66,6 +66,8 @@ class DmxTakeScheduler final {
   [[nodiscard]] bool play(std::string& error_message);
   [[nodiscard]] bool pause(std::string& error_message);
   [[nodiscard]] bool resume(std::string& error_message);
+  [[nodiscard]] bool seek_frame(std::size_t frame_index,
+                                std::string& error_message);
   void stop_hold() noexcept;
   void stop_reset() noexcept;
 

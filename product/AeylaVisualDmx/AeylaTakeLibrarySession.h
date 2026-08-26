@@ -1,5 +1,9 @@
 #pragma once
 
+#include "capture/dmx_take_activity.h"
+
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -10,10 +14,17 @@ namespace aeyla::take_library_session {
 
 struct TakeEditState {
   std::filesystem::path path;
+  std::string take_name;
+  bool raw_source{true};
   std::uint64_t start_frame{0U};
   std::uint64_t end_frame_exclusive{0U};
   std::uint64_t frame_count{0U};
   std::uint16_t frames_per_second{0U};
+  std::array<std::uint8_t, aeyla::capture::kMaximumTakeActivityBuckets>
+      activity_level{};
+  std::array<std::uint8_t, aeyla::capture::kMaximumTakeActivityBuckets>
+      activity_motion{};
+  std::size_t activity_count{0U};
 };
 
 void clear(const void* owner) noexcept;

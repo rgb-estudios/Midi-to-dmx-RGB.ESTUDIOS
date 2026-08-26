@@ -141,11 +141,17 @@ jobs:
           L. Abrir/cerrar UI 5 veces mantiene todas las interacciones.
           M. Ajustar ENTRADA/SALIDA y pulsar CONSOLIDAR CLIP crea otro .aeylatake.
           N. El clip consolidado comienza en 00:00 y la TOMA ORIGINAL no cambia.
+          O. La actividad DMX visible coincide con zonas encendidas y cambios de la toma.
+          P. Arrastrar los handles ENTRADA/SALIDA actualiza tiempos y seleccion sin saltos.
+          Q. Rueda/controles de zoom y Shift+arrastre navegan horizontalmente la toma.
+          R. Con salida DESARMADA, clic/arrastre del cabezal previsualiza la posicion.
+          S. Con salida ARMADA, el scrub queda bloqueado y muestra la causa.
+          T. Las flechas recorren versiones y VOLVER A RAW recupera la toma original.
 
           PRUEBA HOST / ESTADO
-          O. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
-          P. La instancia sigue presente y vuelve DESARMADA/APAGON.
-          Q. Mueve el cursor, reproduce/deten y usa loop; registra cualquier desviacion.
+          U. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
+          V. La instancia sigue presente y vuelve DESARMADA/APAGON.
+          W. Mueve el cursor, reproduce/deten y usa loop; registra cualquier desviacion.
 
           IMPORTANTE
           PRETEST NO significa Show Candidate. No dependas todavia de este build para

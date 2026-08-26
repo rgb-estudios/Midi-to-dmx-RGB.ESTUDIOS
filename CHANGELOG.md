@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — R07 advanced DMX Take editor
+
+- Replaced the duration-only trim bar with a bounded, file-backed activity
+  envelope built from real 512-channel level and motion peaks.
+- Added draggable IN/OUT handles, a relative playhead, safe stopped/disarmed
+  scrub preview, pointer-anchored horizontal zoom and Shift-drag panning.
+- Added chronological Take-version navigation and an explicit return-to-RAW
+  action; changing versions never mutates or replaces a source recording.
+- Made playback and physical-output arming honor the selected version and its
+  non-destructive IN/OUT range instead of silently reselecting the newest file.
+
+### Safety boundary — R07 advanced DMX Take editor
+
+- Scrub reads and holds a frame locally but cannot publish Art-Net; it fails
+  closed while physical Take output is armed or transport is running.
+- The activity envelope is capped at 256 buckets and the file reader remains
+  bounded-cache; no complete Take payload is retained in RAM.
+- Native core/runtime tests pass locally. Windows product compilation, REAPER
+  interaction, physical Art-Net/DMX hardware and the two-hour field soak remain
+  required before any Show Ready claim.
+
 ### Added — R07 clip consolidation UI
 
 - Connected the visible `CONSOLIDAR CLIP` action to the file-backed DMX Take
