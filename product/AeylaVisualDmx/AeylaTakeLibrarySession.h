@@ -1,16 +1,25 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace aeyla::take_library_session {
 
+struct TakeEditState {
+  std::filesystem::path path;
+  std::uint64_t start_frame{0U};
+  std::uint64_t end_frame_exclusive{0U};
+  std::uint64_t frame_count{0U};
+  std::uint16_t frames_per_second{0U};
+};
+
 void clear(const void* owner) noexcept;
 
-// Prevents a DAW from inheriting a stale folder if it destroys a plug-in
-// instance and later reuses the same address for a different AEYLA project.
-// Changing project identity clears directory, loaded-path and storage state.
+// Evita heredar rutas/ediciones de otra instancia si el host reutiliza la
+// dirección de memoria de un plugin destruido.
 void ensure_scope(const void* owner, std::string_view project_id);
 
 void set_directory(const void* owner, std::filesystem::path directory);
@@ -20,6 +29,12 @@ void set_loaded_path(const void* owner, std::string_view song_id,
                      std::filesystem::path path);
 [[nodiscard]] std::filesystem::path loaded_path(const void* owner,
                                                  std::string_view song_id);
+
+void set_edit_state(const void* owner, std::string_view song_id,
+                    TakeEditState state);
+[[nodiscard]] std::optional<TakeEditState> edit_state(
+    const void* owner, std::string_view song_id);
+void clear_edit_state(const void* owner, std::string_view song_id) noexcept;
 
 void set_storage_message(const void* owner, std::string message);
 [[nodiscard]] std::string storage_message(const void* owner);
