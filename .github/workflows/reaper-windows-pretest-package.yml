@@ -21,6 +21,11 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A pull_request workflow otherwise checks out GitHub's temporary
+          # merge commit. The PRETEST identity must resolve to the exact branch
+          # source that was reviewed and will be handed to the operator.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Validate AEYLA maintenance tools
         shell: pwsh
@@ -120,25 +125,27 @@ jobs:
           - No mata REAPER ni Ableton: si estan abiertos, aborta.
           - No modifica configuracion MIDI/audio del host.
 
-          INTERACTION PASS — OBLIGATORIO
+          PRUEBA DE INTERACCION — OBLIGATORIA
           Render correcto NO equivale a UI funcional. Probar con mouse/entrada real:
-          A. NEW crea proyecto o pide confirmar descarte si corresponde.
-          B. OPEN abre dialogo y carga un .aeylashow valido.
-          C. SAVE y SAVE AS responden y actualizan estado SAVED/UNSAVED.
-          D. BLACKOUT cambia inmediatamente de estado visual/runtime.
-          E. RIG 10/14 cambia el mapa de fixtures habilitados.
-          F. SOLID / GRADIENT / WAVE / NOISE / CHASE cambian el preview.
-          G. Click fixture 1, 7, 8 y 14 cambia claramente la seleccion visual.
-          H. Grand Master, Speed, White, Amber y UV responden a click y drag.
-          I. Los 8 executors responden por mouse y liberan al soltar.
+          A. NUEVO crea proyecto o pide confirmar descarte si corresponde.
+          B. ABRIR abre dialogo y carga un .aeylashow valido.
+          C. GUARDAR y GUARDAR COMO responden y actualizan el estado del proyecto.
+          D. APAGON cambia inmediatamente de estado visual/runtime.
+          E. RIG 10/14 cambia el mapa de luminarias habilitadas.
+          F. COLOR PLANO / DEGRADADO / ONDA / RUIDO / SECUENCIA cambian la vista previa.
+          G. Clic en luminarias 1, 7, 8 y 14 cambia claramente la seleccion visual.
+          H. Master general, Velocidad, Blanco, Ambar y UV responden a clic y arrastre.
+          I. Los 8 ejecutores responden por mouse y liberan al soltar.
           J. MIDI fisico incrementa contador y activa el runtime correspondiente.
-          K. ARM con BACKEND OFF NO queda mudo: debe mostrar ARM LOCKED y explicar causa.
+          K. ARMAR con SALIDA DESACTIVADA muestra una causa visible del bloqueo.
           L. Abrir/cerrar UI 5 veces mantiene todas las interacciones.
+          M. Ajustar ENTRADA/SALIDA y pulsar CONSOLIDAR CLIP crea otro .aeylatake.
+          N. El clip consolidado comienza en 00:00 y la TOMA ORIGINAL no cambia.
 
           PRUEBA HOST / ESTADO
-          M. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
-          N. La instancia sigue presente y vuelve DISARMED/BLACKOUT.
-          O. Mueve playhead, Play/Stop y Loop y registra cualquier desviacion.
+          O. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
+          P. La instancia sigue presente y vuelve DESARMADA/APAGON.
+          Q. Mueve el cursor, reproduce/deten y usa loop; registra cualquier desviacion.
 
           IMPORTANTE
           PRETEST NO significa Show Candidate. No dependas todavia de este build para
@@ -148,8 +155,9 @@ jobs:
 
           $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
           $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sourceCommit = (git rev-parse HEAD).Trim()
           "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
-          "SOURCE_COMMIT=${{ github.sha }}" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "BUILD_KIND=REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "MAINTENANCE_SCRIPT=AEYLA_VST3_MAINTENANCE.ps1" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "UI_INTERACTION_CONTRACT=UI_INTERACTION_CONTRACT.md" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
