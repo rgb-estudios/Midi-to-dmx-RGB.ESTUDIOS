@@ -20,7 +20,8 @@ DmxClipPlaybackEngine::DmxClipPlaybackEngine() = default;
 
 DmxClipPlaybackEngine::~DmxClipPlaybackEngine() { shutdown(); }
 
-void DmxClipPlaybackEngine::attach(output::ArtNetOutputWorker* output) noexcept {
+void DmxClipPlaybackEngine::attach(
+    output::ArtNetOutputWorker* output) noexcept {
   const std::scoped_lock lock(mutex_);
   if(output_ != output && output_ != nullptr)
     output_->set_override_enabled(false);
@@ -32,7 +33,7 @@ bool DmxClipPlaybackEngine::load_clip(const std::filesystem::path& path,
                                       std::string& error_message) {
   error_message.clear();
   if(!valid_sample_rate(sample_rate)) {
-    error_message = "DMX clip sample rate is outside supported host bounds";
+    error_message = "La frecuencia de muestreo del host está fuera del rango admitido";
     return false;
   }
 
@@ -50,14 +51,14 @@ bool DmxClipPlaybackEngine::load_clip(const std::filesystem::path& path,
     if(!info.open || info.frame_count == 0U) {
       reader_.close();
       loaded_.store(false, std::memory_order_release);
-      error_message = "Validated DMX clip contains no playable frames";
+      error_message = "El clip DMX validado no contiene cuadros reproducibles";
       return false;
     }
 
     sample_rate_ = sample_rate;
     range_start_frame_ = 0U;
     range_end_frame_exclusive_ = info.frame_count;
-    cursor_samples_ = 0U;
+    cursor_samples_.store(0U, std::memory_order_relaxed);
     hold_frame_.fill(0U);
     hold_valid_ = false;
     current_frame_.store(0U, std::memory_order_relaxed);
@@ -79,7 +80,7 @@ void DmxClipPlaybackEngine::unload() noexcept {
   sample_rate_ = 0.0;
   range_start_frame_ = 0U;
   range_end_frame_exclusive_ = 0U;
-  cursor_samples_ = 0U;
+  cursor_samples_.store(0U, std::memory_order_relaxed);
   hold_frame_.fill(0U);
   hold_valid_ = false;
   loaded_.store(false, std::memory_order_release);
@@ -94,25 +95,25 @@ bool DmxClipPlaybackEngine::set_play_range(
     std::string& error_message) {
   error_message.clear();
   if(armed_.load(std::memory_order_acquire)) {
-    error_message = "Disarm DMX clip output before editing its play range";
+    error_message = "Desarma la salida del clip DMX antes de editar su rango";
     return false;
   }
 
   const std::scoped_lock lock(mutex_);
   const auto info = reader_.info();
   if(!loaded_.load(std::memory_order_acquire) || !info.open) {
-    error_message = "Load a DMX clip before editing its play range";
+    error_message = "Carga un clip DMX antes de editar su rango";
     return false;
   }
   if(start_frame >= end_frame_exclusive ||
      end_frame_exclusive > info.frame_count) {
-    error_message = "DMX clip play range is outside source Take bounds";
+    error_message = "El rango del clip DMX está fuera de los límites de la toma";
     return false;
   }
 
   range_start_frame_ = start_frame;
   range_end_frame_exclusive_ = end_frame_exclusive;
-  cursor_samples_ = 0U;
+  cursor_samples_.store(0U, std::memory_order_relaxed);
   hold_valid_ = false;
   current_frame_.store(start_frame, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
@@ -127,7 +128,7 @@ void DmxClipPlaybackEngine::reset_play_range() noexcept {
   if(!loaded_.load(std::memory_order_acquire) || !info.open) return;
   range_start_frame_ = 0U;
   range_end_frame_exclusive_ = info.frame_count;
-  cursor_samples_ = 0U;
+  cursor_samples_.store(0U, std::memory_order_relaxed);
   hold_valid_ = false;
   current_frame_.store(0U, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
@@ -139,15 +140,15 @@ bool DmxClipPlaybackEngine::arm(std::string& error_message) {
   {
     const std::scoped_lock lock(mutex_);
     if(!loaded_.load(std::memory_order_acquire) || !reader_.info().open) {
-      error_message = "Load a validated DMX clip before arming output";
+      error_message = "Carga un clip DMX validado antes de armar la salida";
       return false;
     }
     if(output_ == nullptr) {
-      error_message = "DMX clip player is not attached to Art-Net output";
+      error_message = "El reproductor DMX no está conectado a la salida Art-Net";
       return false;
     }
     if(rendering_offline_.load(std::memory_order_acquire)) {
-      error_message = "Offline rendering blocks physical DMX clip output";
+      error_message = "El renderizado sin conexión bloquea la salida DMX física";
       return false;
     }
   }
@@ -168,10 +169,10 @@ bool DmxClipPlaybackEngine::play_from_start(std::string& error_message) {
   error_message.clear();
   const std::scoped_lock lock(mutex_);
   if(!loaded_.load(std::memory_order_acquire) || !reader_.info().open) {
-    error_message = "Load a DMX clip before PLAY";
+    error_message = "Carga un clip DMX antes de reproducir";
     return false;
   }
-  cursor_samples_ = 0U;
+  cursor_samples_.store(0U, std::memory_order_relaxed);
   hold_valid_ = false;
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
@@ -182,7 +183,7 @@ bool DmxClipPlaybackEngine::play_from_start(std::string& error_message) {
 bool DmxClipPlaybackEngine::pause(std::string& error_message) {
   error_message.clear();
   if(transport_.load(std::memory_order_acquire) != DmxClipTransportState::playing) {
-    error_message = "DMX clip can only PAUSE while PLAYING";
+    error_message = "El clip DMX sólo puede pausarse mientras está reproduciendo";
     return false;
   }
   transport_.store(DmxClipTransportState::paused, std::memory_order_release);
@@ -192,7 +193,7 @@ bool DmxClipPlaybackEngine::pause(std::string& error_message) {
 bool DmxClipPlaybackEngine::resume(std::string& error_message) {
   error_message.clear();
   if(transport_.load(std::memory_order_acquire) != DmxClipTransportState::paused) {
-    error_message = "DMX clip can only RESUME from PAUSED";
+    error_message = "El clip DMX sólo puede reanudarse desde pausa";
     return false;
   }
   transport_.store(DmxClipTransportState::playing, std::memory_order_release);
@@ -202,7 +203,7 @@ bool DmxClipPlaybackEngine::resume(std::string& error_message) {
 void DmxClipPlaybackEngine::stop_and_reset() noexcept {
   transport_.store(DmxClipTransportState::ready, std::memory_order_release);
   const std::scoped_lock lock(mutex_);
-  cursor_samples_ = 0U;
+  cursor_samples_.store(0U, std::memory_order_relaxed);
   hold_valid_ = false;
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
@@ -217,8 +218,8 @@ void DmxClipPlaybackEngine::advance_samples(std::uint32_t processed_samples,
      transport_.load(std::memory_order_acquire) != DmxClipTransportState::playing)
     return;
 
-  const std::scoped_lock lock(mutex_);
-  cursor_samples_ += static_cast<std::uint64_t>(processed_samples);
+  cursor_samples_.fetch_add(static_cast<std::uint64_t>(processed_samples),
+                            std::memory_order_relaxed);
 }
 
 void DmxClipPlaybackEngine::set_host_heartbeat_ok(bool ok) noexcept {
@@ -239,6 +240,7 @@ DmxClipPlaybackStatus DmxClipPlaybackEngine::status() const {
   result.rendering_offline = rendering_offline_.load(std::memory_order_acquire);
   result.transport = transport_.load(std::memory_order_acquire);
   result.current_frame = current_frame_.load(std::memory_order_relaxed);
+  result.cursor_samples = cursor_samples_.load(std::memory_order_relaxed);
   result.progress = progress_.load(std::memory_order_relaxed);
   result.error = error();
   {
@@ -246,7 +248,6 @@ DmxClipPlaybackStatus DmxClipPlaybackEngine::status() const {
     result.hold_valid = hold_valid_;
     result.range_start_frame = range_start_frame_;
     result.range_end_frame_exclusive = range_end_frame_exclusive_;
-    result.cursor_samples = cursor_samples_;
   }
   return result;
 }
@@ -274,14 +275,15 @@ bool DmxClipPlaybackEngine::publish_cursor_frame_locked() {
   const auto info = reader_.info();
   if(!loaded_.load(std::memory_order_acquire) || !info.open ||
      !valid_sample_rate(sample_rate_) || range_start_frame_ >= range_end_frame_exclusive_) {
-    set_error("DMX clip runtime lost a valid loaded state");
+    set_error("El runtime del clip DMX perdió un estado de carga válido");
     transport_.store(DmxClipTransportState::fault, std::memory_order_release);
     return false;
   }
 
   const auto effective_frames = range_end_frame_exclusive_ - range_start_frame_;
+  const auto cursor = cursor_samples_.load(std::memory_order_relaxed);
   const long double scaled =
-      static_cast<long double>(cursor_samples_) *
+      static_cast<long double>(cursor) *
       static_cast<long double>(info.frames_per_second) /
       static_cast<long double>(sample_rate_);
   std::uint64_t offset = scaled <= 0.0L
@@ -299,7 +301,7 @@ bool DmxClipPlaybackEngine::publish_cursor_frame_locked() {
     DmxUniverse frame{};
     std::string read_error;
     if(!reader_.read_frame(frame_index, frame, read_error)) {
-      set_error("DMX clip frame read failed · " + read_error);
+      set_error("Falló la lectura de un cuadro del clip DMX · " + read_error);
       transport_.store(DmxClipTransportState::fault, std::memory_order_release);
       return false;
     }
