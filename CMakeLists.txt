@@ -94,6 +94,7 @@ add_library(aeyla_runtime
   src/network/network_interfaces.cpp
   src/capture/artnet_capture_worker.cpp
   src/capture/dmx_clip_playback_engine.cpp
+  src/capture/dmx_take_consolidator.cpp
   src/capture/dmx_take_file_store.cpp
   src/capture/dmx_take_file_reader.cpp
   src/capture/dmx_take_scheduler.cpp
@@ -144,6 +145,7 @@ aeyla_add_strict_test(aeyla_programmer_tests tests/test_programmer.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
 aeyla_add_strict_test(aeyla_artnet_capture_worker_tests tests/test_artnet_capture_worker.cpp)
 aeyla_add_strict_test(aeyla_dmx_clip_playback_engine_tests tests/test_dmx_clip_playback_engine.cpp)
+aeyla_add_strict_test(aeyla_dmx_take_consolidator_tests tests/test_dmx_take_consolidator.cpp)
 aeyla_add_strict_test(aeyla_dmx_take_file_store_tests tests/test_dmx_take_file_store.cpp)
 aeyla_add_strict_test(aeyla_dmx_take_file_reader_tests tests/test_dmx_take_file_reader.cpp)
 aeyla_add_strict_test(aeyla_dmx_take_transport_tests tests/test_dmx_take_transport.cpp)
