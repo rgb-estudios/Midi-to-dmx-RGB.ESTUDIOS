@@ -47,6 +47,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/network/network_interfaces.cpp
     ../../src/capture/artnet_capture_worker.cpp
     ../../src/capture/dmx_clip_playback_engine.cpp
+    ../../src/capture/dmx_take_consolidator.cpp
     ../../src/capture/dmx_take_file_reader.cpp
     ../../src/capture/dmx_take_file_store.cpp
     ../../src/capture/dmx_take_scheduler.cpp
