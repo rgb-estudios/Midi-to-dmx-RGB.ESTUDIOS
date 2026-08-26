@@ -43,8 +43,8 @@ public:
       const bool enable = !mPlug.EffectiveBlackout();
       mPlug.SetBlackoutFromUI(enable);
       mMessage = enable
-          ? "BLACKOUT ON · output disarmed."
-          : "BLACKOUT OFF · ARM remains manual.";
+          ? "APAGÓN ACTIVO · salida desarmada."
+          : "APAGÓN DESACTIVADO · el armado sigue siendo manual.";
       SetDirty(false);
       return;
     }
@@ -62,7 +62,7 @@ public:
       if(!Contains(mSongRows[index], x, y))
         continue;
       if(!mPlug.SelectSongFromUI(index))
-        mMessage = "Song switch blocked while REC is active.";
+        mMessage = "No se puede cambiar de canción mientras GRABAR está activo.";
       SetDirty(false);
       return;
     }
@@ -89,7 +89,7 @@ public:
     if(Contains(mStopButton, x, y))
     {
       mPlug.StopActiveTakePlaybackFromUI();
-      mMessage = "STOP · HOLD current DMX frame.";
+      mMessage = "DETENER · se mantiene el cuadro DMX actual.";
       SetDirty(false);
       return;
     }
@@ -103,18 +103,19 @@ public:
     if(Contains(mOutPlus01, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(0.1)); SetDirty(false); return; }
     if(Contains(mOutPlus1, x, y)) { Report(mPlug.AdjustActiveTakeOutFromUI(1.0)); SetDirty(false); return; }
     if(Contains(mResetTrimButton, x, y)) { Report(mPlug.ResetActiveTakeTrimFromUI()); SetDirty(false); return; }
+    if(Contains(mConsolidateButton, x, y)) { Report(mPlug.ConsolidateActiveTakeFromUI()); SetDirty(false); return; }
 
     if(Contains(mRxPrevious, x, y))
     {
       if(!mPlug.CycleRxInterfaceFromUI(-1))
-        mMessage = "RX adapter change blocked while recording.";
+        mMessage = "No se puede cambiar el adaptador RX mientras se graba.";
       SetDirty(false);
       return;
     }
     if(Contains(mRxNext, x, y))
     {
       if(!mPlug.CycleRxInterfaceFromUI(1))
-        mMessage = "RX adapter change blocked while recording.";
+        mMessage = "No se puede cambiar el adaptador RX mientras se graba.";
       SetDirty(false);
       return;
     }
@@ -122,7 +123,7 @@ public:
     {
       (void)mPlug.CycleTxInterfaceFromUI(-1);
       RestoreNetworkFieldFromSelectedTx();
-      mMessage = "TX adapter changed · verify local IP/mask, then APPLY.";
+      mMessage = "Adaptador TX cambiado · verifica IPv4/máscara y luego APLICAR.";
       SetDirty(false);
       return;
     }
@@ -130,7 +131,7 @@ public:
     {
       (void)mPlug.CycleTxInterfaceFromUI(1);
       RestoreNetworkFieldFromSelectedTx();
-      mMessage = "TX adapter changed · verify local IP/mask, then APPLY.";
+      mMessage = "Adaptador TX cambiado · verifica IPv4/máscara y luego APLICAR.";
       SetDirty(false);
       return;
     }
@@ -152,10 +153,10 @@ public:
       if(mPlug.RefreshNetworkInterfacesFromUI())
       {
         RestoreNetworkFieldFromSelectedTx();
-        mMessage = "Network adapters refreshed.";
+        mMessage = "Adaptadores de red actualizados.";
       }
       else
-        mMessage = "No active IPv4 adapters detected.";
+        mMessage = "No se detectaron adaptadores IPv4 activos.";
       SetDirty(false);
       return;
     }
@@ -171,7 +172,7 @@ public:
         continue;
       if(mPlug.TakeRecording() || mPlug.TakePlaying())
       {
-        mMessage = "STOP REC/PLAY before renaming a Song.";
+        mMessage = "Detén GRABAR/REPRODUCIR antes de renombrar una canción.";
         SetDirty(false);
         return;
       }
@@ -191,7 +192,7 @@ public:
     else if(mEditKind == EditKind::local_network)
     {
       mLocalNetworkText = value;
-      mMessage = "Network edited · press APPLY NETWORK.";
+      mMessage = "Red editada · presiona APLICAR RED.";
     }
     mEditKind = EditKind::none;
     SetDirty(false);
@@ -367,7 +368,7 @@ private:
   {
     if(mPlug.TakeRecording())
     {
-      mMessage = "STOP REC before changing TX network.";
+      mMessage = "Detén GRABAR antes de cambiar la red TX.";
       return;
     }
 
@@ -390,19 +391,19 @@ private:
     const std::string selectedIp = SelectedTxIpFromStatus();
     if(selectedIp.empty())
     {
-      mMessage = "Select a valid TX adapter first.";
+      mMessage = "Selecciona primero un adaptador TX válido.";
       return;
     }
     if(selectedIp != ipText)
     {
-      mMessage = "LOCAL IP must match selected TX adapter: " + selectedIp;
+      mMessage = "La IPv4 local debe coincidir con el adaptador TX: " + selectedIp;
       return;
     }
 
     const std::uint32_t broadcast = (ip & mask) | (~mask);
     if(broadcast == ip || broadcast == 0xFFFFFFFFU)
     {
-      mMessage = "Subnet mask does not produce a usable directed broadcast.";
+      mMessage = "La máscara no produce un broadcast dirigido utilizable.";
       return;
     }
 
@@ -412,8 +413,8 @@ private:
     const auto result = mPlug.ConfigureArtNetFromUI(destination + "@0");
     Report(result);
     if(result.succeeded)
-      mMessage = "NETWORK READY · " + ipText + " / " + maskText +
-                 " · U1 · output DISARMED";
+      mMessage = "RED LISTA · " + ipText + " / " + maskText +
+                 " · U1 · SALIDA DESARMADA";
   }
 
   void BuildLayout()
@@ -483,6 +484,8 @@ private:
     mOutPlus01 = IRECT(left, outTop, left + buttonWidth, outTop + 30.0F); left += buttonWidth + smallGap;
     mOutPlus1 = IRECT(left, outTop, work.R, outTop + 30.0F);
     mResetTrimButton = IRECT(work.L, outTop + 45.0F, work.R, outTop + 76.0F);
+    mConsolidateButton = IRECT(work.L, mResetTrimButton.B + 8.0F,
+                               work.R, mResetTrimButton.B + 43.0F);
 
     const IRECT route = mRouting.GetPadded(-12.0F);
     const float cardTop = route.T + 46.0F;
@@ -508,22 +511,22 @@ private:
   void DrawHeader(IGraphics& g)
   {
     g.DrawText(IText(20.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "AEYLA  /  SHOW PLAYER",
+               "AEYLA  /  REPRODUCTOR DE SHOW",
                IRECT(mHeader.L, mHeader.T, mHeader.L + 360.0F, mHeader.B - 20.0F));
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               ("RGB ESTUDIOS · " + mPlug.ProjectName() + " · R03 PRETEST").c_str(),
+               ("RGB ESTUDIOS · " + mPlug.ProjectName() + " · R07 PRETEST").c_str(),
                IRECT(mHeader.L, mHeader.B - 27.0F,
                      mHeader.L + 620.0F, mHeader.B));
 
     const bool blackout = mPlug.EffectiveBlackout();
-    Button(g, mBlackoutButton, blackout ? "BLACKOUT ON" : "BLACKOUT OFF",
+    Button(g, mBlackoutButton, blackout ? "APAGÓN ACTIVO" : "APAGÓN DESACTIVADO",
            blackout ? kAccentDark : kPanelRaised,
            blackout ? kAccent : kLineStrong,
            blackout ? kText : kGood);
 
     const bool armed = mPlug.TakeOutputArmed();
     Button(g, mTakeArmButton,
-           armed ? "TAKE OUTPUT ARMED" : "ARM TAKE OUTPUT",
+           armed ? "SALIDA DE TOMA ARMADA" : "ARMAR SALIDA DE TOMA",
            armed ? kGood : kPanelRaised,
            armed ? kGood : kLineStrong,
            armed ? IColor(255, 8, 30, 20) : kText);
@@ -533,7 +536,7 @@ private:
   {
     Card(g, mSetlist);
     g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "SETLIST · DBL CLICK = RENAME",
+               "LISTA DE CANCIONES · DOBLE CLIC = RENOMBRAR",
                IRECT(mSetlist.L + 12.0F, mSetlist.T + 8.0F,
                      mSetlist.R - 12.0F, mSetlist.T + 36.0F));
 
@@ -556,14 +559,14 @@ private:
                        "AeylaUI", EAlign::Near, EVAlign::Middle),
                  number, IRECT(row.L + 8.0F, row.T, row.L + 34.0F, row.B));
       std::string name = mPlug.SongName(index);
-      if(name.empty()) name = "Song";
+      if(name.empty()) name = "Canción";
       g.DrawText(IText(9.0F, selected ? kText : kMuted,
                        "AeylaUI", EAlign::Near, EVAlign::Middle),
                  name.c_str(), IRECT(row.L + 38.0F, row.T, row.R - 8.0F, row.B));
     }
 
     Button(g, mNewSongButton,
-           count >= 15U ? "15 SONG LIMIT" : "+ NEW SONG",
+           count >= 15U ? "LÍMITE: 15 CANCIONES" : "+ NUEVA CANCIÓN",
            kPanelRaised, kLineStrong, count >= 15U ? kFaint : kText);
   }
 
@@ -573,7 +576,7 @@ private:
     const IRECT work = mWorkspace.GetPadded(-16.0F);
     const std::size_t count = mPlug.SongCount();
     const std::size_t active = mPlug.ActiveSongIndex();
-    std::string title = "NO SONG SELECTED";
+    std::string title = "SIN CANCIÓN SELECCIONADA";
     if(count > 0U)
     {
       char prefix[24];
@@ -614,19 +617,19 @@ private:
     }
 
     Button(g, mRecordButton,
-           mPlug.TakeRecording() ? "STOP + SAVE TAKE" : "RECORD NEW TAKE",
+           mPlug.TakeRecording() ? "DETENER + GUARDAR TOMA" : "GRABAR NUEVA TOMA",
            mPlug.TakeRecording() ? kAccentDark : kPanelRaised,
            mPlug.TakeRecording() ? kAccent : kLineStrong);
     Button(g, mPlayButton,
-           mPlug.TakePlaying() ? "PLAYING" : "PLAY ACTIVE TAKE",
+           mPlug.TakePlaying() ? "REPRODUCIENDO" : "REPRODUCIR TOMA ACTIVA",
            mPlug.TakePlaying() ? kGood : kPanelRaised,
            mPlug.TakePlaying() ? kGood : kLineStrong,
            mPlug.TakePlaying() ? IColor(255, 8, 30, 20) : kText);
-    Button(g, mStopButton, "STOP / HOLD", kPanelRaised, kLineStrong);
+    Button(g, mStopButton, "DETENER / MANTENER", kPanelRaised, kLineStrong);
 
     const float editorTop = mInMinus1.T;
     g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "IN", IRECT(work.L, editorTop, work.L + 42.0F, editorTop + 30.0F));
+               "ENT.", IRECT(work.L, editorTop, work.L + 42.0F, editorTop + 30.0F));
     Button(g, mInMinus1, "-1.0s", kPanelRaised, kLineStrong);
     Button(g, mInMinus01, "-0.1s", kPanelRaised, kLineStrong);
     Button(g, mInPlus01, "+0.1s", kPanelRaised, kLineStrong);
@@ -634,17 +637,19 @@ private:
 
     const float outTop = mOutMinus1.T;
     g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "OUT", IRECT(work.L, outTop, work.L + 42.0F, outTop + 30.0F));
+               "SAL.", IRECT(work.L, outTop, work.L + 42.0F, outTop + 30.0F));
     Button(g, mOutMinus1, "-1.0s", kPanelRaised, kLineStrong);
     Button(g, mOutMinus01, "-0.1s", kPanelRaised, kLineStrong);
     Button(g, mOutPlus01, "+0.1s", kPanelRaised, kLineStrong);
     Button(g, mOutPlus1, "+1.0s", kPanelRaised, kLineStrong);
-    Button(g, mResetTrimButton, "RESET IN / OUT", kPanelRaised, kLineStrong);
+    Button(g, mResetTrimButton, "RESTAURAR ENTRADA / SALIDA", kPanelRaised, kLineStrong);
+    Button(g, mConsolidateButton, "CONSOLIDAR CLIP",
+           IColor(255, 18, 51, 38), kGood, kGood);
 
-    const float infoTop = mResetTrimButton.B + 14.0F;
-    const std::string times = "IN " + FormatTime(inTime) +
-        "   ·   OUT " + FormatTime(outTime) +
-        "   ·   PLAY " + FormatTime(effective) +
+    const float infoTop = mConsolidateButton.B + 8.0F;
+    const std::string times = "ENTRADA " + FormatTime(inTime) +
+        "   ·   SALIDA " + FormatTime(outTime) +
+        "   ·   DURACIÓN " + FormatTime(effective) +
         "   ·   ORIGINAL " + FormatTime(original);
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                times.c_str(), IRECT(work.L, infoTop, work.R, infoTop + 28.0F));
@@ -652,7 +657,7 @@ private:
     const IRECT messageRect(work.L, work.B - 48.0F, work.R, work.B);
     g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
     const std::string message = mMessage.empty()
-        ? "REC from Avolites · clean IN/OUT · configure network · ARM · PLAY."
+        ? "GRABA desde Avolites · ajusta ENTRADA/SALIDA · CONSOLIDA · ARMA · REPRODUCE."
         : mMessage;
     g.DrawText(IText(8.8F, mMessage.empty() ? kFaint : kWarn,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
@@ -663,38 +668,38 @@ private:
   {
     Card(g, mRouting);
     g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "ART-NET NETWORK · U1",
+               "RED ART-NET · U1",
                IRECT(mRouting.L + 12.0F, mRouting.T + 8.0F,
                      mRouting.R - 12.0F, mRouting.T + 34.0F));
 
-    DrawRouteCard(g, mRxCard, "INPUT / RX ADAPTER",
+    DrawRouteCard(g, mRxCard, "ENTRADA / ADAPTADOR RX",
                   mPlug.RxInterfaceStatus(), mPlug.CaptureInputStatus(),
                   mRxPrevious, mRxNext,
                   mPlug.CaptureAcceptedPackets() > 0U ? kGood : kWarn);
-    DrawRouteCard(g, mTxCard, "OUTPUT / TX ADAPTER",
+    DrawRouteCard(g, mTxCard, "SALIDA / ADAPTADOR TX",
                   mPlug.TxInterfaceStatus(), mPlug.OutputBackendStatus(),
                   mTxPrevious, mTxNext,
                   mPlug.BackendReady() ? kGood : kWarn);
 
-    Field(g, mLocalNetworkField, "LOCAL IP / SUBNET MASK",
-          mLocalNetworkText.empty() ? "click to set" : mLocalNetworkText,
+    Field(g, mLocalNetworkField, "IPv4 LOCAL / MÁSCARA DE SUBRED",
+          mLocalNetworkText.empty() ? "clic para configurar" : mLocalNetworkText,
           mLocalNetworkText.empty() ? kWarn : kText);
-    Button(g, mApplyNetworkButton, "APPLY NETWORK",
+    Button(g, mApplyNetworkButton, "APLICAR RED",
            mPlug.BackendReady() ? IColor(255, 18, 51, 38) : kPanelRaised,
            mPlug.BackendReady() ? kGood : kLineStrong,
            mPlug.BackendReady() ? kGood : kText);
-    Button(g, mRefreshNetworkButton, "REFRESH ADAPTERS",
+    Button(g, mRefreshNetworkButton, "ACTUALIZAR ADAPTADORES",
            kPanelRaised, kLineStrong);
 
     const float infoTop = mRefreshNetworkButton.B + 12.0F;
     char diagnostics[180];
     std::snprintf(diagnostics, sizeof(diagnostics),
-                  "RX %llu · gap %llu   |   TX %llu · err %llu   |   %s",
+                  "RX %llu · saltos %llu   |   TX %llu · errores %llu   |   %s",
                   static_cast<unsigned long long>(mPlug.CaptureAcceptedPackets()),
                   static_cast<unsigned long long>(mPlug.CaptureSequenceGaps()),
                   static_cast<unsigned long long>(mPlug.ArtNetSentPackets()),
                   static_cast<unsigned long long>(mPlug.ArtNetSendErrors()),
-                  mPlug.TakeOutputArmed() ? "ON AIR" : "DISARMED");
+                  mPlug.TakeOutputArmed() ? "AL AIRE" : "DESARMADA");
     g.DrawText(IText(8.2F,
                      mPlug.ArtNetSendErrors() > 0U ? kWarn : kFaint,
                      "AeylaUI", EAlign::Near, EVAlign::Top),
@@ -735,7 +740,7 @@ private:
     mMessage = result.message;
     if(result.succeeded) return;
     if(auto* ui = GetUI())
-      ui->ShowMessageBox(result.message.c_str(), "AEYLA · OPERATION BLOCKED", kMB_OK);
+      ui->ShowMessageBox(result.message.c_str(), "AEYLA · OPERACIÓN BLOQUEADA", kMB_OK);
   }
 
   AeylaVisualDmx& mPlug;
@@ -765,6 +770,7 @@ private:
   IRECT mOutPlus01{};
   IRECT mOutPlus1{};
   IRECT mResetTrimButton{};
+  IRECT mConsolidateButton{};
   IRECT mRxCard{};
   IRECT mTxCard{};
   IRECT mRxPrevious{};

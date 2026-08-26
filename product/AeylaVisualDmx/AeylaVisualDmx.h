@@ -19,7 +19,6 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <map>
 #include <thread>
 #include <mutex>
 #include <optional>
@@ -134,6 +133,7 @@ public:
   [[nodiscard]] aeyla::product::AuthoringResult AdjustActiveTakeOutFromUI(
       double deltaSeconds);
   [[nodiscard]] aeyla::product::AuthoringResult ResetActiveTakeTrimFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult ConsolidateActiveTakeFromUI();
   [[nodiscard]] double ActiveTakeInSeconds() const;
   [[nodiscard]] double ActiveTakeOutSeconds() const;
   [[nodiscard]] double ActiveTakeOriginalDurationSeconds() const;
@@ -399,8 +399,6 @@ private:
   std::size_t mTxInterfaceIndex{0U};
   std::string mCaptureInputError;
 
-  mutable std::mutex mTakeMutex;
-  std::map<std::string, std::vector<aeyla::capture::DmxTake>> mTakesBySong;
   aeyla::capture::DmxTakeScheduler mTakeScheduler{};
 
   std::thread mRuntimeThread;

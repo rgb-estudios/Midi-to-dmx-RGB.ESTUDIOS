@@ -1,5 +1,6 @@
 #include "AeylaVisualDmx.h"
 #include "AeylaTakeLibrarySession.h"
+#include "capture/dmx_take_consolidator.h"
 #include "capture/dmx_take_file_store.h"
 
 #include <algorithm>
@@ -216,6 +217,80 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ResetActiveTakeTrimFromUI()
          static_cast<std::size_t>(state->frame_count), error))
     return {false, {}, error};
   return {true, {}, "ENTRADA / SALIDA restauradas a la grabación completa"};
+}
+
+aeyla::product::AuthoringResult AeylaVisualDmx::ConsolidateActiveTakeFromUI()
+{
+  if(TakeRecording())
+    return {false, {}, "Detén GRABAR antes de consolidar el clip"};
+  if(TakePlaying())
+    return {false, {}, "Pausa o detén la reproducción antes de consolidar"};
+  if(TakeOutputArmed())
+    return {false, {}, "Desarma la salida física antes de consolidar"};
+
+  std::string projectId;
+  std::string songId;
+  std::string songName;
+  {
+    const std::scoped_lock modelLock(mModelMutex);
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
+    songName = snapshot.active_song_name;
+  }
+  if(songId.empty())
+    return {false, {}, "No hay una canción seleccionada"};
+
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  const auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value())
+    return {false, {}, error};
+  if(state->start_frame >= state->end_frame_exclusive)
+    return {false, {}, "El rango ENTRADA / SALIDA no contiene cuadros DMX"};
+
+  const auto scan = aeyla::capture::scan_take_directory(library, songId);
+  if(!scan.ok())
+    return {false, {}, "No se pudo revisar la biblioteca de tomas · " + scan.error};
+
+  const std::string clipName =
+      "Clip consolidado " + std::to_string(scan.entries.size() + 1U);
+  const auto target = aeyla::capture::make_take_file_path(
+      library, songName.empty() ? songId : songName, clipName);
+
+  aeyla::capture::DmxTakeConsolidateRequest request;
+  request.source_path = state->path;
+  request.target_path = target;
+  request.start_frame = state->start_frame;
+  request.end_frame_exclusive = state->end_frame_exclusive;
+  request.consolidated_name = clipName;
+
+  const auto consolidated = aeyla::capture::consolidate_take_range(request);
+  if(!consolidated.succeeded)
+    return {false, {}, consolidated.error};
+
+  aeyla::take_library_session::TakeEditState consolidatedState;
+  consolidatedState.path = consolidated.target_path;
+  consolidatedState.start_frame = 0U;
+  consolidatedState.end_frame_exclusive = consolidated.frame_count;
+  consolidatedState.frame_count = consolidated.frame_count;
+  consolidatedState.frames_per_second = consolidated.frames_per_second;
+  aeyla::take_library_session::set_edit_state(this, songId, consolidatedState);
+  aeyla::take_library_session::set_loaded_path(this, songId,
+                                               consolidated.target_path);
+  aeyla::take_library_session::set_storage_message(
+      this, "CLIP CONSOLIDADO · " + consolidated.target_path.filename().string());
+
+  mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
+  if(!mTakeScheduler.load_take_file(consolidated.target_path,
+                                    GetSampleRate(), error))
+    return {false, clipName,
+            "El clip se guardó, pero no pudo prepararse para reproducción · " + error};
+
+  return {true, clipName,
+          "CLIP CONSOLIDADO · 00:00 = ENTRADA · " +
+              FormatTime(consolidated.duration_seconds) + " · 44 Hz"};
 }
 
 double AeylaVisualDmx::ActiveTakeInSeconds() const

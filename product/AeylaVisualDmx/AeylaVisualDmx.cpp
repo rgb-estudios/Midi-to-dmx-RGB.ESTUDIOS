@@ -110,16 +110,16 @@ std::uint32_t DecodeLittleEndian32(
 AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
 : Plugin(info, MakeConfig(kNumParams, kNumPresets))
 {
-  GetParam(kParamBlackout)->InitBool("Blackout", true);
-  GetParam(kParamGrandMaster)->InitPercentage("Grand Master", 100.0);
-  GetParam(kParamRigMode)->InitEnum("Rig Mode", 0, 2, "", IParam::kFlagsNone,
-                                     "", "10 fixtures", "14 fixtures");
-  GetParam(kParamSource)->InitEnum("Visual Source", 1, 5, "", IParam::kFlagsNone,
-                                    "", "Solid", "Gradient", "Wave", "Noise", "Chase");
-  GetParam(kParamSpeed)->InitPercentage("Animation Speed", 35.0);
-  GetParam(kParamWhiteExtract)->InitPercentage("White Extraction", 20.0);
-  GetParam(kParamAmberExtract)->InitPercentage("Amber Extraction", 15.0);
-  GetParam(kParamUV)->InitPercentage("UV Manual", 0.0);
+  GetParam(kParamBlackout)->InitBool("Apagón", true);
+  GetParam(kParamGrandMaster)->InitPercentage("Master general", 100.0);
+  GetParam(kParamRigMode)->InitEnum("Modo de rig", 0, 2, "", IParam::kFlagsNone,
+                                     "", "10 luminarias", "14 luminarias");
+  GetParam(kParamSource)->InitEnum("Fuente visual", 1, 5, "", IParam::kFlagsNone,
+                                    "", "Color plano", "Degradado", "Onda", "Ruido", "Secuencia");
+  GetParam(kParamSpeed)->InitPercentage("Velocidad de animación", 35.0);
+  GetParam(kParamWhiteExtract)->InitPercentage("Extracción de blanco", 20.0);
+  GetParam(kParamAmberExtract)->InitPercentage("Extracción de ámbar", 15.0);
+  GetParam(kParamUV)->InitPercentage("UV manual", 0.0);
 
   // The application model starts with a valid development document but a
   // disconnected diagnostic backend. Preview is available; real output cannot
@@ -932,8 +932,8 @@ std::string AeylaVisualDmx::ActiveSongStatus() const
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   if(snapshot.song_count == 0U)
-    return "NO SONG";
-  return "SONG " + std::to_string(snapshot.active_song_index + 1U) + "/" +
+    return "SIN CANCIÓN";
+  return "CANCIÓN " + std::to_string(snapshot.active_song_index + 1U) + "/" +
          std::to_string(snapshot.song_count) + " · " + snapshot.active_song_name;
 }
 
@@ -988,7 +988,7 @@ std::string AeylaVisualDmx::ActiveLookStatus() const
         return look.look_id == document.visual.active_look_id;
       });
   if(current == document.looks.end())
-    return "NO LOOK";
+    return "SIN LOOK";
   const auto index = static_cast<std::size_t>(
       std::distance(document.looks.begin(), current));
   return "LOOK " + std::to_string(index + 1U) + "/" +
@@ -1027,13 +1027,13 @@ aeyla::product::AuthoringResult AeylaVisualDmx::StoreCueAtPlayheadFromUI()
   const auto host = mHostTransport.latest();
   if(host.revision == 0U || !host.ppq_position_valid ||
      !std::isfinite(host.ppq_position))
-    return {false, {}, "DAW playhead position is unavailable"};
+    return {false, {}, "La posición del cursor del DAW no está disponible"};
 
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   const auto& show = mModel.show_program();
   if(snapshot.active_song_index >= show.songs.size())
-    return {false, {}, "Create a Song before storing a Cue"};
+    return {false, {}, "Crea una canción antes de guardar un cue"};
   const auto& song = show.songs[snapshot.active_song_index];
 
   std::optional<double> hostStartPpq;
@@ -1049,14 +1049,14 @@ aeyla::product::AuthoringResult AeylaVisualDmx::StoreCueAtPlayheadFromUI()
       hostStartPpq = binding->host_start_ppq;
   }
   if(!hostStartPpq.has_value())
-    return {false, {}, "Set the active Song start from the DAW playhead first"};
+    return {false, {}, "Primero fija el inicio de la canción desde el cursor del DAW"};
 
   const aeyla::runtime::HostSongBinding binding{song.song_id, *hostStartPpq};
   const auto authoringTick =
       aeyla::runtime::project_host_transport_to_authoring_tick(
           host, binding, song);
   if(!authoringTick.has_value())
-    return {false, {}, "DAW playhead is before the active Song start or unavailable"};
+    return {false, {}, "El cursor del DAW está antes del inicio de la canción o no está disponible"};
 
   auto result = mModel.store_cue_at_tick(*authoringTick);
   if(result.succeeded)
@@ -1138,7 +1138,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConfigureArtNetFromUI(
   const std::size_t separator = normalized.rfind('@');
   if(separator == std::string::npos || separator == 0U ||
      separator + 1U >= normalized.size())
-    return {false, {}, "Use numeric IPv4@universe, for example 2.0.0.20@0, or OFF"};
+    return {false, {}, "Usa IPv4@universo numérico, por ejemplo 2.0.0.20@0, o DESACTIVADO"};
 
   const std::string target = TrimAscii(
       std::string_view(normalized).substr(0U, separator));
@@ -1150,12 +1150,12 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConfigureArtNetFromUI(
   if(parsed.ec != std::errc{} ||
      parsed.ptr != universeText.data() + universeText.size() ||
      universe > 0x7FFFU)
-    return {false, {}, "Art-Net universe must be a number from 0 to 32767"};
+    return {false, {}, "El universo Art-Net debe ser un número entre 0 y 32767"};
 
   aeyla::output::ArtNetOutputConfig preflight;
   preflight.target_ipv4 = target;
   preflight.port_address = static_cast<std::uint16_t>(universe);
-  preflight.frames_per_second = 40U;
+  preflight.frames_per_second = aeyla::output::kAeylaArtNetFramesPerSecond;
   std::string error;
   if(!aeyla::output::validate_artnet_output_config(preflight, error))
     return {false, {}, error};
@@ -1169,9 +1169,9 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConfigureArtNetFromUI(
   SyncSnapshotToAtomicsLocked();
   if(!mModel.snapshot().backend_ready)
     return {false, target, mOutputBackendError.empty()
-                                ? "Art-Net backend preflight failed"
+                                ? "Falló la comprobación previa del backend Art-Net"
                                 : mOutputBackendError};
-  return {true, target, "Art-Net ready at " + target + "@" + universeText};
+  return {true, target, "Art-Net listo en " + target + "@" + universeText};
 }
 
 std::string AeylaVisualDmx::OutputBackendStatus() const
@@ -1179,7 +1179,7 @@ std::string AeylaVisualDmx::OutputBackendStatus() const
   const std::scoped_lock lock(mModelMutex);
   const auto& output = mModel.project_document().output;
   if(output.backend != "artnet" || output.target.empty())
-    return "OUTPUT OFF";
+    return "SALIDA DESACTIVADA";
   return "ARTNET " + output.target + "@" + std::to_string(output.universe);
 }
 
@@ -1201,14 +1201,14 @@ void AeylaVisualDmx::RefreshOutputBackendFromProjectLocked()
   {
     mModel.set_backend_ready(false);
     if(output.backend != "none")
-      mOutputBackendError = "Configured output backend is not implemented";
+      mOutputBackendError = "El backend de salida configurado no está implementado";
     return;
   }
 
   aeyla::output::ArtNetOutputConfig config;
   config.target_ipv4 = output.target;
   config.port_address = output.universe;
-  config.frames_per_second = 40U;
+  config.frames_per_second = aeyla::output::kAeylaArtNetFramesPerSecond;
   if(!mArtNetOutput.start(config, mOutputBackendError))
   {
     mModel.set_backend_ready(false);
@@ -1234,7 +1234,7 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
     return;
 
   mLastArtNetSendErrors = stats.send_errors;
-  mOutputBackendError = "Art-Net send failed; output was disarmed";
+  mOutputBackendError = "Falló el envío Art-Net; la salida fue desarmada";
   mArtNetOutput.set_enabled(false);
   mModel.release_transients();
   mModel.set_backend_ready(false);

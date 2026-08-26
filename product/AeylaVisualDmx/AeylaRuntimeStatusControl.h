@@ -33,7 +33,7 @@ public:
     g.DrawLine(line, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
     static constexpr const char* labels[] = {
-        "NEW", "OPEN", "SAVE", "SAVE AS"};
+        "NUEVO", "ABRIR", "GUARDAR", "GUARDAR COMO"};
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
       g.FillRoundRect(raised, mButtons[index], 5.0F);
@@ -43,7 +43,7 @@ public:
                  labels[index], mButtons[index]);
     }
 
-    std::string projectLabel = mPlug.ProjectDirty() ? "UNSAVED  ·  " : "SAVED  ·  ";
+    std::string projectLabel = mPlug.ProjectDirty() ? "SIN GUARDAR  ·  " : "GUARDADO  ·  ";
     projectLabel += mPlug.ProjectName();
     if(!mPlug.CurrentProjectPath().empty())
       projectLabel += "  ·  " + mPlug.CurrentProjectPath().filename().string();
@@ -66,18 +66,18 @@ public:
 
     std::string state;
     if(mPlug.TakeOutputArmed())
-      state = "TAKE ON AIR";
+      state = "TOMA AL AIRE";
     else if(mPlug.TakeRecording())
-      state = "CAPTURING AVOLITES";
+      state = "CAPTURANDO AVOLITES";
     else if(mPlug.TakePlaying())
-      state = "TAKE PLAY / PREVIEW";
+      state = "REPRODUCCIÓN / PREVIA";
     else
-      state = "READY / DISARMED";
+      state = "LISTO / DESARMADO";
 
     if(mPlug.RenderingOffline())
-      state = "OFFLINE RENDER · OUTPUT INHIBITED";
+      state = "RENDERIZADO SIN CONEXIÓN · SALIDA INHIBIDA";
     else if(!mPlug.RuntimeHealthy())
-      state = "RUNTIME FAULT";
+      state = "FALLA DEL MOTOR";
 
     IColor stateColor = valid;
     if(mPlug.TakeOutputArmed()) stateColor = danger;
@@ -159,7 +159,7 @@ private:
     constexpr float left = 12.0F;
     constexpr float topPad = 8.0F;
     constexpr float gap = 6.0F;
-    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F};
+    constexpr float widths[] = {58.0F, 58.0F, 68.0F, 98.0F};
     float cursor = footer.L + left;
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
@@ -175,7 +175,7 @@ private:
     std::string message = status.message;
     if(!status.diagnostics.empty())
       message += "\n\n" + status.diagnostics.front();
-    GetUI()->ShowMessageBox(message.c_str(), "AEYLA project error", kMB_OK);
+    GetUI()->ShowMessageBox(message.c_str(), "AEYLA · ERROR DE PROYECTO", kMB_OK);
   }
 
   void ConfirmDiscardThen(std::function<void()> action)
@@ -187,8 +187,8 @@ private:
     }
 
     GetUI()->ShowMessageBox(
-        "The current AEYLA project has unsaved changes. Continue and discard them?",
-        "Unsaved AEYLA project", kMB_YESNO,
+        "El proyecto AEYLA tiene cambios sin guardar. ¿Continuar y descartarlos?",
+        "AEYLA · CAMBIOS SIN GUARDAR", kMB_YESNO,
         [action = std::move(action)](EMsgBoxResult result) {
           if(result == kYES) action();
         });

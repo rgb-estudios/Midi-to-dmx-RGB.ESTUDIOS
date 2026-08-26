@@ -29,7 +29,7 @@ No se debe utilizar esta revisión en un show hasta completar pruebas físicas, 
 3. Selecciona el adaptador RX que recibe Art-Net desde Avolites.
 4. Selecciona el adaptador TX conectado a la red/nodo de salida.
 5. Verifica IP y máscara del adaptador TX y aplica la red.
-6. Mantén BLACKOUT activo mientras preparas la sesión.
+6. Mantén APAGÓN activo mientras preparas la sesión.
 7. Selecciona o crea la canción que vas a probar.
 
 ## Prueba A — recepción
@@ -85,7 +85,7 @@ El runtime usa muestras procesadas consecutivas para avanzar el cursor. Un salto
 Sólo después de validar A–D:
 
 1. Configura un destino Art-Net válido.
-2. Desactiva BLACKOUT.
+2. Desactiva APAGÓN.
 3. Arma la salida de la toma.
 4. Reproduce el clip.
 5. Confirma en el nodo/luminarias que el universo U1 responde.

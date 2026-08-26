@@ -16,12 +16,13 @@ No se aceptan botones, menús, sliders, pads o selectores "muertos" que parezcan
 
 | Superficie | Acción | Contrato |
 |---|---|---|
-| NEW | crear proyecto AEYLA nuevo | funcional; confirma descarte si hay cambios sin guardar |
-| OPEN | abrir `.aeylashow` | funcional; diálogo nativo y validación transaccional |
-| SAVE | guardar proyecto actual | funcional; si no existe ruta deriva a Save As |
-| SAVE AS | guardar nueva ruta | funcional; fuerza extensión `.aeylashow` |
-| ARM OUTPUT | habilitar salida física | nunca silencioso: arma o muestra causa exacta del bloqueo |
-| BLACKOUT | alternar blackout | funcional y con prioridad de seguridad |
+| NUEVO | crear proyecto AEYLA nuevo | funcional; confirma descarte si hay cambios sin guardar |
+| ABRIR | abrir `.aeylashow` | funcional; diálogo nativo y validación transaccional |
+| GUARDAR | guardar proyecto actual | funcional; si no existe ruta deriva a Guardar como |
+| GUARDAR COMO | guardar nueva ruta | funcional; fuerza extensión `.aeylashow` |
+| ARMAR SALIDA | habilitar salida física | nunca silencioso: arma o muestra causa exacta del bloqueo |
+| APAGÓN | alternar apagón | funcional y con prioridad de seguridad |
+| CONSOLIDAR CLIP | materializar el rango ENTRADA/SALIDA | funcional; crea otro `.aeylatake`, conserva el RAW y deja el clip nuevo listo para reproducir |
 | RIG 10/14 | cambiar fixtures habilitados | funcional y persistente |
 | SOLID / GRADIENT / WAVE / NOISE / CHASE | seleccionar fuente de preview/look | funcional |
 | Fixture 1–14 | selección visual actual | funcional como selección/inspección; no debe presentarse como Programmer por-fixture hasta estar conectado |
@@ -60,15 +61,16 @@ Cuando el Programmer se integre, el contrato será:
 
 Cada PRETEST que cambie UI debe comprobar manualmente en REAPER/Windows:
 
-1. NEW / OPEN / SAVE / SAVE AS;
-2. BLACKOUT;
+1. NUEVO / ABRIR / GUARDAR / GUARDAR COMO;
+2. APAGÓN;
 3. RIG 10/14;
 4. cada fuente visual;
 5. selección de fixtures 1, 7, 8 y 14;
 6. cada slider a mínimo/medio/máximo;
 7. cada executor por mouse;
 8. entrada MIDI física;
-9. ARM bloqueado con causa visible mientras backend esté OFF;
+9. ARMAR bloqueado con causa visible mientras backend esté desactivado;
 10. abrir/cerrar UI repetidamente sin perder interacción.
+11. ajustar ENTRADA/SALIDA, consolidar y comprobar que el RAW no cambia.
 
 Un screenshot correcto no constituye PASS de interacción. Se requiere click/input real en host.

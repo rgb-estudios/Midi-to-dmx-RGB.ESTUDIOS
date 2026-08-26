@@ -592,7 +592,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
   if(!RuntimeHealthy() || RenderingOffline())
     return {false, {}, "La protección del runtime bloquea la salida física"};
   if(EffectiveBlackout())
-    return {false, {}, "Desactiva BLACKOUT antes de armar la salida"};
+    return {false, {}, "Desactiva APAGÓN antes de armar la salida"};
 
   std::string projectId;
   std::string songId;
@@ -677,7 +677,7 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
   else if(scheduler.paused)
     status += " · PAUSA";
   else if(scheduler.ended)
-    status += " · FINAL / HOLD";
+    status += " · FINAL / MANTENER";
   if(scheduler.armed)
     status += " · AL AIRE";
   if(!scheduler.error.empty())

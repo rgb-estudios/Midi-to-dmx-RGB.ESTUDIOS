@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — R07 clip consolidation UI
+
+- Connected the visible `CONSOLIDAR CLIP` action to the file-backed DMX Take
+  consolidator, producing a new bounded 44 Hz `.aeylatake` from the active
+  non-destructive IN/OUT range while preserving the source RAW file.
+- Made the newly consolidated clip the active playback source and surfaced an
+  explicit Spanish success/failure result to the operator.
+
+### Changed — R07 operator surface
+
+- Updated the native control surface and project actions to Spanish and
+  corrected the visible PRETEST identity from R03 to R07.
+- Aligned graphical-product Art-Net setup explicitly with the contractual
+  44 Hz output cadence; the worker continues to normalize legacy requests.
+
+### Validation boundary — R07 clip consolidation UI
+
+- Core tests and product CI must pass on the resulting commit. REAPER host
+  interaction, physical Art-Net/DMX hardware and the field soak remain open
+  until evidence is captured on the target systems.
+
 ### Added — native installer delivery
 
 - Added a reproducible Windows x64 Inno Setup installer for the integrated

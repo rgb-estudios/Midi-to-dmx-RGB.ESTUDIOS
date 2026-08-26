@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -22,6 +23,17 @@ std::filesystem::path test_directory() {
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() /
          ("aeyla_consolidator_" + std::to_string(stamp));
+}
+
+std::uint64_t file_hash(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  std::uint64_t hash = 1469598103934665603ULL;
+  char byte = 0;
+  while(input.get(byte)) {
+    hash ^= static_cast<std::uint8_t>(byte);
+    hash *= 1099511628211ULL;
+  }
+  return input.eof() ? hash : 0U;
 }
 
 }  // namespace
@@ -55,6 +67,8 @@ int main() {
 
   const auto source_size_before = std::filesystem::file_size(source_path, ec);
   check(!ec, "source Take size must be readable");
+  const auto source_hash_before = file_hash(source_path);
+  check(source_hash_before != 0U, "source Take bytes must be hashable");
 
   DmxTakeConsolidateRequest request;
   request.source_path = source_path;
@@ -98,6 +112,8 @@ int main() {
   const auto source_size_after = std::filesystem::file_size(source_path, ec);
   check(!ec && source_size_after == source_size_before,
         "TOMA ORIGINAL must remain byte-size unchanged after consolidation");
+  check(file_hash(source_path) == source_hash_before,
+        "TOMA ORIGINAL must remain byte-for-byte unchanged after consolidation");
 
   DmxTakeConsolidateRequest overwrite = request;
   overwrite.target_path = source_path;
