@@ -12,6 +12,7 @@ struct SessionState {
   std::string project_id;
   std::filesystem::path directory;
   std::map<std::string, std::filesystem::path> loaded_paths;
+  std::map<std::string, TakeEditState> edit_states;
   std::string storage_message;
 };
 
@@ -43,6 +44,7 @@ void set_directory(const void* owner, std::filesystem::path directory) {
   auto& state = state_for(owner);
   state.directory = std::move(directory);
   state.loaded_paths.clear();
+  state.edit_states.clear();
   state.storage_message.clear();
 }
 
@@ -67,6 +69,29 @@ std::filesystem::path loaded_path(const void* owner,
   return found == session->second.loaded_paths.end()
              ? std::filesystem::path{}
              : found->second;
+}
+
+void set_edit_state(const void* owner, std::string_view song_id,
+                    TakeEditState state) {
+  const std::scoped_lock lock(gMutex);
+  state_for(owner).edit_states[std::string(song_id)] = std::move(state);
+}
+
+std::optional<TakeEditState> edit_state(const void* owner,
+                                        std::string_view song_id) {
+  const std::scoped_lock lock(gMutex);
+  const auto session = gSessions.find(owner);
+  if(session == gSessions.end()) return std::nullopt;
+  const auto found = session->second.edit_states.find(std::string(song_id));
+  if(found == session->second.edit_states.end()) return std::nullopt;
+  return found->second;
+}
+
+void clear_edit_state(const void* owner, std::string_view song_id) noexcept {
+  const std::scoped_lock lock(gMutex);
+  const auto session = gSessions.find(owner);
+  if(session == gSessions.end()) return;
+  session->second.edit_states.erase(std::string(song_id));
 }
 
 void set_storage_message(const void* owner, std::string message) {
