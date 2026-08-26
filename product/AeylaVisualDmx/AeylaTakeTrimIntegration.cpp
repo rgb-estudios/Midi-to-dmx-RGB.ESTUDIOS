@@ -1,8 +1,11 @@
 #include "AeylaVisualDmx.h"
+#include "AeylaTakeLibrarySession.h"
+#include "capture/dmx_take_file_store.h"
 
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 
 namespace {
@@ -29,209 +32,265 @@ long long DeltaFrames(double deltaSeconds, std::uint16_t fps)
       deltaSeconds * static_cast<double>(fps)));
 }
 
+std::optional<aeyla::take_library_session::TakeEditState> LatestEditState(
+    const void* owner,
+    const std::filesystem::path& library,
+    std::string_view songId,
+    std::string& error)
+{
+  error.clear();
+  if(library.empty()) {
+    error = "Selecciona primero una biblioteca de tomas";
+    return std::nullopt;
+  }
+  const auto scan = aeyla::capture::scan_take_directory(library, songId);
+  if(!scan.ok()) {
+    error = scan.error;
+    return std::nullopt;
+  }
+  if(scan.entries.empty()) {
+    error = "No existe una toma DMX para editar";
+    return std::nullopt;
+  }
+
+  const auto& newest = scan.entries.front();
+  auto current = aeyla::take_library_session::edit_state(owner, songId);
+  if(current.has_value() && current->path == newest.path &&
+     current->frame_count == newest.frame_count &&
+     current->frames_per_second == newest.frames_per_second)
+    return current;
+
+  aeyla::take_library_session::TakeEditState state;
+  state.path = newest.path;
+  state.start_frame = 0U;
+  state.end_frame_exclusive = newest.frame_count;
+  state.frame_count = newest.frame_count;
+  state.frames_per_second = newest.frames_per_second;
+  aeyla::take_library_session::set_edit_state(owner, songId, state);
+  return state;
+}
+
 }  // namespace
 
 aeyla::product::AuthoringResult AeylaVisualDmx::AdjustActiveTakeInFromUI(
     double deltaSeconds)
 {
   if(TakeRecording())
-    return {false, {}, "Stop REC before editing Take IN"};
+    return {false, {}, "Detén GRABAR antes de editar la ENTRADA"};
   if(TakePlaying())
-    return {false, {}, "STOP / HOLD before editing Take IN"};
+    return {false, {}, "Pausa la reproducción antes de editar la ENTRADA"};
   if(TakeOutputArmed())
-    return {false, {}, "DISARM Take output before editing IN / OUT"};
+    return {false, {}, "Desarma la salida antes de editar ENTRADA / SALIDA"};
 
+  std::string projectId;
   std::string songId;
   {
     const std::scoped_lock modelLock(mModelMutex);
-    songId = ActiveSongIdLocked();
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
   }
   if(songId.empty())
-    return {false, {}, "No active Song"};
+    return {false, {}, "No hay una canción seleccionada"};
 
-  const aeyla::capture::DmxTake* activeTake = nullptr;
-  double inSeconds = 0.0;
-  double outSeconds = 0.0;
-  {
-    const std::scoped_lock takeLock(mTakeMutex);
-    const auto found = mTakesBySong.find(songId);
-    if(found == mTakesBySong.end() || found->second.empty())
-      return {false, {}, "Record or load a Take before editing IN / OUT"};
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value())
+    return {false, {}, error};
+  if(state->frame_count < 2U || state->frames_per_second == 0U)
+    return {false, {}, "La toma es demasiado corta para recortarla"};
 
-    auto& take = found->second.back();
-    if(take.frames.size() < 2U || take.frames_per_second == 0U)
-      return {false, {}, "Take is too short to trim"};
-
-    const auto end = take.effective_end_frame_exclusive();
-    const long long current = static_cast<long long>(take.effective_start_frame());
-    const long long maximum = static_cast<long long>(end) - 2LL;
-    const long long next = std::clamp(
-        current + DeltaFrames(deltaSeconds, take.frames_per_second),
-        0LL, std::max(0LL, maximum));
-    take.trim_start_frame = static_cast<std::size_t>(next);
-
-    activeTake = &take;
-    inSeconds = static_cast<double>(take.effective_start_frame()) /
-                static_cast<double>(take.frames_per_second);
-    outSeconds = static_cast<double>(take.effective_end_frame_exclusive()) /
-                 static_cast<double>(take.frames_per_second);
-  }
+  const long long current = static_cast<long long>(state->start_frame);
+  const long long maximum = static_cast<long long>(state->end_frame_exclusive) - 2LL;
+  const long long next = std::clamp(
+      current + DeltaFrames(deltaSeconds, state->frames_per_second),
+      0LL, std::max(0LL, maximum));
+  state->start_frame = static_cast<std::uint64_t>(next);
+  aeyla::take_library_session::set_edit_state(this, songId, *state);
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
-  std::string error;
-  if(!mTakeScheduler.load_take(activeTake, error))
+  if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error))
     return {false, {}, error};
+  if(!mTakeScheduler.set_play_range(
+         static_cast<std::size_t>(state->start_frame),
+         static_cast<std::size_t>(state->end_frame_exclusive), error))
+    return {false, {}, error};
+  aeyla::take_library_session::set_loaded_path(this, songId, state->path);
 
-  return {true, {}, "TAKE IN " + FormatTime(inSeconds) +
-                    " · OUT " + FormatTime(outSeconds)};
+  const double inSeconds = static_cast<double>(state->start_frame) /
+                           static_cast<double>(state->frames_per_second);
+  const double outSeconds = static_cast<double>(state->end_frame_exclusive) /
+                            static_cast<double>(state->frames_per_second);
+  return {true, {}, "ENTRADA " + FormatTime(inSeconds) +
+                    " · SALIDA " + FormatTime(outSeconds)};
 }
 
 aeyla::product::AuthoringResult AeylaVisualDmx::AdjustActiveTakeOutFromUI(
     double deltaSeconds)
 {
   if(TakeRecording())
-    return {false, {}, "Stop REC before editing Take OUT"};
+    return {false, {}, "Detén GRABAR antes de editar la SALIDA"};
   if(TakePlaying())
-    return {false, {}, "STOP / HOLD before editing Take OUT"};
+    return {false, {}, "Pausa la reproducción antes de editar la SALIDA"};
   if(TakeOutputArmed())
-    return {false, {}, "DISARM Take output before editing IN / OUT"};
+    return {false, {}, "Desarma la salida antes de editar ENTRADA / SALIDA"};
 
+  std::string projectId;
   std::string songId;
   {
     const std::scoped_lock modelLock(mModelMutex);
-    songId = ActiveSongIdLocked();
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
   }
   if(songId.empty())
-    return {false, {}, "No active Song"};
+    return {false, {}, "No hay una canción seleccionada"};
 
-  const aeyla::capture::DmxTake* activeTake = nullptr;
-  double inSeconds = 0.0;
-  double outSeconds = 0.0;
-  {
-    const std::scoped_lock takeLock(mTakeMutex);
-    const auto found = mTakesBySong.find(songId);
-    if(found == mTakesBySong.end() || found->second.empty())
-      return {false, {}, "Record or load a Take before editing IN / OUT"};
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value())
+    return {false, {}, error};
+  if(state->frame_count < 2U || state->frames_per_second == 0U)
+    return {false, {}, "La toma es demasiado corta para recortarla"};
 
-    auto& take = found->second.back();
-    if(take.frames.size() < 2U || take.frames_per_second == 0U)
-      return {false, {}, "Take is too short to trim"};
-
-    const auto start = take.effective_start_frame();
-    const long long current =
-        static_cast<long long>(take.effective_end_frame_exclusive());
-    const long long minimum = static_cast<long long>(start) + 2LL;
-    const long long maximum = static_cast<long long>(take.frames.size());
-    const long long next = std::clamp(
-        current + DeltaFrames(deltaSeconds, take.frames_per_second),
-        minimum, maximum);
-
-    take.trim_end_frame_exclusive =
-        next == maximum ? 0U : static_cast<std::size_t>(next);
-    activeTake = &take;
-    inSeconds = static_cast<double>(take.effective_start_frame()) /
-                static_cast<double>(take.frames_per_second);
-    outSeconds = static_cast<double>(take.effective_end_frame_exclusive()) /
-                 static_cast<double>(take.frames_per_second);
-  }
+  const long long current = static_cast<long long>(state->end_frame_exclusive);
+  const long long minimum = static_cast<long long>(state->start_frame) + 2LL;
+  const long long maximum = static_cast<long long>(state->frame_count);
+  const long long next = std::clamp(
+      current + DeltaFrames(deltaSeconds, state->frames_per_second),
+      minimum, maximum);
+  state->end_frame_exclusive = static_cast<std::uint64_t>(next);
+  aeyla::take_library_session::set_edit_state(this, songId, *state);
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
-  std::string error;
-  if(!mTakeScheduler.load_take(activeTake, error))
+  if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error))
     return {false, {}, error};
+  if(!mTakeScheduler.set_play_range(
+         static_cast<std::size_t>(state->start_frame),
+         static_cast<std::size_t>(state->end_frame_exclusive), error))
+    return {false, {}, error};
+  aeyla::take_library_session::set_loaded_path(this, songId, state->path);
 
-  return {true, {}, "TAKE IN " + FormatTime(inSeconds) +
-                    " · OUT " + FormatTime(outSeconds)};
+  const double inSeconds = static_cast<double>(state->start_frame) /
+                           static_cast<double>(state->frames_per_second);
+  const double outSeconds = static_cast<double>(state->end_frame_exclusive) /
+                            static_cast<double>(state->frames_per_second);
+  return {true, {}, "ENTRADA " + FormatTime(inSeconds) +
+                    " · SALIDA " + FormatTime(outSeconds)};
 }
 
 aeyla::product::AuthoringResult AeylaVisualDmx::ResetActiveTakeTrimFromUI()
 {
   if(TakeRecording() || TakePlaying() || TakeOutputArmed())
-    return {false, {}, "STOP and DISARM before resetting Take IN / OUT"};
+    return {false, {}, "Pausa y desarma antes de restaurar ENTRADA / SALIDA"};
 
+  std::string projectId;
   std::string songId;
   {
     const std::scoped_lock modelLock(mModelMutex);
-    songId = ActiveSongIdLocked();
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
   }
   if(songId.empty())
-    return {false, {}, "No active Song"};
+    return {false, {}, "No hay una canción seleccionada"};
 
-  const aeyla::capture::DmxTake* activeTake = nullptr;
-  {
-    const std::scoped_lock takeLock(mTakeMutex);
-    const auto found = mTakesBySong.find(songId);
-    if(found == mTakesBySong.end() || found->second.empty())
-      return {false, {}, "No active Take"};
-    auto& take = found->second.back();
-    take.trim_start_frame = 0U;
-    take.trim_end_frame_exclusive = 0U;
-    activeTake = &take;
-  }
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value())
+    return {false, {}, error};
+  state->start_frame = 0U;
+  state->end_frame_exclusive = state->frame_count;
+  aeyla::take_library_session::set_edit_state(this, songId, *state);
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
-  std::string error;
-  if(!mTakeScheduler.load_take(activeTake, error))
+  if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error))
     return {false, {}, error};
-  return {true, {}, "Take IN / OUT reset to original recording"};
+  if(!mTakeScheduler.set_play_range(0U,
+         static_cast<std::size_t>(state->frame_count), error))
+    return {false, {}, error};
+  return {true, {}, "ENTRADA / SALIDA restauradas a la grabación completa"};
 }
 
 double AeylaVisualDmx::ActiveTakeInSeconds() const
 {
+  std::string projectId;
   std::string songId;
   {
     const std::scoped_lock modelLock(mModelMutex);
-    songId = ActiveSongIdLocked();
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
   }
-  const std::scoped_lock takeLock(mTakeMutex);
-  const auto found = mTakesBySong.find(songId);
-  if(found == mTakesBySong.end() || found->second.empty()) return 0.0;
-  const auto& take = found->second.back();
-  if(take.frames_per_second == 0U) return 0.0;
-  return static_cast<double>(take.effective_start_frame()) /
-         static_cast<double>(take.frames_per_second);
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  const auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value() || state->frames_per_second == 0U) return 0.0;
+  return static_cast<double>(state->start_frame) /
+         static_cast<double>(state->frames_per_second);
 }
 
 double AeylaVisualDmx::ActiveTakeOutSeconds() const
 {
+  std::string projectId;
   std::string songId;
   {
     const std::scoped_lock modelLock(mModelMutex);
-    songId = ActiveSongIdLocked();
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
   }
-  const std::scoped_lock takeLock(mTakeMutex);
-  const auto found = mTakesBySong.find(songId);
-  if(found == mTakesBySong.end() || found->second.empty()) return 0.0;
-  const auto& take = found->second.back();
-  if(take.frames_per_second == 0U) return 0.0;
-  return static_cast<double>(take.effective_end_frame_exclusive()) /
-         static_cast<double>(take.frames_per_second);
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  const auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value() || state->frames_per_second == 0U) return 0.0;
+  return static_cast<double>(state->end_frame_exclusive) /
+         static_cast<double>(state->frames_per_second);
 }
 
 double AeylaVisualDmx::ActiveTakeOriginalDurationSeconds() const
 {
+  std::string projectId;
   std::string songId;
   {
     const std::scoped_lock modelLock(mModelMutex);
-    songId = ActiveSongIdLocked();
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
   }
-  const std::scoped_lock takeLock(mTakeMutex);
-  const auto found = mTakesBySong.find(songId);
-  return found == mTakesBySong.end() || found->second.empty()
-             ? 0.0
-             : found->second.back().duration_seconds();
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  const auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value() || state->frames_per_second == 0U) return 0.0;
+  return static_cast<double>(state->frame_count) /
+         static_cast<double>(state->frames_per_second);
 }
 
 double AeylaVisualDmx::ActiveTakeEffectiveDurationSeconds() const
 {
+  std::string projectId;
   std::string songId;
   {
     const std::scoped_lock modelLock(mModelMutex);
-    songId = ActiveSongIdLocked();
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
   }
-  const std::scoped_lock takeLock(mTakeMutex);
-  const auto found = mTakesBySong.find(songId);
-  return found == mTakesBySong.end() || found->second.empty()
-             ? 0.0
-             : found->second.back().effective_duration_seconds();
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  const auto library = aeyla::take_library_session::directory(this);
+  std::string error;
+  const auto state = LatestEditState(this, library, songId, error);
+  if(!state.has_value() || state->frames_per_second == 0U ||
+     state->end_frame_exclusive <= state->start_frame) return 0.0;
+  return static_cast<double>(state->end_frame_exclusive - state->start_frame) /
+         static_cast<double>(state->frames_per_second);
 }
