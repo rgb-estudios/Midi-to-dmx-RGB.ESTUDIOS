@@ -55,11 +55,12 @@ Toda superficie visible para operador debe quedar en español, salvo nombres té
 - [x] El primer cuadro de ENTRADA pasa a ser 00:00 del consolidado.
 - [x] Consolidación file-backed con regulación del buffer; no materializa la canción completa en RAM.
 - [x] Reapertura y validación del archivo consolidado: checksum, metadatos, cantidad de cuadros y extremos.
-- [x] Test automatizado: preservación de RAW, 44 Hz, identidad de Song y exactitud de IN/OUT.
+- [x] Test automatizado: preservación byte por byte del RAW, 44 Hz, identidad de Song y exactitud de IN/OUT.
+- [x] Botón/acción visible `CONSOLIDAR CLIP` conectado al backend real.
+- [x] El consolidado pasa a ser el clip activo y queda preparado para reproducción.
 
 ### Pendiente antes de cerrar Gate B
 
-- [ ] Botón/acción visible `CONSOLIDAR CLIP` en el editor.
 - [ ] Timeline de actividad DMX real, no sólo una barra de duración.
 - [ ] Handles ENTRADA/SALIDA arrastrables.
 - [ ] Playhead y scrub/preview.
@@ -69,7 +70,7 @@ Toda superficie visible para operador debe quedar en español, salvo nombres té
 - [ ] No introducir fades de 512 canales sin clasificación de canales continuos/discretos.
 - [ ] Prueba de editor abierto/cerrado mientras la reproducción continúa.
 
-**Estado Gate B:** BACKEND AVANZADO / INTERFAZ AÚN NO CERRADA.
+**Estado Gate B:** FLUJO BÁSICO IN/OUT→CONSOLIDAR INTEGRADO / EDITOR AVANZADO AÚN NO CERRADO.
 
 ---
 

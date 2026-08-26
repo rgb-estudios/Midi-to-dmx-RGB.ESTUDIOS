@@ -40,7 +40,9 @@ Toda superficie visible al operador debe quedar en español.
 
 Se permiten sólo nombres técnicos inevitables: Art-Net, DMX, MIDI, VST3, IPv4, Ableton Live, REAPER, Windows, macOS.
 
-Pendiente: auditoría final de cadenas heredadas todavía visibles en inglés.
+La superficie nativa principal fue traducida y muestra identidad `R07 PRETEST`.
+Queda pendiente verificar en host real que ningún diálogo del framework o del
+sistema operativo exponga cadenas heredadas en inglés.
 
 ## 4. GATE A · TRANSMISIÓN ART-NET · P0
 
@@ -85,7 +87,7 @@ Aun así, antes de la prueba se debe verificar:
 
 ## 5. GATE B · EDITOR DE CLIP DMX · P0
 
-Implementado en backend:
+Implementado en código e interfaz:
 
 - TOMA ORIGINAL preservada e inmutable.
 - captura directa a disco con RAM acotada.
@@ -96,10 +98,12 @@ Implementado en backend:
 - el primer cuadro de ENTRADA pasa a ser 00:00 del consolidado.
 - consolidación file-backed sin materializar toda la canción en RAM.
 - reapertura/validación del consolidado mediante metadatos/checksum/cantidad de cuadros.
+- botón visible `CONSOLIDAR CLIP` conectado al rango ENTRADA/SALIDA;
+- el clip consolidado queda seleccionado y preparado como fuente de reproducción;
+- el test automatizado comprueba que la TOMA ORIGINAL permanece idéntica byte por byte.
 
-Pendiente de interfaz:
+Pendiente para completar el editor avanzado:
 
-- botón visible `CONSOLIDAR CLIP`;
 - timeline de actividad DMX real;
 - handles ENTRADA/SALIDA arrastrables;
 - playhead + scrub/preview;
