@@ -319,12 +319,21 @@ class ArtNetOutputWorker::Impl final {
     wake_.notify_all();
   }
 
+  void consume_one_blackout_frame() noexcept {
+    auto remaining = blackout_burst_remaining_.load(std::memory_order_acquire);
+    while(remaining > 0U &&
+          !blackout_burst_remaining_.compare_exchange_weak(
+              remaining, remaining - 1U,
+              std::memory_order_acq_rel, std::memory_order_acquire)) {
+    }
+  }
+
   void shutdown() noexcept {
     if(worker_.joinable()) {
-      const bool had_authority =
-          enabled_.exchange(false, std::memory_order_acq_rel) ||
+      const bool was_enabled = enabled_.exchange(false, std::memory_order_acq_rel);
+      const bool was_override =
           override_enabled_.exchange(false, std::memory_order_acq_rel);
-      if(had_authority)
+      if(was_enabled || was_override)
         schedule_blackout_burst();
       stop_requested_.store(true, std::memory_order_release);
       wake_.notify_all();
@@ -452,8 +461,8 @@ class ArtNetOutputWorker::Impl final {
     const bool already = fail_closed_.exchange(true, std::memory_order_acq_rel);
     enabled_.store(false, std::memory_order_release);
     override_enabled_.store(false, std::memory_order_release);
-    if(!already)
-      fail_closed_events_.fetch_add(1U, std::memory_order_relaxed);
+    if(already) return;
+    fail_closed_events_.fetch_add(1U, std::memory_order_relaxed);
     schedule_blackout_burst();
   }
 
@@ -519,10 +528,11 @@ class ArtNetOutputWorker::Impl final {
         continue;
       }
 
-      auto remaining = blackout_burst_remaining_.load(std::memory_order_acquire);
+      const auto remaining =
+          blackout_burst_remaining_.load(std::memory_order_acquire);
       if(remaining > 0U) {
         (void)transmit(blackout, 0U, true);
-        blackout_burst_remaining_.fetch_sub(1U, std::memory_order_acq_rel);
+        consume_one_blackout_frame();
       } else if(override_enabled_.load(std::memory_order_acquire)) {
         DmxUniverse latest{};
         std::uint64_t generation = 0U;
