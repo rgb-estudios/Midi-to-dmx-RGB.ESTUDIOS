@@ -10,22 +10,29 @@ DmxTakeScheduler::~DmxTakeScheduler() { shutdown(); }
 
 void DmxTakeScheduler::attach(output::ArtNetOutputWorker* output,
                               const runtime::HostTransportMailbox* host) noexcept {
-  const std::scoped_lock lock(mutex_);
-  output_ = output;
-  host_ = host;
+  {
+    const std::scoped_lock lock(mutex_);
+    output_ = output;
+    host_ = host;
+  }
+  file_player_.attach(output);
 }
 
 bool DmxTakeScheduler::load_take(const DmxTake* take,
                                  std::string& error_message) {
   error_message.clear();
   if(take == nullptr || take->frames.empty() || take->frames_per_second == 0U) {
-    error_message = "Selected Take has no playable DMX frames";
+    error_message = "La toma seleccionada no contiene cuadros DMX reproducibles";
     return false;
   }
-  if(playing_.load(std::memory_order_acquire)) {
-    error_message = "Stop the active Take before loading another Take";
+  if(status().playing) {
+    error_message = "Detén la toma activa antes de cargar otra";
     return false;
   }
+
+  file_player_.disarm();
+  file_player_.unload();
+  file_mode_.store(false, std::memory_order_release);
 
   const std::scoped_lock lock(mutex_);
   take_ = take;
@@ -45,30 +52,61 @@ bool DmxTakeScheduler::load_take(const DmxTake* take,
   return true;
 }
 
+bool DmxTakeScheduler::load_take_file(const std::filesystem::path& path,
+                                      double sample_rate,
+                                      std::string& error_message) {
+  error_message.clear();
+  if(status().playing) {
+    error_message = "Detén el clip DMX activo antes de cargar otro";
+    return false;
+  }
+
+  playing_.store(false, std::memory_order_release);
+  armed_.store(false, std::memory_order_release);
+  {
+    const std::scoped_lock lock(mutex_);
+    take_ = nullptr;
+    hold_valid_ = false;
+    error_.clear();
+  }
+
+  if(!file_player_.load_clip(path, sample_rate, error_message)) {
+    file_mode_.store(false, std::memory_order_release);
+    return false;
+  }
+  file_mode_.store(true, std::memory_order_release);
+  ensure_thread();
+  return true;
+}
+
 bool DmxTakeScheduler::set_play_range(std::size_t start_frame,
                                       std::size_t end_frame_exclusive,
                                       std::string& error_message) {
+  if(file_mode_.load(std::memory_order_acquire))
+    return file_player_.set_play_range(start_frame, end_frame_exclusive,
+                                       error_message);
+
   error_message.clear();
   if(playing_.load(std::memory_order_acquire)) {
-    error_message = "Stop Take playback before editing IN / OUT";
+    error_message = "Detén la reproducción antes de editar ENTRADA / SALIDA";
     return false;
   }
 
   const std::scoped_lock lock(mutex_);
   if(take_ == nullptr || take_->frames.empty()) {
-    error_message = "Load a Take before editing IN / OUT";
+    error_message = "Carga una toma antes de editar ENTRADA / SALIDA";
     return false;
   }
   if(start_frame >= take_->frames.size()) {
-    error_message = "IN is outside the recorded Take";
+    error_message = "La ENTRADA está fuera de la toma grabada";
     return false;
   }
   if(end_frame_exclusive == 0U || end_frame_exclusive > take_->frames.size()) {
-    error_message = "OUT is outside the recorded Take";
+    error_message = "La SALIDA está fuera de la toma grabada";
     return false;
   }
   if(end_frame_exclusive <= start_frame + 1U) {
-    error_message = "IN / OUT must leave at least two DMX frames";
+    error_message = "ENTRADA / SALIDA deben dejar al menos dos cuadros DMX";
     return false;
   }
 
@@ -85,6 +123,11 @@ bool DmxTakeScheduler::set_play_range(std::size_t start_frame,
 }
 
 void DmxTakeScheduler::reset_play_range() noexcept {
+  if(file_mode_.load(std::memory_order_acquire)) {
+    file_player_.reset_play_range();
+    return;
+  }
+
   if(playing_.load(std::memory_order_acquire))
     return;
   const std::scoped_lock lock(mutex_);
@@ -101,16 +144,19 @@ void DmxTakeScheduler::reset_play_range() noexcept {
 }
 
 bool DmxTakeScheduler::play(std::string& error_message) {
+  if(file_mode_.load(std::memory_order_acquire))
+    return file_player_.play_from_start(error_message);
+
   error_message.clear();
   ensure_thread();
   const std::scoped_lock lock(mutex_);
   if(take_ == nullptr || take_->frames.empty()) {
-    error_message = "No Take is loaded";
+    error_message = "No hay una toma cargada";
     return false;
   }
   if(range_end_frame_exclusive_ <= range_start_frame_ + 1U ||
      range_end_frame_exclusive_ > take_->frames.size()) {
-    error_message = "Take IN / OUT range is invalid";
+    error_message = "El rango ENTRADA / SALIDA de la toma no es válido";
     return false;
   }
   current_frame_ = range_start_frame_;
@@ -124,41 +170,102 @@ bool DmxTakeScheduler::play(std::string& error_message) {
   return true;
 }
 
+bool DmxTakeScheduler::pause(std::string& error_message) {
+  if(file_mode_.load(std::memory_order_acquire))
+    return file_player_.pause(error_message);
+  stop_hold();
+  error_message.clear();
+  return true;
+}
+
+bool DmxTakeScheduler::resume(std::string& error_message) {
+  if(file_mode_.load(std::memory_order_acquire))
+    return file_player_.resume(error_message);
+  error_message = "REANUDAR sólo está disponible en el reproductor DMX desde disco";
+  return false;
+}
+
 void DmxTakeScheduler::stop_hold() noexcept {
+  if(file_mode_.load(std::memory_order_acquire)) {
+    const auto current = file_player_.status().transport;
+    if(current == DmxClipTransportState::playing) {
+      std::string ignored;
+      (void)file_player_.pause(ignored);
+    }
+    return;
+  }
+
   playing_.store(false, std::memory_order_release);
   const std::scoped_lock lock(mutex_);
   if(armed_.load(std::memory_order_acquire) && hold_valid_)
     publish_hold_locked();
 }
 
+void DmxTakeScheduler::stop_reset() noexcept {
+  if(file_mode_.load(std::memory_order_acquire)) {
+    file_player_.stop_and_reset();
+    return;
+  }
+  stop_hold();
+  const std::scoped_lock lock(mutex_);
+  if(take_ == nullptr || take_->frames.empty()) return;
+  current_frame_ = range_start_frame_;
+  hold_frame_ = take_->frames[current_frame_];
+  hold_valid_ = true;
+  progress_.store(0.0, std::memory_order_release);
+}
+
+void DmxTakeScheduler::advance_samples(std::uint32_t processed_samples,
+                                       bool rendering_offline) noexcept {
+  if(file_mode_.load(std::memory_order_acquire))
+    file_player_.advance_samples(processed_samples, rendering_offline);
+}
+
 bool DmxTakeScheduler::arm(std::string& error_message) {
   error_message.clear();
   ensure_thread();
 
+  output::ArtNetOutputWorker* output = nullptr;
+  const runtime::HostTransportMailbox* host = nullptr;
+  {
+    const std::scoped_lock lock(mutex_);
+    output = output_;
+    host = host_;
+  }
+  if(output == nullptr) {
+    error_message = "La salida Art-Net no está conectada";
+    return false;
+  }
+  if(!output->stats().running) {
+    error_message = "La salida Art-Net no está activa";
+    return false;
+  }
+  if(host == nullptr) {
+    error_message = "No está disponible el pulso de vida del DAW";
+    return false;
+  }
+  const auto host_state = host->latest();
+  if(host_state.revision == 0U) {
+    error_message = "El DAW aún no ha publicado un pulso de audio válido";
+    return false;
+  }
+  if(host_state.rendering_offline) {
+    error_message = "La salida DMX está bloqueada durante renderizado sin conexión";
+    return false;
+  }
+
+  if(file_mode_.load(std::memory_order_acquire)) {
+    file_player_.set_host_heartbeat_ok(true);
+    if(!file_player_.arm(error_message))
+      return false;
+    armed_.store(true, std::memory_order_release);
+    heartbeat_ok_.store(true, std::memory_order_release);
+    return true;
+  }
+
   const std::scoped_lock lock(mutex_);
-  if(output_ == nullptr) {
-    error_message = "Art-Net output worker is not attached";
-    return false;
-  }
-  if(!output_->stats().running) {
-    error_message = "Art-Net output backend is not running";
-    return false;
-  }
   if(take_ == nullptr || !hold_valid_) {
-    error_message = "Load or record a Take before arming Take output";
-    return false;
-  }
-  if(host_ == nullptr) {
-    error_message = "DAW host transport heartbeat is unavailable";
-    return false;
-  }
-  const auto host = host_->latest();
-  if(host.revision == 0U) {
-    error_message = "DAW host has not published a realtime transport heartbeat yet";
-    return false;
-  }
-  if(host.rendering_offline) {
-    error_message = "Take output is inhibited during offline render";
+    error_message = "Carga o graba una toma antes de armar la salida";
     return false;
   }
 
@@ -172,11 +279,32 @@ bool DmxTakeScheduler::arm(std::string& error_message) {
 
 void DmxTakeScheduler::disarm() noexcept {
   armed_.store(false, std::memory_order_release);
+  file_player_.disarm();
   if(output_ != nullptr)
     output_->set_override_enabled(false);
 }
 
 DmxTakeSchedulerStatus DmxTakeScheduler::status() const {
+  if(file_mode_.load(std::memory_order_acquire)) {
+    const auto file = file_player_.status();
+    DmxTakeSchedulerStatus result;
+    result.running = file.running;
+    result.armed = file.armed;
+    result.playing = file.transport == DmxClipTransportState::playing;
+    result.paused = file.transport == DmxClipTransportState::paused;
+    result.ended = file.transport == DmxClipTransportState::ended;
+    result.file_backed = true;
+    result.hold_valid = file.hold_valid;
+    result.host_heartbeat_ok = file.host_heartbeat_ok;
+    result.progress = std::clamp(file.progress, 0.0, 1.0);
+    result.range_start_frame = static_cast<std::size_t>(file.range_start_frame);
+    result.range_end_frame_exclusive =
+        static_cast<std::size_t>(file.range_end_frame_exclusive);
+    result.current_frame = static_cast<std::size_t>(file.current_frame);
+    result.error = file.error;
+    return result;
+  }
+
   DmxTakeSchedulerStatus result;
   result.running = running_.load(std::memory_order_acquire);
   result.armed = armed_.load(std::memory_order_acquire);
@@ -204,9 +332,11 @@ void DmxTakeScheduler::shutdown() noexcept {
   playing_.store(false, std::memory_order_release);
   armed_.store(false, std::memory_order_release);
   stop_requested_.store(true, std::memory_order_release);
+  file_player_.disarm();
   if(output_ != nullptr)
     output_->set_override_enabled(false);
   if(worker_.joinable()) worker_.join();
+  file_player_.unload();
   running_.store(false, std::memory_order_release);
 }
 
@@ -269,12 +399,24 @@ void DmxTakeScheduler::run() noexcept {
     }
     heartbeat_ok_.store(hostSafe, std::memory_order_release);
 
+    if(file_mode_.load(std::memory_order_acquire)) {
+      file_player_.set_host_heartbeat_ok(hostSafe);
+      if(!hostSafe && file_player_.status().armed) {
+        file_player_.disarm();
+        armed_.store(false, std::memory_order_release);
+        const std::scoped_lock lock(mutex_);
+        error_ = "Salida DMX desarmada automáticamente: se perdió el pulso del host";
+      }
+      std::this_thread::sleep_for(kLoopPeriod);
+      continue;
+    }
+
     if(!hostSafe && armed_.load(std::memory_order_acquire)) {
       armed_.store(false, std::memory_order_release);
       if(output_ != nullptr)
         output_->set_override_enabled(false);
       const std::scoped_lock lock(mutex_);
-      error_ = "Take output auto-disarmed: host heartbeat/offline safety gate";
+      error_ = "Salida de toma desarmada automáticamente por seguridad del host";
     }
 
     {
