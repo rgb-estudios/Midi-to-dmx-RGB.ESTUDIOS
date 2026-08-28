@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Fixed — R07 global blackout / Take authority split
+
+- Separated the global operator/safety blackout latch from the Show renderer's
+  effective artistic black state. A new Song, missing Cue or out-of-range host
+  position can keep the semantic Show frame black without reactivating the red
+  `APAGÓN` control.
+- Made `ARMAR SALIDA DE TOMA` consult only the global latch, allowing an
+  explicitly selected recorded Take to become the independent Art-Net
+  authority while the Show renderer has no resolved Cue.
+- Stopped persisting a transient Cue blackout as the host's global blackout
+  preference and added regressions for both an empty Song and an out-of-range
+  Song position.
+
+### Safety boundary — R07 global blackout / Take authority split
+
+- Activating global `APAGÓN` still disarms both model and Take authority and
+  schedules the deterministic zero-DMX burst. Project/backend/runtime/offline
+  failures continue to force the same global latch; only artistic Cue black is
+  excluded from the Take arm gate.
+
 ### Fixed — R07 headless/minimized Art-Net stability
 
 - Added a regression that runs `ARMAR → REPRODUCIR` for one second without any

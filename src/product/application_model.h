@@ -45,6 +45,11 @@ struct ApplicationSnapshot {
   bool performance_ready{false};
   bool backend_ready{false};
   bool output_armed{false};
+  // Global operator/safety latch. This is intentionally distinct from the
+  // effective artistic blackout below: a Song with no resolved Cue must keep
+  // the Show renderer black, but it must not prevent an explicitly armed DMX
+  // Take from becoming the Art-Net authority.
+  bool global_blackout{true};
   bool blackout{true};
   bool rig14{false};
   std::size_t song_count{0U};

@@ -1103,6 +1103,7 @@ void ApplicationModel::rebuild() {
   snapshot_.performance_ready = performance_ready_;
   snapshot_.backend_ready = safety_.backend_ready();
   snapshot_.output_armed = safety_.output_armed();
+  snapshot_.global_blackout = safety_.blackout();
   snapshot_.blackout = blackout;
   snapshot_.rig14 = rig14_;
   snapshot_.song_count = show_program_.songs.size();

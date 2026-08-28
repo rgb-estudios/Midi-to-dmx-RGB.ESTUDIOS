@@ -58,11 +58,13 @@ public:
 
     if(Contains(mBlackoutButton, x, y))
     {
-      const bool enable = !mPlug.EffectiveBlackout();
+      const bool enable = !mPlug.GlobalBlackout();
       mPlug.SetBlackoutFromUI(enable);
       mMessage = enable
           ? "APAGÓN ACTIVO · salida desarmada."
-          : "APAGÓN DESACTIVADO · el armado sigue siendo manual.";
+          : (mPlug.EffectiveBlackout()
+                 ? "APAGÓN DESACTIVADO · el negro del show no bloquea la toma; arma manualmente."
+                 : "APAGÓN DESACTIVADO · el armado sigue siendo manual.");
       SetDirty(false);
       return;
     }
@@ -706,7 +708,7 @@ private:
            editorView ? kLineStrong : kAccent,
            editorView ? kMuted : kText);
 
-    const bool blackout = mPlug.EffectiveBlackout();
+    const bool blackout = mPlug.GlobalBlackout();
     Button(g, mBlackoutButton, blackout ? "APAGÓN ACTIVO" : "APAGÓN DESACTIVADO",
            blackout ? kAccentDark : kPanelRaised,
            blackout ? kAccent : kLineStrong,

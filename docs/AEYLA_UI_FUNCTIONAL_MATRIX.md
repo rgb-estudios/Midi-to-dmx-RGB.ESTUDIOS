@@ -8,8 +8,8 @@ Regla: visible = funcional, bloqueado con causa o no presente.
 | NUEVO | clic → `NewProjectFromUI` → bundle nuevo seguro | sí | **Implemented**; host por revalidar |
 | ABRIR | clic → diálogo → carga transaccional | sí | **Implemented**; host por revalidar |
 | GUARDAR / GUARDAR COMO | clic → ZIP atómico + read-back + `.bak` | sí | **Implemented**; host por revalidar |
-| APAGÓN | clic → desarma modelo+toma → DMX cero | host/show | **Implemented** |
-| ARMAR SALIDA DE TOMA | clic → gates → arma o explica causa exacta | ARM nunca persiste | **Implemented / Simulated**; nodo pendiente |
+| APAGÓN | clic → alterna el enclavamiento global; ON desarma modelo+toma → DMX cero | host/show | **Implemented**; separado del negro artístico de Cue |
+| ARMAR SALIDA DE TOMA | clic → gates globales → arma aunque el Song no tenga Cue, o explica causa exacta | ARM nunca persiste | **Implemented / Simulated**; nodo pendiente |
 | TOMA / EDICIÓN | clic → workspace de captura/editor | sesión UI | **Implemented** |
 | RED / SALIDA | clic → workspace de red/telemetría | sesión UI | **Implemented** |
 | Lista de canciones | clic selecciona; doble clic renombra; nueva hasta 15 | sí | **Implemented** |

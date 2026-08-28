@@ -404,6 +404,7 @@ void AeylaVisualDmx::StartRuntimeWorker()
     mRuntimeFaulted.store(true, std::memory_order_release);
     mParamBlackout.store(true, std::memory_order_release);
     mOutputArmed.store(false, std::memory_order_release);
+    mGlobalBlackout.store(true, std::memory_order_release);
     mEffectiveBlackout.store(true, std::memory_order_release);
     mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
     try
@@ -427,6 +428,7 @@ void AeylaVisualDmx::StopRuntimeWorker() noexcept
 
   mParamBlackout.store(true, std::memory_order_release);
   mOutputArmed.store(false, std::memory_order_release);
+  mGlobalBlackout.store(true, std::memory_order_release);
   mEffectiveBlackout.store(true, std::memory_order_release);
   mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
   try
@@ -609,6 +611,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     mRuntimeFaulted.store(true, std::memory_order_release);
     mParamBlackout.store(true, std::memory_order_release);
     mOutputArmed.store(false, std::memory_order_release);
+    mGlobalBlackout.store(true, std::memory_order_release);
     mEffectiveBlackout.store(true, std::memory_order_release);
     mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
     try
@@ -877,7 +880,9 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   mHostStateCache.project_schema_minor =
       mModel.project_document().schema_version.minor;
   mHostStateCache.grand_master = snapshot.grand_master;
-  mHostStateCache.blackout = snapshot.blackout;
+  // Persist the global operator/safety latch, never a transient artistic
+  // blackout caused by a missing/out-of-range Cue.
+  mHostStateCache.blackout = snapshot.global_blackout;
 }
 
 void AeylaVisualDmx::CaptureParameterValueFromHost(int paramIdx) noexcept
@@ -1411,6 +1416,7 @@ void AeylaVisualDmx::SyncSnapshotToAtomicsLocked() noexcept
 {
   const auto& snapshot = mModel.snapshot();
   mOutputArmed.store(snapshot.output_armed, std::memory_order_release);
+  mGlobalBlackout.store(snapshot.global_blackout, std::memory_order_release);
   mEffectiveBlackout.store(snapshot.blackout, std::memory_order_release);
   mBackendReady.store(snapshot.backend_ready, std::memory_order_release);
   mProjectValid.store(snapshot.project_valid, std::memory_order_release);

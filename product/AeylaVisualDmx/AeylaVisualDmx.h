@@ -279,6 +279,14 @@ public:
     return mEffectiveBlackout.load(std::memory_order_acquire);
   }
 
+  // The red header control owns the global operator/safety latch. It must not
+  // mirror the Show renderer's effective black state because an unresolved
+  // Cue is allowed to be black while an independent recorded Take is armed.
+  [[nodiscard]] bool GlobalBlackout() const noexcept
+  {
+    return mGlobalBlackout.load(std::memory_order_acquire);
+  }
+
   [[nodiscard]] bool BackendReady() const noexcept
   {
     return mBackendReady.load(std::memory_order_acquire);
@@ -460,6 +468,7 @@ private:
   std::atomic<bool> mHostDeactivationPending{false};
   std::atomic<bool> mHostStateRestoreRejected{false};
   std::atomic<bool> mOutputArmed{false};
+  std::atomic<bool> mGlobalBlackout{true};
   std::atomic<bool> mEffectiveBlackout{true};
   std::atomic<bool> mBackendReady{false};
   std::atomic<bool> mProjectValid{false};

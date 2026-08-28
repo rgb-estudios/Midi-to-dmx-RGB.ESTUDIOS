@@ -39,6 +39,12 @@ y control: no se necesitan para crear un Cue desde la UI.
     44 Hz. Minimizar o cerrar la ventana no debe cambiar esa cadencia mientras
     REAPER continúe procesando audio.
 
+`APAGÓN` representa el enclavamiento global del operador y de seguridad. Una
+canción nueva sin Cue, una posición fuera del Song o un Cue de blackout pueden
+mantener negro el motor artístico del show, pero no vuelven a activar ese botón
+ni bloquean una toma grabada seleccionada. Al activar `APAGÓN` manualmente sí se
+desarman siempre tanto el motor como la salida física de la toma.
+
 Cada cambio artístico/estructural o selección de Look/Song fuerza
 `DISARMED + BLACKOUT`. El
 operador debe salir de Blackout y solicitar ARM otra vez de forma explícita.

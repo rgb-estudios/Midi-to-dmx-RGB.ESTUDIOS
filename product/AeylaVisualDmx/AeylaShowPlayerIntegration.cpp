@@ -744,7 +744,10 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
     return {false, {}, "Configura primero un destino Art-Net válido"};
   if(!RuntimeHealthy() || RenderingOffline())
     return {false, {}, "La protección del runtime bloquea la salida física"};
-  if(EffectiveBlackout())
+  // A recorded Take is an independent output authority. A Song with no
+  // resolved Cue may keep the Show renderer effectively black, but only the
+  // global operator/safety latch is allowed to block Take arming.
+  if(GlobalBlackout())
     return {false, {}, "Desactiva APAGÓN antes de armar la salida"};
 
   std::string projectId;
