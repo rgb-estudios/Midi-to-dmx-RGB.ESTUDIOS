@@ -27,7 +27,7 @@ Los estados permitidos son: **Specified**, **Scaffolded**, **Implemented**,
 | Red Windows | helper UAC, alias secundario, validación y rollback compilados | **Simulated** |
 | VST3 Windows | build, PE, formatos, validadores e instaladores PASS en CI | **Simulated** |
 | Standalone Windows | ejecutable existe pero cae `0xC0000005` en NanoVG/GL2 | **Scaffolded**; P0 abierto |
-| UI macOS | aplicación gráfica abre en runner | **Simulated** |
+| UI macOS | aplicación gráfica compila en runner; el workflow no la abre ni captura interacción | **Simulated** |
 | REAPER Windows/macOS automático | harness existe pero termina por timeout sin evidencia terminal | **Scaffolded** |
 | REAPER manual | reporte del usuario: graba y transmite | evidencia útil, no **Host-tested** formal |
 | Ableton Windows/macOS | sin ejecución documentada | **Specified** |

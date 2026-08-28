@@ -54,6 +54,9 @@
 
 - La suite nativa pasa a 28 targets e incluye aislamiento por instancia,
   selección exacta de archivo y recuperación de captura al descargar el host.
+- Las pruebas UDP esperan de forma acotada la publicación de telemetría después
+  de confirmar el datagrama; ya no dependen del orden de planificación entre
+  `recvfrom()` y el contador atómico del worker en Windows.
 - El flujo portable se simula con Art-Net loopback, captura y TX a 44 Hz,
   `ARMAR → REPRODUCIR`, reloj sin UI y escritura file-backed. La compilación
   gráfica/VST3 Windows/macOS, interacción en host, UAC físico, nodo y soak

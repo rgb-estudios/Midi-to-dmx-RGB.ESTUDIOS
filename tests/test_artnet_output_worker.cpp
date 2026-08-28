@@ -154,6 +154,17 @@ bool receive_until_blackout(TestSocket socket, int maximum_packets) {
   return false;
 }
 
+template <typename Predicate>
+bool wait_until(Predicate&& predicate,
+                std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while(std::chrono::steady_clock::now() < deadline) {
+    if(predicate()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return predicate();
+}
+
 }  // namespace
 
 int main() {
@@ -255,6 +266,20 @@ int main() {
   worker.set_enabled(false);
   check(receive_until_blackout(receiver.socket, 6),
         "disabling output must emit a zero-DMX ArtDMX safety packet");
+
+  // recvfrom() may wake the receiver before the sender thread resumes after
+  // sendto() and publishes its success counters. This is observable on the
+  // Windows runner, so synchronize on the telemetry contract rather than on
+  // scheduler ordering between the two threads.
+  check(wait_until(
+            [&worker]() {
+              const auto stats = worker.stats();
+              return stats.sent_packets >= 3U &&
+                     stats.blackout_packets >= 1U &&
+                     stats.last_sent_generation == 101U;
+            },
+            std::chrono::seconds(2)),
+        "worker telemetry must converge after confirmed UDP delivery");
 
   const auto before_stop = worker.stats();
   check(before_stop.sent_packets >= 3U,

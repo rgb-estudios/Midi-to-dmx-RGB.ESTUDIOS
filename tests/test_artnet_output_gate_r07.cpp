@@ -131,6 +131,17 @@ bool payload_zero(const std::vector<std::uint8_t>& packet) {
                      [](std::uint8_t value) { return value == 0U; });
 }
 
+template <typename Predicate>
+bool wait_until(Predicate&& predicate,
+                std::chrono::milliseconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while(std::chrono::steady_clock::now() < deadline) {
+    if(predicate()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return predicate();
+}
+
 }  // namespace
 
 int main() {
@@ -186,6 +197,17 @@ int main() {
   }
   check(blackout_count >= static_cast<int>(kAeylaArtNetBlackoutBurstFrames),
         "disarm must emit the complete multi-frame BLACKOUT burst");
+
+  // UDP delivery can unblock this receiver before the worker publishes the
+  // corresponding atomic counters. Wait for that bounded telemetry handoff;
+  // the packet-level burst requirement above remains unchanged.
+  check(wait_until(
+            [&worker]() {
+              return worker.stats().blackout_packets >=
+                     kAeylaArtNetBlackoutBurstFrames;
+            },
+            std::chrono::seconds(2)),
+        "BLACKOUT telemetry must converge after the complete UDP burst");
 
   const auto after_blackout = worker.stats();
   check(after_blackout.blackout_packets >= kAeylaArtNetBlackoutBurstFrames,
