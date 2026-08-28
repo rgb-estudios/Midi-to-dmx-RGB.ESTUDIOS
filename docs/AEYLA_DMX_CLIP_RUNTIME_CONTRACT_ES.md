@@ -1,6 +1,6 @@
 # AEYLA — Contrato de ejecución de muestra DMX
 
-Estado: **R07 / arquitectura congelada para integración MIDI**  
+Estado: **R07 / integración MIDI implementada en código; validación Host pendiente**
 Ámbito: captura Art-Net, persistencia, edición no destructiva, consolidación, reproducción por eventos MIDI y salida Art-Net de un universo.
 
 ## 1. Principio de producto
@@ -49,7 +49,7 @@ Después de consolidar, cada muestra posee una línea de tiempo relativa propia:
 0 muestras ───────────────────────── final de la muestra
 ```
 
-Al recibir REPRODUCIR o LANZAR, AEYLA pone el cursor relativo en cero y avanza contando únicamente las muestras de audio procesadas mientras la muestra DMX se encuentra reproduciendo.
+Al recibir REPRODUCIR o LANZAR, AEYLA pone el cursor relativo en cero y avanza contando únicamente las muestras de audio procesadas mientras la muestra DMX se encuentra reproduciendo **y el transporte del DAW está corriendo**. STOP/PAUSA del DAW congela el cursor; continuar el transporte reanuda el conteo sin usar ni perseguir la posición absoluta del arreglo.
 
 ```text
 cursorMuestras += muestrasProcesadas
@@ -67,7 +67,7 @@ Consecuencias obligatorias:
 - el final de la muestra mantiene el último cuadro válido salvo una política explícita diferente.
 - mover, reordenar o renombrar pistas del DAW no desplaza el DMX.
 - mover el cursor, crear bucles o saltar en la línea de tiempo global del DAW no reposiciona AEYLA por sí solo.
-- únicamente un comando MIDI explícito cambia selección, transporte o posición de la muestra DMX.
+- únicamente un comando MIDI explícito selecciona, reinicia o cambia el transporte interno de la muestra; el estado correr/detener del DAW sólo habilita o congela su avance por muestras.
 - cerrar o minimizar la interfaz gráfica no puede detener el motor de ejecución.
 - la reproducción manual continúa si REAPER muestra `audio device closed`; no depende de `OnIdle` ni del callback mientras el complemento siga activo.
 - un renderizado sin reproducción en tiempo real inhibe siempre la salida física Art-Net.
@@ -88,6 +88,12 @@ REAPER/Ableton entregan directamente transporte y conteo de muestras, que son
 la referencia más precisa cuando el propio host genera el MTC enviado a la
 consola. Si la grabación comienza con el transporte ya corriendo o sin snapshot
 válido, AEYLA conserva la toma pero exige ajustar ENTRADA manualmente.
+
+Asignar canciones a horas MTC distintas puede conservarse como convención de
+la sesión de Avolites, pero no es el reloj del reproductor AEYLA. Recircular el
+MTC generado por el mismo DAW añadiría cuantización Quarter Frame, ruteo y otro
+punto de pérdida sin mejorar la sincronía. El disparo MIDI y la pista de audio
+comparten directamente el reloj de muestras del anfitrión.
 
 ### Entrada
 
@@ -154,6 +160,18 @@ Comandos visibles mínimos:
 
 Los números de nota no se fijan en el motor. Deben ser asignables mediante **APRENDER MIDI** para integrarse con una sesión existente sin obligar a reorganizarla.
 
+Implementación R07:
+
+- desactivada por defecto y almacenada en el estado VST3;
+- canal inicial 16, configurable entre 1–16;
+- notas iniciales 36–40 para ANTERIOR, SIGUIENTE, PLAY, PAUSA y STOP;
+- rango inicial 48–62 para LANZAR CANCIONES 01–15;
+- APRENDER MIDI captura nota y canal y rechaza colisiones;
+- al habilitar MIDI SHOW, AEYLA valida y precarga de forma acotada hasta 15 lectores (64 KiB de caché por canción); ARMAR permanece bloqueado hasta terminar;
+- el cambio entre canciones armadas intercambia lectores ya validados sin desactivar la autoridad Art-Net ni insertar cuadros de APAGÓN;
+- el desbordamiento de la cola acotada provoca desarme + APAGÓN visible;
+- ningún mensaje MIDI puede armar Art-Net ni desactivar APAGÓN.
+
 ## 6. Canción activa y canción preparada
 
 Para evitar cortes accidentales, AEYLA distingue dos estados funcionales:
@@ -200,6 +218,11 @@ El reloj del sistema sólo se permite como vigilancia de vida:
 - si una reproducción DAW/MIDI deja de recibir bloques por el umbral de seguridad, AEYLA inhibe la autoridad física;
 - la reproducción manual conserva su reloj y autoridad al perder únicamente los bloques de audio; APAGÓN, renderizado sin conexión, descarga o cierre siguen desarmando;
 - la señal de vida jamás calcula qué cuadro artístico corresponde.
+
+Las mutaciones PLAY/PAUSA/REANUDAR/STOP usan una barrera atómica con el callback
+de audio. El callback nunca espera: durante la brevísima mutación omite el
+avance, publica su contador y el runtime corrige el cursor contra la muestra
+exacta del evento. Esto evita perder o contar dos veces un bloque concurrente.
 
 La transmisión y el avance no dependen de `OnIdle`, del repintado ni de que la
 ventana del complemento permanezca abierta. Minimizar/cerrar la UI sólo detiene
@@ -326,9 +349,9 @@ No se incorporarán nuevas etiquetas visibles en inglés sin una razón técnica
 ## 13. P0 antes de prueba oficial
 
 1. conectar la captura principal al camino directo a disco;
-2. conectar el reproductor principal al cursor relativo gobernado por comandos MIDI;
-3. respetar el desplazamiento exacto de eventos MIDI dentro de cada bloque;
-4. implementar ACTIVA / PREPARADA + SELECCIONAR / SIGUIENTE / ANTERIOR / REPRODUCIR / PAUSA / REANUDAR / DETENER / LANZAR CANCIÓN;
+2. validar en Host el reproductor principal conectado al cursor relativo gobernado por comandos MIDI;
+3. validar en Host el desplazamiento exacto de eventos MIDI dentro de cada bloque;
+4. validar en Host ACTIVA / PREPARADA + SIGUIENTE / ANTERIOR / REPRODUCIR / PAUSA / REANUDAR / DETENER / LANZAR CANCIÓN;
 5. eliminar la caché de múltiples tomas completas por canción;
 6. repetir salida Art-Net física con interfaz seleccionada, nodo U1 y DMX real;
 7. verificar funcionamiento con la interfaz gráfica cerrada;

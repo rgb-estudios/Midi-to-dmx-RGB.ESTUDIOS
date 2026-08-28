@@ -112,7 +112,7 @@ En el Administrador de tareas registra RAM al inicio y luego de:
 
 La memoria puede fluctuar por host, UI y cachés, pero no debe crecer proporcionalmente a la duración de cada toma ni acumular cinco payloads completos por canción.
 
-## Funciones congeladas para la siguiente integración MIDI
+## Automatización MIDI integrada en este checkpoint
 
 La arquitectura de show queda definida así:
 
@@ -125,7 +125,10 @@ La arquitectura de show queda definida así:
 - DETENER / REINICIAR;
 - opcional: LANZAR CANCIÓN N.
 
-Estas acciones deben ser asignables por MIDI y respetar el `sampleOffset` del evento. El orden de tracks, escenas o clips en Ableton Live/REAPER no gobierna la posición artística del DMX.
+Estas acciones son asignables desde `MIDI / SHOW` y respetan el `sampleOffset`
+del evento. El orden de tracks, escenas o clips en Ableton Live/REAPER no
+gobierna la posición artística del DMX. Su validación dentro del host sigue
+siendo un gate abierto de PRETEST.
 
 ## Criterio de aprobación de esta revisión
 
@@ -139,4 +142,6 @@ R07 PRETEST sólo se considera aprobado cuando:
 - transmite Art-Net por la NIC física seleccionada;
 - no presenta crecimiento anormal de RAM durante una campaña prolongada.
 
-La integración MIDI completa, MIDI Learn, consolidación material del clip y el editor gráfico avanzado siguen separados de este gate para no mezclar estabilidad básica con funciones todavía no validadas.
+MIDI Learn, consolidación material y editor gráfico están integrados en código;
+siguen denominándose PRETEST hasta comprobar interacción, sincronía y Art-Net
+continuo dentro de los hosts y el hardware reales.

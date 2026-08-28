@@ -199,29 +199,32 @@ Pero el producto no debe depender de que el usuario dibuje manualmente el show c
 - Stop/seek/reload: estado reconstruido determinísticamente.
 - Blackout/Panic tienen precedencia sobre cues y MIDI.
 
-## 8. Estado transitorio de Alpha 0.3
+## 8. Estado transitorio de R07 PRETEST
 
-La implementación actual **no representa todavía este flujo final**.
+El transporte de TOMAS DMX ya recibe notas configurables, conserva su
+`sampleOffset`, distingue PREPARADA/ACTIVA y transmite mediante el backend
+Art-Net integrado. El flanco y las muestras del host también alinean la
+ENTRADA automática de una captura armada antes de PLAY/MTC.
 
-Actualmente:
+El namespace creativo de Cues/ejecutores continúa separado:
 
-- sólo las notas MIDI 36–43 disparan 8 ejecutores;
-- los 8 ejecutores son momentáneos;
-- la duración de ciertos clips está modelada como longitud de nota;
-- la UI de canción/cue/timeline todavía no constituye el flujo principal;
-- el wrapper recibe Note On/Off, pero el bridge completo de transporte del DAW sigue pendiente;
-- el modelo genera un frame DMX de 512 bytes, pero el backend Art-Net del producto integrado todavía no está conectado;
-- por tanto `BACKEND OFF / SIMULATED / NO DMX` es el estado correcto de Alpha 0.3.
+- las notas no reservadas por `MIDI / SHOW` siguen llegando a los 8 ejecutores;
+- los ejecutores actuales permanecen momentáneos;
+- el editor semántico final de Scene/Cue y sus modos Toggle/Latch/One-shot
+  todavía no constituye la superficie principal;
+- el transporte de TOMAS implementado no debe confundirse con ese futuro
+  sistema creativo completo.
 
-Estos puntos son deuda de implementación y no deben reinterpretarse como decisiones de UX definitivas.
+El estado correcto sigue siendo **PRETEST** hasta probar host, hardware y soak;
+ya no corresponde describir el backend del producto como desconectado.
 
 ## 9. Próximas prioridades derivadas de este contrato
 
 1. Reparar interacción completa de UI en host.
-2. Verificar MIDI físico → REAPER → plugin con indicador visible.
+2. Verificar MIDI físico/piano-roll → REAPER/Ableton → plugin con indicador visible.
 3. Separar escenas persistentes de ejecutores momentáneos.
 4. Crear editor de Cue/Scene con `STORE CUE` y `MIDI LEARN`.
-5. Conectar transporte/posición del host.
+5. Validar en host real el transporte por muestras y el `sampleOffset` ya conectados.
 6. Crear timeline de cues por canción con captura contra transporte.
 7. Implementar worker Art-Net latest-frame-only y configuración de red.
 8. Añadir output test/preflight y seguridad de backend.

@@ -84,6 +84,34 @@ bool DmxTakeScheduler::load_take_file(const std::filesystem::path& path,
   return true;
 }
 
+bool DmxTakeScheduler::replace_armed_take_file(
+    DmxTakeFileReader& validated_reader,
+    double sample_rate,
+    std::size_t start_frame,
+    std::size_t end_frame_exclusive,
+    DmxClipClockSource clock_source,
+    std::uint64_t elapsed_samples,
+    std::string& error_message) {
+  if(!file_mode_.load(std::memory_order_acquire)) {
+    error_message = "La toma activa no usa el reproductor respaldado por archivo";
+    return false;
+  }
+  if(!file_player_.replace_armed_clip(
+         validated_reader, sample_rate,
+         static_cast<std::uint64_t>(start_frame),
+         static_cast<std::uint64_t>(end_frame_exclusive), clock_source,
+         elapsed_samples, error_message))
+    return false;
+  armed_.store(true, std::memory_order_release);
+  playing_.store(false, std::memory_order_release);
+  file_mode_.store(true, std::memory_order_release);
+  {
+    const std::scoped_lock lock(mutex_);
+    error_.clear();
+  }
+  return true;
+}
+
 bool DmxTakeScheduler::set_play_range(std::size_t start_frame,
                                       std::size_t end_frame_exclusive,
                                       std::string& error_message) {
@@ -149,9 +177,11 @@ void DmxTakeScheduler::reset_play_range() noexcept {
 }
 
 bool DmxTakeScheduler::play(std::string& error_message,
-                            DmxClipClockSource clock_source) {
+                            DmxClipClockSource clock_source,
+                            std::uint64_t elapsed_samples) {
   if(file_mode_.load(std::memory_order_acquire))
-    return file_player_.play_from_start(clock_source, error_message);
+    return file_player_.play_from_start(clock_source, error_message,
+                                        elapsed_samples);
 
   error_message.clear();
   ensure_thread();
@@ -176,17 +206,19 @@ bool DmxTakeScheduler::play(std::string& error_message,
   return true;
 }
 
-bool DmxTakeScheduler::pause(std::string& error_message) {
+bool DmxTakeScheduler::pause(std::string& error_message,
+                             std::uint64_t rewind_samples) {
   if(file_mode_.load(std::memory_order_acquire))
-    return file_player_.pause(error_message);
+    return file_player_.pause(error_message, rewind_samples);
   stop_hold();
   error_message.clear();
   return true;
 }
 
-bool DmxTakeScheduler::resume(std::string& error_message) {
+bool DmxTakeScheduler::resume(std::string& error_message,
+                              std::uint64_t elapsed_samples) {
   if(file_mode_.load(std::memory_order_acquire))
-    return file_player_.resume(error_message);
+    return file_player_.resume(error_message, elapsed_samples);
   error_message = "REANUDAR sólo está disponible en el reproductor DMX desde disco";
   return false;
 }
@@ -234,6 +266,12 @@ void DmxTakeScheduler::advance_samples(std::uint32_t processed_samples,
                                        bool rendering_offline) noexcept {
   if(file_mode_.load(std::memory_order_acquire))
     file_player_.advance_samples(processed_samples, rendering_offline);
+}
+
+void DmxTakeScheduler::synchronize_host_cursor(
+    std::uint64_t cursor_samples) noexcept {
+  if(file_mode_.load(std::memory_order_acquire))
+    file_player_.synchronize_host_cursor(cursor_samples);
 }
 
 bool DmxTakeScheduler::arm(std::string& error_message) {
@@ -324,6 +362,7 @@ DmxTakeSchedulerStatus DmxTakeScheduler::status() const {
     result.range_end_frame_exclusive =
         static_cast<std::size_t>(file.range_end_frame_exclusive);
     result.current_frame = static_cast<std::size_t>(file.current_frame);
+    result.cursor_samples = file.cursor_samples;
     result.error = file.error;
     if(result.error.empty()) {
       const std::scoped_lock lock(mutex_);

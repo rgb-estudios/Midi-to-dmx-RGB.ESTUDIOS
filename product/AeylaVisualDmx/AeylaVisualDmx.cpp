@@ -128,6 +128,9 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   CaptureAllParameterValuesFromHost();
   SyncSnapshotToAtomicsLocked();
   RefreshHostStateCacheLocked();
+  mShowMidiMappingPacked.store(aeyla::runtime::pack_show_midi_mapping(
+                                   mHostStateCache.show_midi),
+                               std::memory_order_release);
 
 #if IPLUG_EDITOR
   mMakeGraphicsFunc = [&]() {
@@ -189,14 +192,30 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
   // Arrangement position is deliberately NOT used as the Take clock: Stop,
   // Seek and Loop must never relocate or duplicate a relative DMX clip.
   const bool renderingOffline = GetRenderingOffline();
-  mHostTransport.publish(GetTransportIsRunning(),
+  const bool transportRunning = GetTransportIsRunning();
+  mHostTransport.publish(transportRunning,
                          renderingOffline,
                          GetSamplePos(),
                          GetPPQPos(),
                          GetTempo());
   if(nFrames > 0)
-    mTakeScheduler.advance_samples(static_cast<std::uint32_t>(nFrames),
-                                   renderingOffline);
+  {
+    mAudioAdvanceSequence.fetch_add(1U, std::memory_order_acq_rel);
+    if(transportRunning)
+    {
+      if(!mShowTransportMutation.load(std::memory_order_acquire))
+        mTakeScheduler.advance_samples(static_cast<std::uint32_t>(nFrames),
+                                       renderingOffline);
+      // This counter advances even when a transport mutation temporarily
+      // suppresses the scheduler increment: the runtime catches that exact
+      // interval up after the atomic command boundary.
+      mProcessedTransportSamples.fetch_add(
+          static_cast<std::uint64_t>(nFrames), std::memory_order_release);
+    }
+    mProcessedAudioSamples.fetch_add(static_cast<std::uint64_t>(nFrames),
+                                     std::memory_order_release);
+    mAudioAdvanceSequence.fetch_add(1U, std::memory_order_release);
+  }
 
   // Silent MIDI-controlled lighting runtime: the host callback only clears the
   // advertised bus. It performs no project, graphics, DMX, network or file work.
@@ -218,15 +237,59 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
     mMidiEventCount.fetch_add(1, std::memory_order_relaxed);
     mLastMidiNote.store(note, std::memory_order_relaxed);
 
+    const auto channel = static_cast<std::uint8_t>(
+        std::clamp(msg.Channel() + 1, 1, 16));
+    const auto midiNote = static_cast<std::uint8_t>(std::clamp(note, 0, 127));
+    const bool positiveNoteOn = status == IMidiMsg::kNoteOn && velocity > 0;
+
+    if(positiveNoteOn)
+    {
+      const auto learnTarget = mShowMidiLearnTarget.exchange(
+          aeyla::runtime::ShowMidiLearnTarget::none,
+          std::memory_order_acq_rel);
+      if(learnTarget != aeyla::runtime::ShowMidiLearnTarget::none)
+      {
+        const std::uint32_t packed =
+            static_cast<std::uint32_t>(learnTarget) |
+            (static_cast<std::uint32_t>(channel) << 8U) |
+            (static_cast<std::uint32_t>(midiNote) << 16U) |
+            (1U << 24U);
+        mPendingMidiLearnPacked.store(packed, std::memory_order_release);
+        return;
+      }
+    }
+
+    aeyla::runtime::ShowMidiMatch showMatch{};
+    const auto showMapping = aeyla::runtime::unpack_show_midi_mapping(
+        mShowMidiMappingPacked.load(std::memory_order_acquire));
+    const bool mappedShowNote = aeyla::runtime::match_show_midi_note(
+        showMapping, channel, midiNote, 127U, showMatch);
+    if(mappedShowNote)
+    {
+      if(positiveNoteOn)
+      {
+        const auto completed = mProcessedAudioSamples.load(
+            std::memory_order_acquire);
+        const auto transportCompleted = mProcessedTransportSamples.load(
+            std::memory_order_acquire);
+        const auto offset = static_cast<std::uint32_t>(
+            std::max(msg.mOffset, 0));
+        const auto showEvent = aeyla::runtime::make_show_midi_event(
+            showMatch.command, showMatch.song_index, channel, midiNote,
+            completed, transportCompleted, offset);
+        (void)mShowMidiIngress.try_submit(showEvent);
+      }
+      return;
+    }
+
     aeyla::runtime::HostEvent event{};
     event.type = status == IMidiMsg::kNoteOn && velocity > 0
                      ? aeyla::runtime::HostEventType::note_on
                      : aeyla::runtime::HostEventType::note_off;
     // iPlug reports channels as 0..15. AEYLA's authored show contract uses
     // conventional MIDI channels 1..16, so normalize at the wrapper boundary.
-    event.channel = static_cast<std::uint8_t>(
-        std::clamp(msg.Channel() + 1, 1, 16));
-    event.note = static_cast<std::uint8_t>(std::clamp(note, 0, 127));
+    event.channel = channel;
+    event.note = midiNote;
     event.value = static_cast<float>(std::clamp(velocity, 0, 127)) / 127.0F;
     event.sample_offset = msg.mOffset;
 
@@ -483,6 +546,9 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 
     if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
     {
+      ClearShowMidiCommandsLocked();
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
       mTakeScheduler.disarm();
       mModel.release_transients();
       mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
@@ -496,6 +562,12 @@ void AeylaVisualDmx::RuntimeTick() noexcept
         host.rendering_offline, std::memory_order_acq_rel);
     if(host.rendering_offline)
     {
+      if(!wasOffline)
+      {
+        ClearShowMidiCommandsLocked();
+        if(ShowMidiMapping().enabled)
+          mMidiPreflightCursor.store(0, std::memory_order_release);
+      }
       mTakeScheduler.disarm();
       if(!wasOffline)
         mModel.release_transients();
@@ -503,6 +575,9 @@ void AeylaVisualDmx::RuntimeTick() noexcept
       mModel.set_blackout(true);
       mParamBlackout.store(true, std::memory_order_release);
     }
+
+    if(!host.rendering_offline)
+      DrainShowMidiCommandsLocked(host);
 
     const auto& snapshotBeforeTransport = mModel.snapshot();
     const auto& show = mModel.show_program();
@@ -617,6 +692,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     mGlobalBlackout.store(true, std::memory_order_release);
     mEffectiveBlackout.store(true, std::memory_order_release);
     mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
     mTakeScheduler.disarm();
     try
     {
@@ -770,6 +846,7 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
 {
   if(mHostStateRestoreRejected.exchange(false, std::memory_order_acq_rel))
   {
+    ClearShowMidiCommandsLocked();
     mTakeScheduler.disarm();
     mModel.release_transients();
     mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
@@ -787,6 +864,7 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   if(!pending.has_value())
     return;
 
+  ClearShowMidiCommandsLocked();
   mTakeScheduler.disarm();
   mModel.release_transients();
   mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
@@ -811,6 +889,16 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
     previousCache = mHostStateCache;
     mHostStateCache = *pending;
   }
+  mShowMidiMappingPacked.store(
+      aeyla::runtime::pack_show_midi_mapping(pending->show_midi),
+      std::memory_order_release);
+  mMidiPreflightCursor.store(pending->show_midi.enabled ? 0 : -1,
+                             std::memory_order_release);
+  SetShowMidiMessage(pending->show_midi.enabled
+      ? "MIDI SHOW RESTAURADO · canal " +
+            std::to_string(pending->show_midi.channel) +
+            " · salida física permanece desarmada"
+      : "MIDI SHOW DESACTIVADO · mapa restaurado");
   const bool checksumMismatch = !IsZero(pending->project_checksum) &&
                                 pending->project_checksum != previousCache.project_checksum;
 
@@ -1049,8 +1137,13 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
 {
   if(direction == 0 || TakeRecording())
     return false;
-  mTakeScheduler.stop_reset();
-  mTakeScheduler.disarm();
+  const bool preserveTakeAuthority = TakeOutputArmed();
+  if(!preserveTakeAuthority)
+  {
+    mTakeScheduler.stop_reset();
+    mTakeScheduler.disarm();
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+  }
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   if(snapshot.song_count == 0U)
@@ -1076,7 +1169,12 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
         });
   }
   mActiveSongBound.store(bound, std::memory_order_release);
-  mParamBlackout.store(true, std::memory_order_release);
+  mMidiPreloadSongRequest.store(static_cast<int>(target),
+                                std::memory_order_release);
+  SetShowMidiMessage("PREPARADA · " + mModel.snapshot().active_song_name +
+                     " · la canción al aire continúa");
+  if(!preserveTakeAuthority)
+    mParamBlackout.store(true, std::memory_order_release);
   mLastProjectedSongId.clear();
   mLastProjectedTick = 0U;
   SyncSnapshotToAtomicsLocked();
@@ -1169,6 +1267,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::CreateSongFromUI()
     return {false, {}, "Detén y guarda la toma antes de crear otra canción"};
   mTakeScheduler.stop_reset();
   mTakeScheduler.disarm();
+  mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+  mActiveTakeSongIndex.store(-1, std::memory_order_release);
   const std::scoped_lock lock(mModelMutex);
   auto result = mModel.create_song();
   if(result.succeeded)
@@ -1177,6 +1277,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::CreateSongFromUI()
     mActiveSongBound.store(false, std::memory_order_release);
     mLastProjectedSongId.clear();
     mLastProjectedTick = 0U;
+    if(ShowMidiMapping().enabled)
+      mMidiPreflightCursor.store(0, std::memory_order_release);
   }
   SyncSnapshotToAtomicsLocked();
   return result;

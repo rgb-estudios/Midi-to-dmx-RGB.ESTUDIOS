@@ -78,6 +78,68 @@ bool DmxClipPlaybackEngine::load_clip(const std::filesystem::path& path,
   return true;
 }
 
+bool DmxClipPlaybackEngine::replace_armed_clip(
+    DmxTakeFileReader& validated_reader,
+    double sample_rate,
+    std::uint64_t range_start_frame,
+    std::uint64_t range_end_frame_exclusive,
+    DmxClipClockSource clock_source,
+    std::uint64_t elapsed_samples,
+    std::string& error_message) {
+  error_message.clear();
+  if(!valid_sample_rate(sample_rate)) {
+    error_message = "La frecuencia de muestreo del host está fuera del rango admitido";
+    return false;
+  }
+  const auto candidate = validated_reader.info();
+  if(!candidate.open || candidate.frame_count == 0U) {
+    error_message = "La toma preparada no contiene cuadros DMX validados";
+    return false;
+  }
+  if(range_start_frame >= range_end_frame_exclusive ||
+     range_end_frame_exclusive > candidate.frame_count) {
+    error_message = "El rango preparado está fuera de la toma validada";
+    return false;
+  }
+
+  {
+    const std::scoped_lock lock(mutex_);
+    if(!armed_.load(std::memory_order_acquire)) {
+      error_message = "La autoridad anterior se desarmó durante la preparación";
+      return false;
+    }
+    if(output_ == nullptr || output_->stats().fail_closed) {
+      error_message = "La salida Art-Net requiere rearme manual";
+      return false;
+    }
+    if(rendering_offline_.load(std::memory_order_acquire)) {
+      error_message = "El renderizado sin conexión bloquea el cambio de canción";
+      return false;
+    }
+
+    // The Art-Net worker keeps retransmitting the old held frame throughout
+    // candidate validation. This single swap is the authority boundary: no
+    // DISARM/BLACKOUT gap is introduced between Songs.
+    reader_.swap(validated_reader);
+    sample_rate_ = sample_rate;
+    range_start_frame_ = range_start_frame;
+    range_end_frame_exclusive_ = range_end_frame_exclusive;
+    cursor_samples_.store(elapsed_samples, std::memory_order_relaxed);
+    hold_valid_ = false;
+    current_frame_.store(range_start_frame, std::memory_order_relaxed);
+    progress_.store(0.0, std::memory_order_relaxed);
+    clock_source_.store(clock_source, std::memory_order_release);
+    monotonic_anchor_samples_ = elapsed_samples;
+    monotonic_anchor_time_ = std::chrono::steady_clock::now();
+    transport_.store(DmxClipTransportState::playing,
+                     std::memory_order_release);
+    loaded_.store(true, std::memory_order_release);
+    set_error({});
+  }
+  ensure_thread();
+  return true;
+}
+
 void DmxClipPlaybackEngine::unload() noexcept {
   disarm();
   const std::scoped_lock lock(mutex_);
@@ -174,25 +236,27 @@ void DmxClipPlaybackEngine::disarm() noexcept {
 
 bool DmxClipPlaybackEngine::play_from_start(
     DmxClipClockSource clock_source,
-    std::string& error_message) {
+    std::string& error_message,
+    std::uint64_t elapsed_samples) {
   error_message.clear();
   const std::scoped_lock lock(mutex_);
   if(!loaded_.load(std::memory_order_acquire) || !reader_.info().open) {
     error_message = "Carga un clip DMX antes de reproducir";
     return false;
   }
-  cursor_samples_.store(0U, std::memory_order_relaxed);
+  cursor_samples_.store(elapsed_samples, std::memory_order_relaxed);
   hold_valid_ = false;
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
   clock_source_.store(clock_source, std::memory_order_release);
-  monotonic_anchor_samples_ = 0U;
+  monotonic_anchor_samples_ = elapsed_samples;
   monotonic_anchor_time_ = std::chrono::steady_clock::now();
   transport_.store(DmxClipTransportState::playing, std::memory_order_release);
   return true;
 }
 
-bool DmxClipPlaybackEngine::pause(std::string& error_message) {
+bool DmxClipPlaybackEngine::pause(std::string& error_message,
+                                  std::uint64_t rewind_samples) {
   error_message.clear();
   const std::scoped_lock lock(mutex_);
   if(transport_.load(std::memory_order_acquire) != DmxClipTransportState::playing) {
@@ -201,11 +265,19 @@ bool DmxClipPlaybackEngine::pause(std::string& error_message) {
   }
   if(uses_monotonic_clock())
     update_monotonic_cursor_locked(std::chrono::steady_clock::now());
+  else if(rewind_samples > 0U) {
+    auto cursor = cursor_samples_.load(std::memory_order_relaxed);
+    while(!cursor_samples_.compare_exchange_weak(
+        cursor, rewind_samples >= cursor ? 0U : cursor - rewind_samples,
+        std::memory_order_relaxed, std::memory_order_relaxed)) {
+    }
+  }
   transport_.store(DmxClipTransportState::paused, std::memory_order_release);
   return true;
 }
 
-bool DmxClipPlaybackEngine::resume(std::string& error_message) {
+bool DmxClipPlaybackEngine::resume(std::string& error_message,
+                                   std::uint64_t elapsed_samples) {
   error_message.clear();
   const std::scoped_lock lock(mutex_);
   if(transport_.load(std::memory_order_acquire) != DmxClipTransportState::paused) {
@@ -216,6 +288,8 @@ bool DmxClipPlaybackEngine::resume(std::string& error_message) {
     monotonic_anchor_samples_ = cursor_samples_.load(std::memory_order_relaxed);
     monotonic_anchor_time_ = std::chrono::steady_clock::now();
   }
+  else if(elapsed_samples > 0U)
+    cursor_samples_.fetch_add(elapsed_samples, std::memory_order_relaxed);
   transport_.store(DmxClipTransportState::playing, std::memory_order_release);
   return true;
 }
@@ -298,6 +372,16 @@ void DmxClipPlaybackEngine::advance_samples(std::uint32_t processed_samples,
 
   cursor_samples_.fetch_add(static_cast<std::uint64_t>(processed_samples),
                             std::memory_order_relaxed);
+}
+
+void DmxClipPlaybackEngine::synchronize_host_cursor(
+    std::uint64_t cursor_samples) noexcept {
+  if(uses_monotonic_clock()) return;
+  const auto state = transport_.load(std::memory_order_acquire);
+  if(state != DmxClipTransportState::playing &&
+     state != DmxClipTransportState::paused)
+    return;
+  cursor_samples_.store(cursor_samples, std::memory_order_relaxed);
 }
 
 void DmxClipPlaybackEngine::set_host_heartbeat_ok(bool ok) noexcept {

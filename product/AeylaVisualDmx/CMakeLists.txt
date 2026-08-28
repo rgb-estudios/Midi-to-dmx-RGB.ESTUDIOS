@@ -19,6 +19,7 @@ iplug_add_plugin(${PROJECT_NAME}
   SOURCES
     AeylaVisualDmx.cpp
     AeylaShowPlayerIntegration.cpp
+    AeylaMidiShowIntegration.cpp
     AeylaTakeTrimIntegration.cpp
     AeylaTakeLibrarySession.cpp
     AeylaTakeLibrarySession.h
@@ -35,6 +36,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/core/dmx_compiler.cpp
     ../../src/core/rig.cpp
     ../../src/runtime/plugin_state.cpp
+    ../../src/runtime/show_midi_control.cpp
     ../../src/runtime/runtime_safety_state.cpp
     ../../src/runtime/host_song_binding.cpp
     ../../src/project/project_document.cpp

@@ -100,7 +100,29 @@ Controles congelados:
 
 Regla: `LANZAR CANCIÓN N` debe poder integrarse en los triggers globales ya existentes de la sesión sin depender del orden físico de tracks ni de la posición del Arrangement.
 
-Pendiente: puente definitivo y configurable/MIDI Learn con orden por `sampleOffset`.
+### Implementado en código
+
+- [x] Mapa persistente, desactivado por defecto y configurable por APRENDER MIDI.
+- [x] Canal inicial 16; comandos globales 36–40 y rango 48–62 para 15 canciones.
+- [x] Nota y canal validados; colisiones y rangos incompletos rechazados.
+- [x] Dos estados visibles: canción PREPARADA y canción ACTIVA.
+- [x] SIGUIENTE/ANTERIOR no interrumpen la canción ACTIVA.
+- [x] PLAY/LANZAR conserva el `sampleOffset` y compensa el despertar del worker.
+- [x] Reloj artístico separado de bloques procesados con el DAW detenido.
+- [x] Precarga acotada de lectores validados antes de permitir ARMAR.
+- [x] Cambio de lector armado sin desarme ni cuadro de APAGÓN intermedio.
+- [x] MIDI nunca arma Art-Net ni libera APAGÓN.
+- [x] Desborde de la cola MIDI → desarme + APAGÓN visible.
+
+### Pendiente antes de cerrar Gate C
+
+- [ ] CI completo verde para el mismo SHA y formatos Windows/macOS.
+- [ ] REAPER y Ableton reales: nota en sample 0, retrigger, pausa/reanudar y stop.
+- [ ] Cambio repetido entre canciones con receptor Art-Net externo verificando
+      ausencia de huecos o cuadros cero.
+- [ ] Sesión real enviando MTC desde el mismo DAW hacia Avolites en paralelo.
+
+**Estado Gate C:** IMPLEMENTED / SIMULATED · HOST/HARDWARE NO CERRADO.
 
 ---
 

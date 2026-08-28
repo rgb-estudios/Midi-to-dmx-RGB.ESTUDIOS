@@ -135,6 +135,9 @@ PluginStateError validate_state(const PluginComponentState& state) noexcept {
       return PluginStateError::invalid_song_binding;
     }
   }
+  if (validate_show_midi_mapping(state.show_midi) !=
+      ShowMidiMappingError::none)
+    return PluginStateError::invalid_show_midi_mapping;
   return PluginStateError::none;
 }
 
@@ -151,7 +154,7 @@ PluginStateEncodeResult encode_plugin_component_state(
   for (const auto& binding : state.song_bindings)
     binding_bytes += 2U + binding.song_id.size() + 8U;
   const auto payload_size = static_cast<std::uint32_t>(
-      kFixedPayloadSize + locator_size + binding_bytes);
+      kFixedPayloadSize + locator_size + binding_bytes + 8U);
   const auto total_size = kHeaderSize + static_cast<std::size_t>(payload_size);
   if (total_size > kMaxPluginStateBytes) {
     result.error = PluginStateError::locator_too_large;
@@ -184,6 +187,7 @@ PluginStateEncodeResult encode_plugin_component_state(
       append_u64(result.bytes,
                  std::bit_cast<std::uint64_t>(binding.host_start_ppq));
     }
+    append_u64(result.bytes, pack_show_midi_mapping(state.show_midi));
   } catch (const std::bad_alloc&) {
     result.bytes.clear();
     result.error = PluginStateError::allocation_failure;
@@ -314,6 +318,15 @@ PluginStateDecodeResult decode_plugin_component_state(
     }
   }
 
+  if (format_minor >= 2U) {
+    std::uint64_t packed_mapping = 0U;
+    if (!read_u64(bytes.first(payload_end), offset, packed_mapping)) {
+      result.error = PluginStateError::invalid_show_midi_mapping;
+      return result;
+    }
+    result.state.show_midi = unpack_show_midi_mapping(packed_mapping);
+  }
+
   // Same-major future minor versions may append fields inside payload_size.
   if (offset > payload_end) {
     result.error = PluginStateError::invalid_payload_size;
@@ -339,6 +352,7 @@ const char* plugin_state_error_name(PluginStateError error) noexcept {
     case PluginStateError::invalid_grand_master: return "invalid_grand_master";
     case PluginStateError::inconsistent_locator: return "inconsistent_locator";
     case PluginStateError::invalid_song_binding: return "invalid_song_binding";
+    case PluginStateError::invalid_show_midi_mapping: return "invalid_show_midi_mapping";
   }
   return "unknown";
 }

@@ -70,6 +70,14 @@ class DmxClipPlaybackEngine final {
   [[nodiscard]] bool load_clip(const std::filesystem::path& path,
                                double sample_rate,
                                std::string& error_message);
+  [[nodiscard]] bool replace_armed_clip(
+      DmxTakeFileReader& validated_reader,
+      double sample_rate,
+      std::uint64_t range_start_frame,
+      std::uint64_t range_end_frame_exclusive,
+      DmxClipClockSource clock_source,
+      std::uint64_t elapsed_samples,
+      std::string& error_message);
   void unload() noexcept;
 
   [[nodiscard]] bool set_play_range(std::uint64_t start_frame,
@@ -82,9 +90,12 @@ class DmxClipPlaybackEngine final {
 
   // Comandos de transporte. Deben invocarse fuera del callback de audio.
   [[nodiscard]] bool play_from_start(DmxClipClockSource clock_source,
-                                     std::string& error_message);
-  [[nodiscard]] bool pause(std::string& error_message);
-  [[nodiscard]] bool resume(std::string& error_message);
+                                     std::string& error_message,
+                                     std::uint64_t elapsed_samples = 0U);
+  [[nodiscard]] bool pause(std::string& error_message,
+                           std::uint64_t rewind_samples = 0U);
+  [[nodiscard]] bool resume(std::string& error_message,
+                            std::uint64_t elapsed_samples = 0U);
   // Previsualización segura del editor: lee un cuadro desde disco y mueve el
   // cursor relativo sin publicar Art-Net. Sólo se admite con salida desarmada
   // y transporte detenido.
@@ -97,6 +108,7 @@ class DmxClipPlaybackEngine final {
   // antes/después del comando.
   void advance_samples(std::uint32_t processed_samples,
                        bool rendering_offline) noexcept;
+  void synchronize_host_cursor(std::uint64_t cursor_samples) noexcept;
 
   // El integrador publica la vida del host. Perder heartbeat deshabilita la
   // autoridad física, pero nunca mueve el cursor artístico.

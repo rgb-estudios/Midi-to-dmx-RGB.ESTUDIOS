@@ -108,13 +108,43 @@ una toma recuperable en vez de borrar el temporal. Esa recuperación no sustituy
 `DETENER + GUARDAR`: al reabrir, vuelve a seleccionar la misma biblioteca y
 verifica la toma antes de editarla o transmitirla.
 
-## 8. Gates aún abiertos
+## 8. Automatización MIDI del show
+
+1. Con la salida desarmada, abre `MIDI / SHOW`.
+2. Elige el canal o usa `APRENDER MIDI` para cada acción.
+3. Activa `MIDI SHOW` y espera `PRECARGA MIDI COMPLETA`.
+4. Desactiva APAGÓN y arma la salida manualmente. MIDI nunca puede realizar
+   ninguna de esas dos acciones de seguridad.
+5. Coloca la nota PLAY o LANZAR exactamente en el inicio de la pista de audio.
+6. Inicia el transporte del DAW. AEYLA compensa el `sampleOffset` de la nota y
+   avanza con las mismas muestras que procesa el audio.
+7. El MTC puede seguir saliendo del mismo DAW hacia Avolites; no debe volver a
+   entrar en AEYLA.
+
+Mapa inicial, desactivado por defecto:
+
+| Canal 16 | Acción |
+|---:|---|
+| Nota 36 | CANCIÓN ANTERIOR |
+| Nota 37 | SIGUIENTE CANCIÓN |
+| Nota 38 | PLAY / REINICIAR |
+| Nota 39 | PAUSA / REANUDAR |
+| Nota 40 | STOP / RESET |
+| Notas 48–62 | LANZAR CANCIONES 01–15 |
+
+ANTERIOR/SIGUIENTE cambian sólo la canción `PREPARADA`; la `ACTIVA` continúa
+sin interrupción. PLAY/LANZAR hace el cambio mediante un lector ya validado,
+sin desarmar Art-Net ni insertar APAGÓN. STOP del DAW congela el reloj; al
+continuar, la toma sigue desde el mismo cursor relativo.
+
+## 9. Gates aún abiertos
 
 - REAPER, Ableton Live y Logic con una matriz formal y repetible.
 - UAC/rollback en un Windows físico.
 - NIC → nodo → DMX/luminaria, pérdida/reconexión y unicast/broadcast dirigido.
 - interacción visual completa a 960×620 y 1280×800 en ambos sistemas.
 - soak de 8 horas y tres ensayos completos.
-- MIDI Learn y comandos de operación de show.
+- MIDI/SHOW dentro de REAPER y Ableton con notas en sample 0, pausa, retrigger
+  y cambios repetidos entre 15 canciones.
 
 Hasta cerrar esos gates, todo paquete debe llamarse **PRETEST**.

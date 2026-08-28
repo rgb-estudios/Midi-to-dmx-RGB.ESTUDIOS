@@ -134,7 +134,20 @@ Contrato congelado:
 
 `LANZAR CANCIÓN N` es el camino preferido para integración automática con la sesión de los chicos.
 
-Pendiente: asignación configurable / MIDI Learn y ejecución definitiva respetando `sampleOffset` del evento MIDI.
+Estado: **Simulated**.
+
+- mapa configurable y persistente;
+- APRENDER MIDI con canal + nota y detección de colisiones;
+- 15 lanzamientos directos;
+- compensación de `sampleOffset` y demora del worker para PLAY/PAUSA/REANUDAR;
+- barrera no bloqueante con el callback para evitar carreras entre bloques y comandos;
+- ACTIVA y PREPARADA separadas: SIGUIENTE/ANTERIOR no interrumpen la toma activa;
+- precarga validada de hasta 15 canciones y cambio de lector sin APAGÓN intermedio;
+- el transporte detenido del DAW congela el reloj de la toma;
+- MIDI no puede armar salida ni quitar APAGÓN;
+- desbordamiento MIDI provoca cierre seguro.
+
+Pendiente: prueba **Host-tested** dentro de REAPER/Ableton con la pista de audio y las notas MIDI reales de la sesión.
 
 ## 7. GATE D · MEMORIA / ESTABILIDAD · P0
 

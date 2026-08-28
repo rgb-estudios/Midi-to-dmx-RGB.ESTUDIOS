@@ -149,7 +149,10 @@ aeyla::product::AuthoringResult AeylaVisualDmx::RenameSongFromUI(
 void AeylaVisualDmx::SetBlackoutFromUI(bool enabled)
 {
   if(enabled)
+  {
     mTakeScheduler.disarm();
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+  }
 
   GetParam(kParamBlackout)->Set(enabled ? 1.0 : 0.0);
   mParamBlackout.store(enabled, std::memory_order_release);
@@ -169,9 +172,14 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
   if(TakeRecording())
     return false;
 
-  // Seleccionar otra canción nunca deja una autoridad antigua al aire.
-  mTakeScheduler.stop_reset();
-  mTakeScheduler.disarm();
+  // Only an armed Take owns the PREPARADA/ACTIVA two-state contract. In every
+  // other mode retain the original safe selection boundary.
+  if(!TakeOutputArmed())
+  {
+    mTakeScheduler.stop_reset();
+    mTakeScheduler.disarm();
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+  }
 
   const std::scoped_lock lock(mModelMutex);
   if(!mModel.select_song(songIndex))
@@ -188,6 +196,10 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
         });
   }
   mActiveSongBound.store(bound, std::memory_order_release);
+  mMidiPreloadSongRequest.store(static_cast<int>(songIndex),
+                                std::memory_order_release);
+  SetShowMidiMessage("PREPARADA · " + mModel.snapshot().active_song_name +
+                     " · PLAY decide cuándo reemplaza la canción al aire");
   mLastProjectedSongId.clear();
   mLastProjectedTick = 0U;
   SyncSnapshotToAtomicsLocked();
@@ -594,6 +606,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
     if(!aeyla::capture::prepare_take_directory(library, libraryError))
       return {false, {}, "La biblioteca de tomas no permite escritura · " + libraryError};
     aeyla::take_library_session::set_directory(this, library);
+    if(ShowMidiMapping().enabled)
+      mMidiPreflightCursor.store(0, std::memory_order_release);
   }
 
   auto stats = mArtNetCapture.stats();
@@ -689,12 +703,14 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
 
   std::string projectId;
   std::string songId;
+  std::size_t songIndex = 0U;
   std::uint16_t outputUniverse = 0U;
   {
     const std::scoped_lock modelLock(mModelMutex);
     const auto snapshot = mModel.snapshot();
     projectId = snapshot.project_id;
     songId = snapshot.active_song_id;
+    songIndex = snapshot.active_song_index;
     outputUniverse = mModel.project_document().output.universe;
   }
   if(songId.empty())
@@ -712,6 +728,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
     if(!aeyla::capture::prepare_take_directory(library, directoryError))
       return {false, {}, "La biblioteca de tomas no está disponible · " + directoryError};
     aeyla::take_library_session::set_directory(this, library);
+    if(ShowMidiMapping().enabled)
+      mMidiPreflightCursor.store(0, std::memory_order_release);
   }
 
   const auto scan = aeyla::capture::scan_take_directory(library, songId);
@@ -733,6 +751,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
       edited.has_value() && edited->path == selected.path
           ? edited->end_frame_exclusive : selected.frame_count;
   const bool sameValidatedClip =
+      mLoadedTakeSongIndex.load(std::memory_order_acquire) ==
+          static_cast<int>(songIndex) &&
       loaded == selected.path && scheduler.file_backed &&
       scheduler.range_start_frame == expectedStart &&
       scheduler.range_end_frame_exclusive == expectedEnd;
@@ -750,6 +770,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
            static_cast<std::size_t>(edited->end_frame_exclusive), error))
       return {false, {}, "El rango ENTRADA / SALIDA no pudo cargarse · " + error};
     aeyla::take_library_session::set_loaded_path(this, songId, selected.path);
+    mLoadedTakeSongIndex.store(static_cast<int>(songIndex),
+                               std::memory_order_release);
     aeyla::take_library_session::set_storage_message(
         this, "CARGADA DESDE DISCO · " + selected.path.filename().string());
   }
@@ -760,6 +782,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
   if(!mTakeScheduler.play(
          error, aeyla::capture::DmxClipClockSource::monotonic_realtime))
     return {false, {}, error};
+  mActiveTakeSongIndex.store(static_cast<int>(songIndex),
+                             std::memory_order_release);
 
   const std::uint64_t selectedFrames = edited.has_value() &&
           edited->path == selected.path
@@ -793,6 +817,10 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
   }
   if(NetworkConfigurationBusy())
     return {false, {}, "Espera a que termine el cambio de red antes de armar"};
+  if(ShowMidiMapping().enabled &&
+     mMidiPreflightCursor.load(std::memory_order_acquire) >= 0)
+    return {false, {},
+            "Espera a que MIDI / SHOW indique PRECARGA COMPLETA antes de armar"};
   if(OutputArmed())
     return {false, {}, "Desarma la salida del modelo antes de armar la toma DMX"};
   if(TakeRecording())
@@ -811,12 +839,14 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
 
   std::string projectId;
   std::string songId;
+  std::size_t songIndex = 0U;
   std::uint16_t outputUniverse = 0U;
   {
     const std::scoped_lock modelLock(mModelMutex);
     const auto snapshot = mModel.snapshot();
     projectId = snapshot.project_id;
     songId = snapshot.active_song_id;
+    songIndex = snapshot.active_song_index;
     outputUniverse = mModel.project_document().output.universe;
   }
   if(songId.empty())
@@ -842,6 +872,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
       edited.has_value() && edited->path == selected.path
           ? edited->end_frame_exclusive : selected.frame_count;
   const bool sameValidatedClip =
+      mLoadedTakeSongIndex.load(std::memory_order_acquire) ==
+          static_cast<int>(songIndex) &&
       loaded == selected.path && scheduler.file_backed &&
       scheduler.range_start_frame == expectedStart &&
       scheduler.range_end_frame_exclusive == expectedEnd;
@@ -857,6 +889,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
            static_cast<std::size_t>(edited->end_frame_exclusive), loadError))
       return {false, {}, "No fue posible aplicar ENTRADA / SALIDA · " + loadError};
     aeyla::take_library_session::set_loaded_path(this, songId, selected.path);
+    mLoadedTakeSongIndex.store(static_cast<int>(songIndex),
+                               std::memory_order_release);
   }
 
   std::string error;

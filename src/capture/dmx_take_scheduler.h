@@ -30,6 +30,7 @@ struct DmxTakeSchedulerStatus {
   std::size_t range_start_frame{0U};
   std::size_t range_end_frame_exclusive{0U};
   std::size_t current_frame{0U};
+  std::uint64_t cursor_samples{0U};
   std::string error;
 };
 
@@ -59,6 +60,15 @@ class DmxTakeScheduler final {
                                     double sample_rate,
                                     std::string& error_message);
 
+  [[nodiscard]] bool replace_armed_take_file(
+      DmxTakeFileReader& validated_reader,
+      double sample_rate,
+      std::size_t start_frame,
+      std::size_t end_frame_exclusive,
+      DmxClipClockSource clock_source,
+      std::uint64_t elapsed_samples,
+      std::string& error_message);
+
   [[nodiscard]] bool set_play_range(std::size_t start_frame,
                                     std::size_t end_frame_exclusive,
                                     std::string& error_message);
@@ -66,9 +76,12 @@ class DmxTakeScheduler final {
 
   [[nodiscard]] bool play(
       std::string& error_message,
-      DmxClipClockSource clock_source = DmxClipClockSource::host_samples);
-  [[nodiscard]] bool pause(std::string& error_message);
-  [[nodiscard]] bool resume(std::string& error_message);
+      DmxClipClockSource clock_source = DmxClipClockSource::host_samples,
+      std::uint64_t elapsed_samples = 0U);
+  [[nodiscard]] bool pause(std::string& error_message,
+                           std::uint64_t rewind_samples = 0U);
+  [[nodiscard]] bool resume(std::string& error_message,
+                            std::uint64_t elapsed_samples = 0U);
   [[nodiscard]] bool seek_frame(std::size_t frame_index,
                                 std::string& error_message);
   void stop_hold() noexcept;
@@ -80,6 +93,7 @@ class DmxTakeScheduler final {
   // tiempo desde la posición absoluta del Arrangement.
   void advance_samples(std::uint32_t processed_samples,
                        bool rendering_offline) noexcept;
+  void synchronize_host_cursor(std::uint64_t cursor_samples) noexcept;
 
   [[nodiscard]] bool arm(std::string& error_message);
   void disarm() noexcept;

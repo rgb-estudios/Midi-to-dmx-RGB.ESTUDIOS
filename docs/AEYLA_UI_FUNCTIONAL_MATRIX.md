@@ -11,6 +11,7 @@ Regla: visible = funcional, bloqueado con causa o no presente.
 | APAGÓN | clic → alterna el enclavamiento global; ON desarma modelo+toma → DMX cero | host/show | **Simulated**; separado del negro artístico de Cue |
 | ARMAR SALIDA DE TOMA | clic → gates globales → arma aunque el Song no tenga Cue, o explica causa exacta | ARM nunca persiste | **Simulated**; nodo pendiente |
 | TOMA / EDICIÓN | clic → workspace de captura/editor | sesión UI | **Scaffolded**; interacción host pendiente |
+| MIDI / SHOW | clic → mapa, canal, Learn, PREPARADA/ACTIVA y diagnóstico | mapa sí; ARM no | **Simulated**; interacción host pendiente |
 | RED / SALIDA | clic → workspace de red/telemetría | sesión UI | **Scaffolded**; interacción host pendiente |
 | Lista de canciones | clic selecciona; doble clic renombra; nueva hasta 15 | sí | **Scaffolded**; interacción host pendiente |
 | GRABAR NUEVA TOMA | clic → captura Art-Net U1 a disco; segundo clic finaliza TOMA BRUTA | sí, archivo | **Simulated** con Art-Net loopback |
@@ -25,13 +26,15 @@ Regla: visible = funcional, bloqueado con causa o no presente.
 | Telemetría RX/TX/AUTORIDAD | workers → señal/edad/paquetes/saltos/errores/retrasos/fail-closed | no | **Scaffolded**; render host pendiente |
 | Runtime con editor cerrado | audio publica muestras/heartbeat; workers de clip y UDP continúan sin `OnIdle` | no | **Simulated**; REAPER real pendiente |
 | Offline render | hard disarm + blackout | no | **Simulated**; host pendiente |
-| SHOW MODE | no presente | UI state | **Specified** |
+| ANTERIOR / SIGUIENTE MIDI | nota → cambia sólo PREPARADA; ACTIVA continúa | mapa MIDI | **Simulated** |
+| PLAY / PAUSA / STOP MIDI | nota → transporte relativo con `sampleOffset` exacto | mapa MIDI | **Simulated** |
+| LANZAR CANCIÓN 01–15 | nota → selección + cambio precargado sin desarme/blackout | mapa MIDI | **Simulated** |
 
 ## Límites visibles de esta entrega
 
 - No hay delete/reorder, undo/redo ni clasificación de canales para fades.
-- El Programmer semántico y Show Mode permanecen fuera de esta superficie R07;
-  no se dibujan como controles disponibles.
+- El Programmer semántico completo permanece fuera de esta superficie R07;
+  `MIDI / SHOW` controla únicamente las tomas DMX grabadas.
 - Art-Net está conectado al producto, pero no existe evidencia de nodo/PAR
   físico ni detección positiva de recepción.
 - Nada en esta matriz autoriza uso de show sin CI actual, hosts reales,

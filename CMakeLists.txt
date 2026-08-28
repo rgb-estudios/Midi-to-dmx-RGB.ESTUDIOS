@@ -81,6 +81,7 @@ add_test(NAME aeyla_core_tests COMMAND aeyla_core_tests)
 
 add_library(aeyla_runtime
   src/runtime/plugin_state.cpp
+  src/runtime/show_midi_control.cpp
   src/runtime/runtime_safety_state.cpp
   src/runtime/host_song_binding.cpp
   src/product/application_model.cpp
@@ -136,6 +137,7 @@ aeyla_add_strict_test(aeyla_runtime_tests tests/test_host_event_queue.cpp)
 aeyla_add_strict_test(aeyla_host_transport_mailbox_tests tests/test_host_transport_mailbox.cpp)
 aeyla_add_strict_test(aeyla_host_song_binding_tests tests/test_host_song_binding.cpp)
 aeyla_add_strict_test(aeyla_plugin_state_tests tests/test_plugin_state.cpp)
+aeyla_add_strict_test(aeyla_show_midi_control_tests tests/test_show_midi_control.cpp)
 aeyla_add_strict_test(aeyla_runtime_safety_tests tests/test_runtime_safety.cpp)
 aeyla_add_strict_test(aeyla_application_model_tests tests/test_application_model.cpp)
 aeyla_add_strict_test(aeyla_project_document_tests tests/test_project_document.cpp)

@@ -32,6 +32,8 @@ public:
     DrawSetlist(g);
     if(mWorkspaceView == WorkspaceView::take_editor)
       DrawTakeEditor(g);
+    else if(mWorkspaceView == WorkspaceView::midi_show)
+      DrawMidiShow(g);
     else
       DrawRouting(g);
   }
@@ -51,6 +53,13 @@ public:
     {
       mWorkspaceView = WorkspaceView::network_output;
       mMessage = "RED / SALIDA · adaptadores, IPv4, armado y telemetría Art-Net.";
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mMidiShowTab, x, y))
+    {
+      mWorkspaceView = WorkspaceView::midi_show;
+      mMessage = "MIDI / SHOW · automatización sincronizada por muestras del DAW.";
       SetDirty(false);
       return;
     }
@@ -174,6 +183,43 @@ public:
       if(Contains(mOutFramePlus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeOutFrameFromUI(std::min(editor.end_frame_exclusive + 1U, editor.frame_count))); SetDirty(false); return; }
       if(Contains(mResetTrimButton, x, y)) { Report(mPlug.ResetActiveTakeTrimFromUI()); SetDirty(false); return; }
       if(Contains(mConsolidateButton, x, y)) { Report(mPlug.ConsolidateActiveTakeFromUI()); SetDirty(false); return; }
+      return;
+    }
+
+    if(mWorkspaceView == WorkspaceView::midi_show)
+    {
+      if(Contains(mMidiEnableButton, x, y))
+      {
+        Report(mPlug.ToggleShowMidiFromUI());
+        SetDirty(false);
+        return;
+      }
+      if(Contains(mMidiChannelPrevious, x, y))
+      {
+        ReportInline(mPlug.CycleShowMidiChannelFromUI(-1));
+        SetDirty(false);
+        return;
+      }
+      if(Contains(mMidiChannelNext, x, y))
+      {
+        ReportInline(mPlug.CycleShowMidiChannelFromUI(1));
+        SetDirty(false);
+        return;
+      }
+      constexpr std::array<aeyla::runtime::ShowMidiLearnTarget, 6U> targets{
+          aeyla::runtime::ShowMidiLearnTarget::previous_song,
+          aeyla::runtime::ShowMidiLearnTarget::next_song,
+          aeyla::runtime::ShowMidiLearnTarget::play_retrigger,
+          aeyla::runtime::ShowMidiLearnTarget::pause_resume,
+          aeyla::runtime::ShowMidiLearnTarget::stop_reset,
+          aeyla::runtime::ShowMidiLearnTarget::launch_song_base};
+      for(std::size_t index = 0U; index < mMidiLearnButtons.size(); ++index)
+      {
+        if(!Contains(mMidiLearnButtons[index], x, y)) continue;
+        ReportInline(mPlug.BeginShowMidiLearnFromUI(targets[index]));
+        SetDirty(false);
+        return;
+      }
       return;
     }
 
@@ -370,7 +416,7 @@ public:
   }
 
 private:
-  enum class WorkspaceView { take_editor, network_output };
+  enum class WorkspaceView { take_editor, midi_show, network_output };
   enum class EditKind {
     none,
     song_name,
@@ -597,9 +643,11 @@ private:
     mTakeArmButton = IRECT(mHeader.R - 302.0F, mHeader.T + 18.0F,
                            mHeader.R - 154.0F, mHeader.B - 18.0F);
     mTakeEditorTab = IRECT(mHeader.L + 300.0F, mHeader.T + 18.0F,
-                           mHeader.L + 432.0F, mHeader.B - 18.0F);
-    mNetworkOutputTab = IRECT(mTakeEditorTab.R + 8.0F, mTakeEditorTab.T,
-                              mTakeEditorTab.R + 154.0F, mTakeEditorTab.B);
+                           mHeader.L + 394.0F, mHeader.B - 18.0F);
+    mMidiShowTab = IRECT(mTakeEditorTab.R + 6.0F, mTakeEditorTab.T,
+                         mTakeEditorTab.R + 110.0F, mTakeEditorTab.B);
+    mNetworkOutputTab = IRECT(mMidiShowTab.R + 6.0F, mTakeEditorTab.T,
+                              mMidiShowTab.R + 102.0F, mTakeEditorTab.B);
 
     const IRECT listBody = mSetlist.GetPadded(-10.0F);
     mNewSongButton = IRECT(listBody.L, mSetlist.B - 42.0F,
@@ -720,6 +768,56 @@ private:
         mApplyNetworkButton.B + (compactRouting ? 8.0F : 10.0F),
         route.R,
         mApplyNetworkButton.B + (compactRouting ? 40.0F : 46.0F));
+
+    const IRECT midi = mWorkspace.GetPadded(-16.0F);
+    mCompactMidi = midi.H() < 580.0F;
+    const float midiTop = midi.T + (mCompactMidi ? 42.0F : 50.0F);
+    const float midiControlHeight = mCompactMidi ? 34.0F : 38.0F;
+    mMidiEnableButton = IRECT(
+        midi.L, midiTop, midi.L + (mCompactMidi ? 220.0F : 250.0F),
+        midiTop + midiControlHeight);
+    mMidiChannelPrevious = IRECT(mMidiEnableButton.R + 18.0F, midiTop,
+                                 mMidiEnableButton.R + 56.0F,
+                                 midiTop + midiControlHeight);
+    mMidiChannelField = IRECT(mMidiChannelPrevious.R + 6.0F, midiTop,
+                              mMidiChannelPrevious.R + 126.0F,
+                              midiTop + midiControlHeight);
+    mMidiChannelNext = IRECT(mMidiChannelField.R + 6.0F, midiTop,
+                             mMidiChannelField.R + 44.0F,
+                             midiTop + midiControlHeight);
+    const float rowTop = midiTop + (mCompactMidi ? 44.0F : 62.0F);
+    const float rowGap = mCompactMidi ? 4.0F : 7.0F;
+    // Reserve every inter-row gap, both state rows, the message and all three
+    // safety/sync footer lines. At the nominal 1280x800 canvas this keeps the
+    // final warning inside the card. The compact 960x620 branch combines its
+    // MTC/safety footer into two lines while retaining all six controls.
+    const float midiFixedBelowRows = mCompactMidi ? 163.0F : 264.0F;
+    const float rowHeight = std::clamp(
+        (midi.B - rowTop - midiFixedBelowRows) / 6.0F,
+        mCompactMidi ? 28.0F : 34.0F,
+        mCompactMidi ? 34.0F : 44.0F);
+    for(std::size_t index = 0U; index < mMidiRows.size(); ++index)
+    {
+      const float topRow = rowTop + static_cast<float>(index) *
+          (rowHeight + rowGap);
+      mMidiRows[index] = IRECT(midi.L, topRow, midi.R, topRow + rowHeight);
+      mMidiLearnButtons[index] = IRECT(midi.R - 132.0F, topRow + 4.0F,
+                                       midi.R - 6.0F, topRow + rowHeight - 4.0F);
+    }
+    const float statusTop = mMidiRows.back().B +
+        (mCompactMidi ? 6.0F : 12.0F);
+    const float statusHeight = mCompactMidi ? 24.0F : 30.0F;
+    mMidiPreparedStatus = IRECT(midi.L, statusTop, midi.R,
+                                statusTop + statusHeight);
+    const float activeTop = mMidiPreparedStatus.B +
+        (mCompactMidi ? 3.0F : 5.0F);
+    mMidiActiveStatus = IRECT(midi.L, activeTop, midi.R,
+                              activeTop + statusHeight);
+    const float messageTop = mMidiActiveStatus.B +
+        (mCompactMidi ? 4.0F : 8.0F);
+    mMidiMessageStatus = IRECT(
+        midi.L, messageTop, midi.R,
+        std::min(midi.B, messageTop + (mCompactMidi ? 36.0F : 58.0F)));
   }
 
   void DrawHeader(IGraphics& g)
@@ -733,14 +831,20 @@ private:
                      mHeader.L + 290.0F, mHeader.B));
 
     const bool editorView = mWorkspaceView == WorkspaceView::take_editor;
-    Button(g, mTakeEditorTab, "TOMA / EDICIÓN",
+    const bool midiView = mWorkspaceView == WorkspaceView::midi_show;
+    const bool networkView = mWorkspaceView == WorkspaceView::network_output;
+    Button(g, mTakeEditorTab, "TOMA",
            editorView ? kPanelSelected : kPanelRaised,
            editorView ? kAccent : kLineStrong,
            editorView ? kText : kMuted);
+    Button(g, mMidiShowTab, "MIDI / SHOW",
+           midiView ? kPanelSelected : kPanelRaised,
+           midiView ? kAccent : kLineStrong,
+           midiView ? kText : kMuted);
     Button(g, mNetworkOutputTab, "RED / SALIDA",
-           editorView ? kPanelRaised : kPanelSelected,
-           editorView ? kLineStrong : kAccent,
-           editorView ? kMuted : kText);
+           networkView ? kPanelSelected : kPanelRaised,
+           networkView ? kAccent : kLineStrong,
+           networkView ? kText : kMuted);
 
     const bool blackout = mPlug.GlobalBlackout();
     Button(g, mBlackoutButton, blackout ? "APAGÓN ACTIVO" : "APAGÓN DESACTIVADO",
@@ -757,6 +861,8 @@ private:
       armLabel = "BLOQUEADA · GRABANDO";
     else if(mPlug.GlobalBlackout())
       armLabel = "BLOQUEADA · APAGÓN";
+    else if(mPlug.ShowMidiMapping().enabled && mPlug.ShowMidiPreflightBusy())
+      armLabel = "BLOQUEADA · PRECARGA MIDI";
     else if(!mPlug.BackendReady())
       armLabel = "BLOQUEADA · RED";
     else if(!mPlug.RuntimeHealthy() || mPlug.RenderingOffline())
@@ -779,7 +885,8 @@ private:
                      mSetlist.R - 12.0F, mSetlist.T + 36.0F));
 
     const std::size_t count = mPlug.SongCount();
-    const std::size_t active = mPlug.ActiveSongIndex();
+    const std::size_t prepared = mPlug.ActiveSongIndex();
+    const int activeTake = mPlug.ActiveTakeSongIndex();
     for(std::size_t index = 0; index < mSongRows.size(); ++index)
     {
       const IRECT& row = mSongRows[index];
@@ -788,9 +895,14 @@ private:
         g.DrawLine(kLine, row.L, row.B, row.R, row.B, nullptr, 1.0F);
         continue;
       }
-      const bool selected = index == active;
+      const bool selected = index == prepared;
+      const bool onAir = static_cast<int>(index) == activeTake;
       if(selected) g.FillRoundRect(kPanelSelected, row, 5.0F);
       if(selected) g.DrawRoundRect(kAccent, row, 5.0F, nullptr, 1.0F);
+      if(onAir)
+        g.FillRoundRect(kGood,
+                        IRECT(row.R - 12.0F, row.T + 7.0F,
+                              row.R - 6.0F, row.B - 7.0F), 3.0F);
       char number[8];
       std::snprintf(number, sizeof(number), "%02d", static_cast<int>(index + 1U));
       g.DrawText(IText(12.0F, selected ? kAccent : kFaint,
@@ -800,7 +912,8 @@ private:
       if(name.empty()) name = "Canción";
       g.DrawText(IText(12.0F, selected ? kText : kMuted,
                        "AeylaUI", EAlign::Near, EVAlign::Middle),
-                 name.c_str(), IRECT(row.L + 38.0F, row.T, row.R - 8.0F, row.B));
+                 name.c_str(), IRECT(row.L + 38.0F, row.T,
+                                     row.R - (onAir ? 18.0F : 8.0F), row.B));
     }
 
     Button(g, mNewSongButton,
@@ -1034,6 +1147,123 @@ private:
     }
   }
 
+  void DrawMidiShow(IGraphics& g)
+  {
+    Card(g, mWorkspace);
+    const auto mapping = mPlug.ShowMidiMapping();
+    g.DrawText(IText(18.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "AUTOMATIZACIÓN MIDI DE SHOW",
+               IRECT(mWorkspace.L + 16.0F, mWorkspace.T + 10.0F,
+                     mWorkspace.R - 16.0F, mWorkspace.T + 42.0F));
+
+    Button(g, mMidiEnableButton,
+           mapping.enabled ? "MIDI SHOW ACTIVO" : "ACTIVAR MIDI SHOW",
+           mapping.enabled ? IColor(255, 18, 51, 38) : kPanelRaised,
+           mapping.enabled ? kGood : kLineStrong,
+           mapping.enabled ? kGood : kText);
+    Button(g, mMidiChannelPrevious, "<", kPanelRaised, kLineStrong);
+    const std::string channel = "CANAL " + std::to_string(mapping.channel);
+    Button(g, mMidiChannelField, channel.c_str(), kPanelRaised, kLineStrong,
+           kText);
+    Button(g, mMidiChannelNext, ">", kPanelRaised, kLineStrong);
+
+    constexpr std::array<const char*, 6U> labels{
+        "CANCIÓN ANTERIOR",
+        "SIGUIENTE CANCIÓN",
+        "PLAY / REINICIAR DESDE CERO",
+        "PAUSA / REANUDAR",
+        "STOP / RESET A CERO",
+        "LANZAR CANCIONES 01–15"};
+    const std::array<std::uint8_t, 6U> notes{
+        mapping.previous_note, mapping.next_note, mapping.play_note,
+        mapping.pause_note, mapping.stop_note, mapping.launch_base_note};
+    constexpr std::array<aeyla::runtime::ShowMidiLearnTarget, 6U> targets{
+        aeyla::runtime::ShowMidiLearnTarget::previous_song,
+        aeyla::runtime::ShowMidiLearnTarget::next_song,
+        aeyla::runtime::ShowMidiLearnTarget::play_retrigger,
+        aeyla::runtime::ShowMidiLearnTarget::pause_resume,
+        aeyla::runtime::ShowMidiLearnTarget::stop_reset,
+        aeyla::runtime::ShowMidiLearnTarget::launch_song_base};
+    const auto learning = mPlug.ShowMidiLearnTarget();
+    for(std::size_t index = 0U; index < mMidiRows.size(); ++index)
+    {
+      const auto& row = mMidiRows[index];
+      const bool waiting = learning == targets[index];
+      g.FillRoundRect(waiting ? IColor(255, 54, 42, 22) :
+                                IColor(255, 11, 13, 18), row, 6.0F);
+      g.DrawRoundRect(waiting ? kWarn : kLine, row, 6.0F, nullptr, 1.0F);
+      g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near,
+                       EVAlign::Middle),
+                 labels[index],
+                 IRECT(row.L + 12.0F, row.T, row.L + row.W() * 0.52F, row.B));
+      std::string note = "NOTA " + std::to_string(notes[index]);
+      if(index == 5U)
+        note += "–" + std::to_string(
+            static_cast<unsigned>(notes[index]) + 14U);
+      g.DrawText(IText(12.0F, waiting ? kWarn : kGood, "AeylaUI",
+                       EAlign::Center, EVAlign::Middle),
+                 note.c_str(),
+                 IRECT(row.L + row.W() * 0.52F, row.T,
+                       mMidiLearnButtons[index].L - 8.0F, row.B));
+      Button(g, mMidiLearnButtons[index],
+             waiting ? "ESPERANDO NOTA…" : "APRENDER MIDI",
+             waiting ? IColor(255, 54, 42, 22) : kPanelRaised,
+             waiting ? kWarn : kLineStrong,
+             waiting ? kWarn : kText);
+    }
+
+    const std::size_t prepared = mPlug.ActiveSongIndex();
+    const int active = mPlug.ActiveTakeSongIndex();
+    const std::string preparedName = prepared < mPlug.SongCount()
+        ? mPlug.SongName(prepared) : "SIN CANCIÓN";
+    const std::string activeName = active >= 0 &&
+            static_cast<std::size_t>(active) < mPlug.SongCount()
+        ? mPlug.SongName(static_cast<std::size_t>(active))
+        : "NINGUNA";
+    const std::string preparedStatus = mPlug.SongCount() == 0U
+        ? preparedName
+        : std::to_string(prepared + 1U) + " · " + preparedName;
+    StatusRow(g, mMidiPreparedStatus, "PREPARADA", preparedStatus, kWarn);
+    StatusRow(g, mMidiActiveStatus, "ACTIVA",
+              activeName, active >= 0 ? kGood : kFaint);
+    g.FillRoundRect(IColor(255, 11, 13, 18), mMidiMessageStatus, 6.0F);
+    g.DrawRoundRect(kLine, mMidiMessageStatus, 6.0F, nullptr, 1.0F);
+    const std::string message = mPlug.ShowMidiStatus();
+    g.DrawText(IText(12.0F,
+                     learning == aeyla::runtime::ShowMidiLearnTarget::none
+                         ? kMuted : kWarn,
+                     "AeylaUI", EAlign::Near, EVAlign::Middle),
+               message.c_str(), mMidiMessageStatus.GetPadded(-10.0F));
+
+    const float footerTop = mMidiMessageStatus.B +
+        (mCompactMidi ? 4.0F : 8.0F);
+    g.DrawText(IText(12.0F, kGood, "AeylaUI", EAlign::Near, EVAlign::Top),
+               mCompactMidi
+                   ? "SINCRONÍA: MUESTRAS DEL DAW · sin deriva acumulativa"
+                   : "SINCRONÍA: MUESTRAS DEL DAW · sin reloj global ni deriva acumulativa",
+               IRECT(mWorkspace.L + 18.0F, footerTop,
+                     mWorkspace.R - 18.0F,
+                     footerTop + (mCompactMidi ? 18.0F : 22.0F)));
+    if(mCompactMidi)
+    {
+      g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
+                 "MTC: mismo DAW → Avolites · MIDI no arma Art-Net ni desactiva APAGÓN",
+                 IRECT(mWorkspace.L + 18.0F, footerTop + 19.0F,
+                       mWorkspace.R - 18.0F, footerTop + 42.0F));
+    }
+    else
+    {
+      g.DrawText(IText(12.0F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Top),
+                 "MTC puede salir del mismo DAW hacia Avolites. AEYLA no lo recircula: la nota MIDI y el audio comparten el reloj más preciso del host.",
+                 IRECT(mWorkspace.L + 18.0F, footerTop + 23.0F,
+                       mWorkspace.R - 18.0F, footerTop + 52.0F));
+      g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
+                 "MIDI nunca arma Art-Net ni desactiva APAGÓN. Prepara la salida manualmente antes del show.",
+                 IRECT(mWorkspace.L + 18.0F, footerTop + 52.0F,
+                       mWorkspace.R - 18.0F, footerTop + 78.0F));
+    }
+  }
+
   void DrawRouting(IGraphics& g)
   {
     Card(g, mRouting);
@@ -1237,6 +1467,7 @@ private:
   IRECT mBlackoutButton{};
   IRECT mTakeArmButton{};
   IRECT mTakeEditorTab{};
+  IRECT mMidiShowTab{};
   IRECT mNetworkOutputTab{};
   std::array<IRECT, 15> mSongRows{};
   IRECT mNewSongButton{};
@@ -1262,6 +1493,16 @@ private:
   IRECT mGoOutButton{};
   IRECT mResetTrimButton{};
   IRECT mConsolidateButton{};
+  IRECT mMidiEnableButton{};
+  IRECT mMidiChannelPrevious{};
+  IRECT mMidiChannelField{};
+  IRECT mMidiChannelNext{};
+  std::array<IRECT, 6U> mMidiRows{};
+  std::array<IRECT, 6U> mMidiLearnButtons{};
+  IRECT mMidiPreparedStatus{};
+  IRECT mMidiActiveStatus{};
+  IRECT mMidiMessageStatus{};
+  bool mCompactMidi{false};
   IRECT mRxCard{};
   IRECT mTxCard{};
   IRECT mRxPrevious{};

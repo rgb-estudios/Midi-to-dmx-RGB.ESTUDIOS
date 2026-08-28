@@ -48,6 +48,13 @@ aeyla::DmxUniverse expected_frame(std::uint64_t index) {
   return frame;
 }
 
+aeyla::DmxUniverse replacement_frame(std::uint64_t index) {
+  auto frame = expected_frame(index);
+  frame[0] = static_cast<std::uint8_t>((index + 101U) & 0xFFU);
+  frame[100] = 231U;
+  return frame;
+}
+
 }  // namespace
 
 int main() {
@@ -75,6 +82,17 @@ int main() {
             "writer rejected DMX clip fixture frame");
   require(writer.finalize(error), error);
 
+  DmxTakeStreamConfig replacement_config = stream_config;
+  replacement_config.target_path = directory / "MidiReplacement.aeylatake";
+  replacement_config.song_id = "song-midi-replacement";
+  replacement_config.song_name = "MIDI Replacement";
+  DmxTakeStreamWriter replacement_writer;
+  require(replacement_writer.start(replacement_config, error), error);
+  for(std::uint64_t index = 0U; index < kFrames; ++index)
+    require(replacement_writer.try_push_frame(replacement_frame(index)),
+            "writer rejected replacement DMX frame");
+  require(replacement_writer.finalize(error), error);
+
   constexpr std::uint16_t kUdpPort = 17645U;
   ArtNetCaptureWorker receiver;
   ArtNetCaptureConfig receive_config;
@@ -99,6 +117,26 @@ int main() {
   DmxClipPlaybackEngine engine;
   engine.attach(&output);
   require(engine.load_clip(stream_config.target_path, 48000.0, error), error);
+
+  // El worker de runtime recibe los comandos unos milisegundos después del
+  // callback MIDI. PLAY entra con las muestras ya transcurridas desde el
+  // sampleOffset; PAUSA las descuenta y REANUDAR las suma. Así el cursor
+  // artístico queda en la muestra de la nota, no en la del thread auxiliar.
+  require(engine.play_from_start(DmxClipClockSource::host_samples, error,
+                                 12000U), error);
+  require(engine.status().cursor_samples == 12000U,
+          "sample-offset PLAY compensation did not seed exact cursor");
+  engine.advance_samples(512U, false);
+  require(engine.pause(error, 128U), error);
+  require(engine.status().cursor_samples == 12384U,
+          "sample-offset PAUSE compensation did not rewind runtime delay");
+  require(engine.resume(error, 256U), error);
+  require(engine.status().cursor_samples == 12640U,
+          "sample-offset RESUME compensation did not include runtime delay");
+  engine.synchronize_host_cursor(33333U);
+  require(engine.status().cursor_samples == 33333U,
+          "host mutation handshake could not publish an exact cursor");
+  engine.stop_and_reset();
 
   // El scrub del editor es una previsualización local y segura: actualiza el
   // cuadro retenido y el cursor relativo, sin obtener autoridad Art-Net.
@@ -240,6 +278,51 @@ int main() {
 
   engine.disarm();
   engine.unload();
+
+  // Song changes validate a second file without touching the current reader.
+  // The final reader swap keeps Art-Net authority continuously enabled and
+  // starts the replacement at the sample-accurate elapsed cursor.
+  {
+    DmxClipPlaybackEngine switch_engine;
+    switch_engine.attach(&output);
+    require(switch_engine.load_clip(stream_config.target_path, 48000.0, error),
+            error);
+    switch_engine.set_host_heartbeat_ok(true);
+    require(switch_engine.arm(error), error);
+    require(switch_engine.play_from_start(
+                DmxClipClockSource::host_samples, error), error);
+    require(wait_until([&]() { return output.override_enabled(); }),
+            "switch fixture did not establish old Song authority");
+
+    DmxTakeFileReader prepared;
+    require(prepared.open(replacement_config.target_path, error), error);
+    const auto blackouts_before = output.stats().blackout_packets;
+    require(switch_engine.replace_armed_clip(
+                prepared, 48000.0, 0U, kFrames,
+                DmxClipClockSource::host_samples, 24000U, error), error);
+    require(output.override_enabled() && switch_engine.status().armed &&
+                switch_engine.status().cursor_samples == 24000U,
+            "atomic Song replacement dropped authority or lost MIDI cursor");
+    require(wait_until([&]() {
+      DmxUniverse received{};
+      return receiver.latest_frame(received) &&
+             received == replacement_frame(22U);
+    }), "replacement Song did not publish its sample-accurate DMX frame");
+    require(output.stats().blackout_packets == blackouts_before,
+            "atomic Song replacement emitted an intermediate BLACKOUT packet");
+
+    // `prepared` now owns the previous reader, proving that the handoff is
+    // reversible and does not reopen/revalidate the old file at commit time.
+    require(switch_engine.replace_armed_clip(
+                prepared, 48000.0, 0U, kFrames,
+                DmxClipClockSource::host_samples, 0U, error), error);
+    require(wait_until([&]() {
+      DmxUniverse received{};
+      return receiver.latest_frame(received) && received == expected_frame(0U);
+    }), "reader handoff could not restore the previous Song without blackout");
+    switch_engine.disarm();
+    switch_engine.unload();
+  }
 
   // Regression del flujo real del operador: ARMAR primero y REPRODUCIR después
   // debe conservar la autoridad. El reloj avanza por nFrames del callback aun

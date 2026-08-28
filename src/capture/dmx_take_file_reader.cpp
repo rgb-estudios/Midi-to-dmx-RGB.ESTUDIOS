@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <utility>
 
 namespace aeyla::capture {
 namespace {
@@ -160,6 +161,17 @@ bool read_string(std::ifstream& input,
 }  // namespace
 
 DmxTakeFileReader::~DmxTakeFileReader() { close(); }
+
+void DmxTakeFileReader::swap(DmxTakeFileReader& other) {
+  if(this == &other) return;
+  const std::scoped_lock lock(mutex_, other.mutex_);
+  input_.swap(other.input_);
+  using std::swap;
+  swap(info_, other.info_);
+  cache_.swap(other.cache_);
+  swap(cache_start_frame_, other.cache_start_frame_);
+  swap(cache_count_, other.cache_count_);
+}
 
 bool DmxTakeFileReader::open(const std::filesystem::path& path,
                              std::string& error_message) {

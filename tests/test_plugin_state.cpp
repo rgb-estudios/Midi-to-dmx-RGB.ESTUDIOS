@@ -41,6 +41,9 @@ int main() {
       SessionSongBinding{"song-intro", 16.0},
       SessionSongBinding{"song-final", 144.5},
   };
+  state.show_midi.enabled = true;
+  state.show_midi.channel = 12U;
+  state.show_midi.play_note = 72U;
 
   const auto encoded = aeyla::runtime::encode_plugin_component_state(state);
   check(encoded.ok(), "valid state should encode");
@@ -52,6 +55,8 @@ int main() {
   check(decoded.state.blackout, "blackout should persist as safe state");
   check(decoded.state.song_bindings == state.song_bindings,
         "all 15-song session bindings must survive host-state round trip");
+  check(decoded.state.show_midi == state.show_midi,
+        "MIDI Show mapping must survive host-state round trip");
 
   // Every truncated prefix must fail; no partial state may be accepted.
   for (std::size_t size = 0; size < encoded.bytes.size(); ++size) {
@@ -97,6 +102,14 @@ int main() {
     const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
     check(result.error == PluginStateError::unsafe_relative_locator,
           "relative parent traversal must be rejected");
+  }
+
+  {
+    auto invalid = state;
+    invalid.show_midi.next_note = invalid.show_midi.play_note;
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_show_midi_mapping,
+          "colliding MIDI Show notes must be rejected");
   }
   {
     auto invalid = state;
@@ -166,21 +179,46 @@ int main() {
     legacy_state.song_bindings.clear();
     auto bytes = aeyla::runtime::encode_plugin_component_state(legacy_state).bytes;
     check(bytes.size() >= 2U, "current empty-binding state must contain count tail");
-    bytes.resize(bytes.size() - 2U);
+    bytes.resize(bytes.size() - 10U);
     bytes[10] = 0U;
     bytes[11] = 0U;
     std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
                                  (static_cast<std::uint32_t>(bytes[13]) << 8U) |
                                  (static_cast<std::uint32_t>(bytes[14]) << 16U) |
                                  (static_cast<std::uint32_t>(bytes[15]) << 24U);
-    payload_size -= 2U;
+    payload_size -= 10U;
     bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
     bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
     bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
     bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
     const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    legacy_state.show_midi = {};
     check(result.ok() && result.state == legacy_state,
           "legacy 1.0 host state must migrate to no session bindings");
+  }
+
+  // R07 PRETEST sessions used format 1.1: Song bindings are present but the
+  // MIDI Show map is not. They migrate to the safe disabled default without
+  // losing their placement data.
+  {
+    auto bytes = encoded.bytes;
+    bytes.resize(bytes.size() - 8U);
+    bytes[10] = 1U;
+    bytes[11] = 0U;
+    std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
+                                 (static_cast<std::uint32_t>(bytes[13]) << 8U) |
+                                 (static_cast<std::uint32_t>(bytes[14]) << 16U) |
+                                 (static_cast<std::uint32_t>(bytes[15]) << 24U);
+    payload_size -= 8U;
+    bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
+    bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
+    bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
+    const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    auto expected = state;
+    expected.show_midi = {};
+    check(result.ok() && result.state == expected,
+          "legacy 1.1 state must migrate to disabled MIDI Show defaults");
   }
 
   // Same-major future minor payloads may append fields and remain readable.

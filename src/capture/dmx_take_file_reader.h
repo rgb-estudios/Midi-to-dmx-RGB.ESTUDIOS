@@ -51,6 +51,11 @@ class DmxTakeFileReader final {
                                 std::string& error_message);
   [[nodiscard]] DmxTakeFileReaderInfo info() const;
 
+  // Constant-time ownership handoff used by the dual-phase show switch: a
+  // candidate is fully validated while the old reader remains authoritative,
+  // then both file handles/caches are exchanged under their mutexes.
+  void swap(DmxTakeFileReader& other);
+
  private:
   [[nodiscard]] bool load_cache_locked(std::uint64_t frame_index,
                                        std::string& error_message);

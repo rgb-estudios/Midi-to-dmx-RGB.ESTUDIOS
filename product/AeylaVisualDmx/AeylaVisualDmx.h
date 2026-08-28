@@ -16,6 +16,7 @@
 #include "runtime/host_event_ingress.h"
 #include "runtime/host_transport_mailbox.h"
 #include "runtime/plugin_state.h"
+#include "runtime/show_midi_control.h"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <thread>
 #include <mutex>
 #include <optional>
@@ -156,6 +158,23 @@ public:
   [[nodiscard]] std::string CaptureInputStatus() const;
   [[nodiscard]] double ActiveTakePlaybackProgress() const;
 
+  [[nodiscard]] aeyla::runtime::ShowMidiMapping ShowMidiMapping() const noexcept;
+  [[nodiscard]] aeyla::product::AuthoringResult ToggleShowMidiFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult CycleShowMidiChannelFromUI(
+      int direction);
+  [[nodiscard]] aeyla::product::AuthoringResult BeginShowMidiLearnFromUI(
+      aeyla::runtime::ShowMidiLearnTarget target);
+  [[nodiscard]] aeyla::runtime::ShowMidiLearnTarget ShowMidiLearnTarget() const noexcept;
+  [[nodiscard]] std::string ShowMidiStatus() const;
+  [[nodiscard]] bool ShowMidiPreflightBusy() const noexcept
+  {
+    return mMidiPreflightCursor.load(std::memory_order_acquire) >= 0;
+  }
+  [[nodiscard]] int ActiveTakeSongIndex() const noexcept
+  {
+    return mActiveTakeSongIndex.load(std::memory_order_acquire);
+  }
+
   // Non-destructive Take editor. Delta is expressed in seconds. The source
   // recording remains untouched; playback starts/ends at the edited frame
   // boundaries. Editing is blocked while REC, PLAY or physical Take output is
@@ -196,6 +215,8 @@ public:
               {"Cambiar de proyecto durante GRABAR podría separar el archivo de su canción."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
+    mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.new_project(
         aeyla::product::generate_project_uuid(),
@@ -204,6 +225,8 @@ public:
     {
       SyncParametersFromProject();
       RefreshOutputBackendFromProjectLocked();
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
     }
     SyncSnapshotToAtomicsLocked();
     return status;
@@ -220,12 +243,16 @@ public:
               {"La grabación activa conserva la identidad de la canción actual."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
+    mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.open(path);
     if(status.succeeded)
     {
       SyncParametersFromProject();
       RefreshOutputBackendFromProjectLocked();
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
     }
     SyncSnapshotToAtomicsLocked();
     return status;
@@ -369,6 +396,21 @@ private:
   void ApplyPendingHostStateLocked();
   void ApplyPendingParameterStateLocked();
   void DrainHostEventsLocked();
+  void DrainShowMidiCommandsLocked(
+      const aeyla::runtime::HostTransportSnapshot& host);
+  void ClearShowMidiCommandsLocked() noexcept;
+  [[nodiscard]] bool StartPreparedTakeFromMidiLocked(
+      std::size_t song_index, std::uint64_t trigger_sample,
+      std::string& error_message);
+  [[nodiscard]] bool PreloadPreparedTakeForMidiLocked(
+      std::size_t song_index, std::string& error_message);
+  void SetShowMidiMessage(std::string message);
+  void SyncShowMidiMappingToState(
+      const aeyla::runtime::ShowMidiMapping& mapping);
+  [[nodiscard]] std::uint64_t BeginShowTransportMutation() noexcept;
+  void EndShowTransportMutation() noexcept;
+  void SynchronizeShowTransportCursor(std::uint64_t trigger_sample,
+                                      std::uint64_t base_cursor = 0U) noexcept;
   void RefreshHostStateCacheLocked();
   void SyncSnapshotToAtomicsLocked() noexcept;
   void CaptureParameterValueFromHost(int paramIdx) noexcept;
@@ -444,6 +486,7 @@ private:
   }
 
   aeyla::runtime::HostEventIngress<1024> mHostIngress{};
+  aeyla::runtime::ShowMidiIngress<256> mShowMidiIngress{};
   aeyla::runtime::HostTransportMailbox mHostTransport{};
   mutable std::mutex mModelMutex;
   aeyla::product::ApplicationModel mModel{};
@@ -478,6 +521,18 @@ private:
   mutable std::mutex mHostStateMutex;
   aeyla::runtime::PluginComponentState mHostStateCache{};
   std::optional<aeyla::runtime::PluginComponentState> mPendingHostState;
+  std::optional<aeyla::runtime::ShowMidiEvent> mPendingShowMidiEvent;
+  std::array<std::unique_ptr<aeyla::capture::DmxTakeFileReader>,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakeReaders{};
+  std::array<std::filesystem::path,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakePaths{};
+  std::array<std::uint64_t,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakeStarts{};
+  std::array<std::uint64_t,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakeEnds{};
+
+  mutable std::mutex mShowMidiMutex;
+  std::string mShowMidiMessage{"MIDI SHOW DESACTIVADO · configura y habilita cuando el show esté listo"};
 
   std::atomic<bool> mParameterUpdatePending{true};
   std::atomic<bool> mLookParameterUiSyncPending{false};
@@ -491,6 +546,18 @@ private:
   std::atomic<int> mLastMidiNote{-1};
   std::atomic<int> mActiveExecutor{-1};
   std::atomic<std::uint64_t> mMidiEventCount{0};
+  std::atomic<std::uint64_t> mProcessedAudioSamples{0U};
+  std::atomic<std::uint64_t> mProcessedTransportSamples{0U};
+  std::atomic<std::uint64_t> mAudioAdvanceSequence{0U};
+  std::atomic<bool> mShowTransportMutation{false};
+  std::atomic<std::uint64_t> mShowMidiMappingPacked{0U};
+  std::atomic<std::uint32_t> mPendingMidiLearnPacked{0U};
+  std::atomic<aeyla::runtime::ShowMidiLearnTarget> mShowMidiLearnTarget{
+      aeyla::runtime::ShowMidiLearnTarget::none};
+  std::atomic<int> mLoadedTakeSongIndex{-1};
+  std::atomic<int> mActiveTakeSongIndex{-1};
+  std::atomic<int> mMidiPreloadSongRequest{-1};
+  std::atomic<int> mMidiPreflightCursor{-1};
   std::atomic<std::uint64_t> mHostStateRestoreErrors{0};
   std::atomic<std::uint64_t> mDmxGeneration{0};
   std::atomic<int> mDmxNonZeroChannels{0};
