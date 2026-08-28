@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Fixed — R07 real-time Take Art-Net authority
+
+- Fixed the operator sequence `ARMAR SALIDA DE TOMA` followed by `REPRODUCIR`:
+  PLAY now reuses the already validated clip instead of reloading it and
+  silently removing its physical-output authority.
+- Made the host audio callback the single relative Take clock. Each processed
+  block advances by its exact sample count; absolute REAPER Arrangement
+  position is now heartbeat/safety information only and can no longer freeze,
+  duplicate or relocate Take playback after Stop, Seek or Loop.
+- Reject reloading a Take while output is armed and distinguish `ARMADA ·
+  ESPERA REPRODUCIR`, `PREVIA SIN SALIDA FÍSICA` and `AL AIRE` in operator
+  feedback instead of reporting armed-but-idle output as live.
+- Added a loopback Art-Net regression covering ARM → PLAY, a stopped absolute
+  host position, callback-driven progression and retained physical authority.
+
+### Safety boundary — R07 real-time Take Art-Net authority
+
+- The audio callback performs atomic clock publication only; file reads and UDP
+  transmission remain on their dedicated workers. Offline render and lost-host
+  heartbeat continue to fail closed and require explicit re-arm.
+- Simultaneous capture and RX→TX monitoring remains intentionally blocked; it
+  requires a separately specified pass-through mode with loop prevention.
+- The affected native test passes in strict local C++ compilation and simulated
+  loopback Art-Net. Windows/macOS product CI, REAPER host evidence and physical
+  node/DMX validation remain open before hardware- or show-tested status.
+
 ### Fixed — R07 free-point Take marking
 
 - Replaced the prominent second-based trim controls with a playhead-first

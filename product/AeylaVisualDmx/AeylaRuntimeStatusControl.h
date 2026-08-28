@@ -65,8 +65,10 @@ public:
                      footer.L + 875.0F, footer.B));
 
     std::string state;
-    if(mPlug.TakeOutputArmed())
+    if(mPlug.TakeOutputLive())
       state = "TOMA AL AIRE";
+    else if(mPlug.TakeOutputArmed())
+      state = "TOMA ARMADA · ESPERA REPRODUCIR";
     else if(mPlug.TakeRecording())
       state = "CAPTURANDO AVOLITES";
     else if(mPlug.TakePlaying())
@@ -80,7 +82,8 @@ public:
       state = "FALLA DEL MOTOR";
 
     IColor stateColor = valid;
-    if(mPlug.TakeOutputArmed()) stateColor = danger;
+    if(mPlug.TakeOutputLive()) stateColor = danger;
+    else if(mPlug.TakeOutputArmed()) stateColor = warning;
     else if(mPlug.TakeRecording()) stateColor = warning;
     else if(mPlug.RenderingOffline() || !mPlug.RuntimeHealthy()) stateColor = danger;
 

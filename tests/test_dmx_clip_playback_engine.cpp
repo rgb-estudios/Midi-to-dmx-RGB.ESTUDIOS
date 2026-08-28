@@ -1,8 +1,10 @@
 #include "capture/artnet_capture_worker.h"
 #include "capture/dmx_clip_playback_engine.h"
 #include "capture/dmx_take_file_store.h"
+#include "capture/dmx_take_scheduler.h"
 #include "capture/dmx_take_stream_writer.h"
 #include "output/artnet_output_worker.h"
+#include "runtime/host_transport_mailbox.h"
 
 #include <chrono>
 #include <cstdint>
@@ -198,12 +200,44 @@ int main() {
 
   engine.disarm();
   engine.unload();
+
+  // Regression del flujo real del operador: ARMAR primero y REPRODUCIR después
+  // debe conservar la autoridad. El reloj avanza por nFrames del callback aun
+  // cuando la posición absoluta del Arrangement permanece detenida.
+  {
+    runtime::HostTransportMailbox host;
+    host.publish(false, false, 777.0, 0.0, 120.0);
+
+    DmxTakeScheduler scheduler;
+    scheduler.attach(&output, &host);
+    require(scheduler.load_take_file(stream_config.target_path, 48000.0, error),
+            error);
+    require(scheduler.arm(error), error);
+    require(!scheduler.load_take_file(stream_config.target_path, 48000.0, error),
+            "an armed Take reload must fail instead of silently disarming output");
+    require(scheduler.status().armed,
+            "rejected armed reload unexpectedly removed Take authority");
+    require(scheduler.play(error), error);
+    require(wait_until([&]() {
+      return scheduler.status().current_frame == 0U && output.override_enabled();
+    }), "ARM -> PLAY did not establish physical Take authority");
+
+    scheduler.advance_samples(48000U, false);
+    host.publish(false, false, 777.0, 0.0, 120.0);
+    require(wait_until([&]() { return scheduler.status().current_frame == 44U; }),
+            "stopped Arrangement did not advance from callback sample count");
+    require(wait_until([&]() {
+      return scheduler.status().armed && output.override_enabled();
+    }), "real-time Take playback lost authority after callback advance");
+    scheduler.disarm();
+  }
+
   output.stop();
   receiver.stop();
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
 
-  std::cout << "AEYLA DMX clip engine PASS: MIDI-relative play/pause/resume/retrigger\n";
+  std::cout << "AEYLA DMX clip engine PASS: relative clock + ARM/PLAY Art-Net\n";
   return EXIT_SUCCESS;
 }

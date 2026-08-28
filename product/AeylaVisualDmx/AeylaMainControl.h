@@ -1018,7 +1018,9 @@ private:
                   static_cast<unsigned long long>(mPlug.CaptureSequenceGaps()),
                   static_cast<unsigned long long>(mPlug.ArtNetSentPackets()),
                   static_cast<unsigned long long>(mPlug.ArtNetSendErrors()),
-                  mPlug.TakeOutputArmed() ? "AL AIRE" : "DESARMADA");
+                  mPlug.TakeOutputLive() ? "AL AIRE" :
+                      (mPlug.TakeOutputArmed() ? "ARMADA / ESPERA PLAY" :
+                                                "DESARMADA"));
     g.DrawText(IText(8.2F,
                      mPlug.ArtNetSendErrors() > 0U ? kWarn : kFaint,
                      "AeylaUI", EAlign::Near, EVAlign::Top),

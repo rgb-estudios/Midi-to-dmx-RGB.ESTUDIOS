@@ -71,8 +71,10 @@ class DmxTakeScheduler final {
   void stop_hold() noexcept;
   void stop_reset() noexcept;
 
-  // Seguro para callback de audio en modo file-backed: sólo suma muestras a un
-  // contador atómico del reproductor relativo.
+  // ÚNICA vía de reloj para el modo file-backed. Es segura para el callback de
+  // audio: sólo suma muestras a un contador atómico del reproductor relativo.
+  // El worker de seguridad observa el heartbeat, pero nunca vuelve a inferir
+  // tiempo desde la posición absoluta del Arrangement.
   void advance_samples(std::uint32_t processed_samples,
                        bool rendering_offline) noexcept;
 

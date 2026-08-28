@@ -562,23 +562,33 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
   if(selected.port_address != outputUniverse)
     return {false, {}, "El universo de la toma no coincide con la salida del proyecto"};
 
-  mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   std::string error;
-  if(!mTakeScheduler.load_take_file(selected.path, GetSampleRate(), error))
-    return {false, {}, "La toma no superó la validación · " + error};
-  const auto edited = aeyla::take_library_session::edit_state(this, songId);
-  if(edited.has_value() && edited->path == selected.path &&
-     !mTakeScheduler.set_play_range(
-         static_cast<std::size_t>(edited->start_frame),
-         static_cast<std::size_t>(edited->end_frame_exclusive), error))
-    return {false, {}, "El rango ENTRADA / SALIDA no pudo cargarse · " + error};
-  aeyla::take_library_session::set_loaded_path(this, songId, selected.path);
-  aeyla::take_library_session::set_storage_message(
-      this, "CARGADA DESDE DISCO · " + selected.path.filename().string());
+  const auto loaded = aeyla::take_library_session::loaded_path(this, songId);
+  const bool sameValidatedClip =
+      loaded == selected.path && mTakeScheduler.status().file_backed;
+  if(!sameValidatedClip)
+  {
+    // Loading is intentionally destructive to output authority, so it is done
+    // only when the selected file really changed. The normal operator order
+    // ARM -> PLAY must preserve the arm established by the first action.
+    mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
+    if(!mTakeScheduler.load_take_file(selected.path, GetSampleRate(), error))
+      return {false, {}, "La toma no superó la validación · " + error};
+    const auto edited = aeyla::take_library_session::edit_state(this, songId);
+    if(edited.has_value() && edited->path == selected.path &&
+       !mTakeScheduler.set_play_range(
+           static_cast<std::size_t>(edited->start_frame),
+           static_cast<std::size_t>(edited->end_frame_exclusive), error))
+      return {false, {}, "El rango ENTRADA / SALIDA no pudo cargarse · " + error};
+    aeyla::take_library_session::set_loaded_path(this, songId, selected.path);
+    aeyla::take_library_session::set_storage_message(
+        this, "CARGADA DESDE DISCO · " + selected.path.filename().string());
+  }
 
   if(!mTakeScheduler.play(error))
     return {false, {}, error};
 
+  const auto edited = aeyla::take_library_session::edit_state(this, songId);
   const std::uint64_t selectedFrames = edited.has_value() &&
           edited->path == selected.path
       ? edited->end_frame_exclusive - edited->start_frame
@@ -587,8 +597,11 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
       ? 0.0
       : static_cast<double>(selectedFrames) /
             static_cast<double>(selected.frames_per_second);
+  const std::string authority = TakeOutputArmed()
+      ? "REPRODUCIENDO AL AIRE"
+      : "PREVIA SIN SALIDA FÍSICA";
   return {true, selected.take_name,
-          "Reproduciendo " + selected.take_name + " · " + FormatDuration(duration) +
+          authority + " · " + selected.take_name + " · " + FormatDuration(duration) +
               " · cursor relativo por muestras"};
 }
 

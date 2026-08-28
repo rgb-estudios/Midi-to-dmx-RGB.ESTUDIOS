@@ -140,6 +140,10 @@ public:
   [[nodiscard]] bool TakeRecording() const noexcept;
   [[nodiscard]] bool TakePlaying() const noexcept;
   [[nodiscard]] bool TakeOutputArmed() const noexcept;
+  [[nodiscard]] bool TakeOutputLive() const noexcept
+  {
+    return TakeOutputArmed() && mArtNetOutput.override_enabled();
+  }
   [[nodiscard]] bool HasActiveTake() const;
   [[nodiscard]] std::string ActiveTakeStatus() const;
   [[nodiscard]] std::string CaptureInputStatus() const;

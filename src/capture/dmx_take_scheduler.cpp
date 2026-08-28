@@ -57,6 +57,10 @@ bool DmxTakeScheduler::load_take_file(const std::filesystem::path& path,
                                       double sample_rate,
                                       std::string& error_message) {
   error_message.clear();
+  if(status().armed) {
+    error_message = "Desarma la salida DMX antes de cargar otra toma";
+    return false;
+  }
   if(status().playing) {
     error_message = "Detén el clip DMX activo antes de cargar otro";
     return false;
@@ -390,26 +394,19 @@ void DmxTakeScheduler::run() noexcept {
   using Clock = std::chrono::steady_clock;
   constexpr auto kLoopPeriod = std::chrono::milliseconds(2);
   constexpr auto kHeartbeatTimeout = std::chrono::milliseconds(750);
-  // Un salto mayor a este umbral se considera SEEK/relocación del arreglo y
-  // jamás debe trasladarse al tiempo artístico del clip relativo.
-  constexpr std::int64_t kMaximumContinuousDeltaSamples = 32768;
-
   std::uint64_t lastRevision = 0U;
   auto lastHeartbeat = Clock::now();
-  std::int64_t lastSamplePosition = -1;
 
   while(!stop_requested_.load(std::memory_order_acquire)) {
     const auto now = Clock::now();
 
     bool hostSafe = false;
-    bool receivedNewHostBlock = false;
     runtime::HostTransportSnapshot hostSnapshot{};
     if(host_ != nullptr) {
       hostSnapshot = host_->latest();
       if(hostSnapshot.revision != 0U && hostSnapshot.revision != lastRevision) {
         lastRevision = hostSnapshot.revision;
         lastHeartbeat = now;
-        receivedNewHostBlock = true;
       }
       hostSafe = hostSnapshot.revision != 0U && !hostSnapshot.rendering_offline &&
                  now - lastHeartbeat <= kHeartbeatTimeout;
@@ -418,23 +415,6 @@ void DmxTakeScheduler::run() noexcept {
 
     if(file_mode_.load(std::memory_order_acquire)) {
       file_player_.set_host_heartbeat_ok(hostSafe);
-
-      // Sólo usamos la diferencia entre bloques consecutivos como cantidad de
-      // muestras procesadas. La posición absoluta nunca selecciona un cuadro.
-      // SEEK, LOOP o reordenamiento del arreglo producen discontinuidad y se
-      // ignoran; el cursor AEYLA conserva su tiempo relativo.
-      if(receivedNewHostBlock && hostSnapshot.sample_position_valid) {
-        const std::int64_t current = hostSnapshot.sample_position;
-        if(lastSamplePosition >= 0 && current > lastSamplePosition) {
-          const std::int64_t delta = current - lastSamplePosition;
-          if(delta > 0 && delta <= kMaximumContinuousDeltaSamples) {
-            file_player_.advance_samples(
-                static_cast<std::uint32_t>(delta),
-                hostSnapshot.rendering_offline);
-          }
-        }
-        lastSamplePosition = current;
-      }
 
       if(!hostSafe && file_player_.status().armed) {
         file_player_.disarm();

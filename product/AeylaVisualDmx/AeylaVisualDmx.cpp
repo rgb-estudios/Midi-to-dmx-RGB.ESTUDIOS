@@ -185,14 +185,20 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
 {
   (void) inputs;
 
-  // Publish only the newest absolute host transport snapshot. This is bounded,
-  // lock-free and contains no file/network/UI work. Lighting runtime can later
-  // reconstruct Stop/Seek/Loop from host truth without replaying audio blocks.
+  // Publish the newest host snapshot for liveness/safety, then advance the
+  // artistic Take clock by the exact amount of audio processed. Both calls are
+  // bounded and lock-free; no file, network or UI work occurs here. Absolute
+  // Arrangement position is deliberately NOT used as the Take clock: Stop,
+  // Seek and Loop must never relocate or duplicate a relative DMX clip.
+  const bool renderingOffline = GetRenderingOffline();
   mHostTransport.publish(GetTransportIsRunning(),
-                         GetRenderingOffline(),
+                         renderingOffline,
                          GetSamplePos(),
                          GetPPQPos(),
                          GetTempo());
+  if(nFrames > 0)
+    mTakeScheduler.advance_samples(static_cast<std::uint32_t>(nFrames),
+                                   renderingOffline);
 
   // Silent MIDI-controlled lighting runtime: the host callback only clears the
   // advertised bus. It performs no project, graphics, DMX, network or file work.
