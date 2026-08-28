@@ -792,17 +792,19 @@ private:
     // final warning inside the card. The compact 960x620 branch combines its
     // MTC/safety footer into two lines while retaining all six controls.
     const float midiFixedBelowRows = mCompactMidi ? 163.0F : 264.0F;
-    const float rowHeight = std::clamp(
+    const float midiRowHeight = std::clamp(
         (midi.B - rowTop - midiFixedBelowRows) / 6.0F,
         mCompactMidi ? 28.0F : 34.0F,
         mCompactMidi ? 34.0F : 44.0F);
     for(std::size_t index = 0U; index < mMidiRows.size(); ++index)
     {
       const float topRow = rowTop + static_cast<float>(index) *
-          (rowHeight + rowGap);
-      mMidiRows[index] = IRECT(midi.L, topRow, midi.R, topRow + rowHeight);
+          (midiRowHeight + rowGap);
+      mMidiRows[index] = IRECT(
+          midi.L, topRow, midi.R, topRow + midiRowHeight);
       mMidiLearnButtons[index] = IRECT(midi.R - 132.0F, topRow + 4.0F,
-                                       midi.R - 6.0F, topRow + rowHeight - 4.0F);
+                                       midi.R - 6.0F,
+                                       topRow + midiRowHeight - 4.0F);
     }
     const float statusTop = mMidiRows.back().B +
         (mCompactMidi ? 6.0F : 12.0F);
