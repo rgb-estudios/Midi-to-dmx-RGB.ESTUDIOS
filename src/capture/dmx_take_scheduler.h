@@ -25,6 +25,7 @@ struct DmxTakeSchedulerStatus {
   bool file_backed{false};
   bool hold_valid{false};
   bool host_heartbeat_ok{false};
+  bool monotonic_clock{false};
   double progress{0.0};
   std::size_t range_start_frame{0U};
   std::size_t range_end_frame_exclusive{0U};
@@ -63,7 +64,9 @@ class DmxTakeScheduler final {
                                     std::string& error_message);
   void reset_play_range() noexcept;
 
-  [[nodiscard]] bool play(std::string& error_message);
+  [[nodiscard]] bool play(
+      std::string& error_message,
+      DmxClipClockSource clock_source = DmxClipClockSource::host_samples);
   [[nodiscard]] bool pause(std::string& error_message);
   [[nodiscard]] bool resume(std::string& error_message);
   [[nodiscard]] bool seek_frame(std::size_t frame_index,

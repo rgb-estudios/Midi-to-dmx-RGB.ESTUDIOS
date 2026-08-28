@@ -148,9 +148,10 @@ void DmxTakeScheduler::reset_play_range() noexcept {
     publish_hold_locked();
 }
 
-bool DmxTakeScheduler::play(std::string& error_message) {
+bool DmxTakeScheduler::play(std::string& error_message,
+                            DmxClipClockSource clock_source) {
   if(file_mode_.load(std::memory_order_acquire))
-    return file_player_.play_from_start(error_message);
+    return file_player_.play_from_start(clock_source, error_message);
 
   error_message.clear();
   ensure_thread();
@@ -275,6 +276,10 @@ bool DmxTakeScheduler::arm(std::string& error_message) {
       return false;
     armed_.store(true, std::memory_order_release);
     heartbeat_ok_.store(true, std::memory_order_release);
+    {
+      const std::scoped_lock lock(mutex_);
+      error_.clear();
+    }
     return true;
   }
 
@@ -312,12 +317,18 @@ DmxTakeSchedulerStatus DmxTakeScheduler::status() const {
     result.file_backed = true;
     result.hold_valid = file.hold_valid;
     result.host_heartbeat_ok = file.host_heartbeat_ok;
+    result.monotonic_clock =
+        file.clock_source == DmxClipClockSource::monotonic_realtime;
     result.progress = std::clamp(file.progress, 0.0, 1.0);
     result.range_start_frame = static_cast<std::size_t>(file.range_start_frame);
     result.range_end_frame_exclusive =
         static_cast<std::size_t>(file.range_end_frame_exclusive);
     result.current_frame = static_cast<std::size_t>(file.current_frame);
     result.error = file.error;
+    if(result.error.empty()) {
+      const std::scoped_lock lock(mutex_);
+      result.error = error_;
+    }
     return result;
   }
 
@@ -418,11 +429,17 @@ void DmxTakeScheduler::run() noexcept {
     if(file_mode_.load(std::memory_order_acquire)) {
       file_player_.set_host_heartbeat_ok(hostSafe);
 
-      if(!hostSafe && file_player_.status().armed) {
+      const auto fileStatus = file_player_.status();
+      const bool hostOffline = hostSnapshot.revision != 0U &&
+                               hostSnapshot.rendering_offline;
+      if((hostOffline || (!hostSafe && !file_player_.uses_monotonic_clock())) &&
+         fileStatus.armed) {
         file_player_.disarm();
         armed_.store(false, std::memory_order_release);
         const std::scoped_lock lock(mutex_);
-        error_ = "Salida DMX desarmada automáticamente: se perdió el pulso del host";
+        error_ = hostOffline
+            ? "Salida DMX desarmada: el host inició renderizado sin conexión"
+            : "Salida DMX desarmada automáticamente: se perdió el pulso del host";
       }
       std::this_thread::sleep_for(kLoopPeriod);
       continue;

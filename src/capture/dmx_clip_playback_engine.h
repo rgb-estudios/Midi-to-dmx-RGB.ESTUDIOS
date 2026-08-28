@@ -22,6 +22,11 @@ enum class DmxClipTransportState : std::uint8_t {
   fault,
 };
 
+enum class DmxClipClockSource : std::uint8_t {
+  host_samples = 0,
+  monotonic_realtime,
+};
+
 struct DmxClipPlaybackStatus {
   bool running{false};
   bool loaded{false};
@@ -30,6 +35,7 @@ struct DmxClipPlaybackStatus {
   bool host_heartbeat_ok{false};
   bool rendering_offline{false};
   DmxClipTransportState transport{DmxClipTransportState::ready};
+  DmxClipClockSource clock_source{DmxClipClockSource::host_samples};
   std::uint64_t current_frame{0U};
   std::uint64_t range_start_frame{0U};
   std::uint64_t range_end_frame_exclusive{0U};
@@ -45,8 +51,9 @@ struct DmxClipPlaybackStatus {
 // - el DAW entrega comandos MIDI y bloques de muestras procesadas;
 // - REPRODUCIR/REINICIAR comienza en cursor 0;
 // - PAUSA mantiene cursor + DMX y REANUDAR continúa desde ese punto;
-// - advance_samples() es la única vía para avanzar el tiempo artístico;
-// - el reloj de pared sólo puede usarse como vigilancia de vida del host.
+// - los disparos DAW/MIDI avanzan exclusivamente mediante advance_samples();
+// - la reproducción manual de operador puede usar un reloj monotónico propio
+//   para no detenerse si el host cierra su dispositivo de audio al perder foco.
 //
 // advance_samples() está diseñado para el callback de audio: sólo opera sobre
 // atómicos, no toma mutex, no asigna memoria y no realiza E/S de archivo/red.
@@ -74,7 +81,8 @@ class DmxClipPlaybackEngine final {
   void disarm() noexcept;
 
   // Comandos de transporte. Deben invocarse fuera del callback de audio.
-  [[nodiscard]] bool play_from_start(std::string& error_message);
+  [[nodiscard]] bool play_from_start(DmxClipClockSource clock_source,
+                                     std::string& error_message);
   [[nodiscard]] bool pause(std::string& error_message);
   [[nodiscard]] bool resume(std::string& error_message);
   // Previsualización segura del editor: lee un cuadro desde disco y mueve el
@@ -95,6 +103,7 @@ class DmxClipPlaybackEngine final {
   void set_host_heartbeat_ok(bool ok) noexcept;
 
   [[nodiscard]] DmxClipPlaybackStatus status() const;
+  [[nodiscard]] bool uses_monotonic_clock() const noexcept;
 
  private:
   void ensure_thread();
@@ -103,6 +112,8 @@ class DmxClipPlaybackEngine final {
   void set_error(std::string message) noexcept;
   [[nodiscard]] std::string error() const;
   [[nodiscard]] bool publish_cursor_frame_locked();
+  void update_monotonic_cursor_locked(
+      std::chrono::steady_clock::time_point now) noexcept;
 
   mutable std::mutex mutex_;
   output::ArtNetOutputWorker* output_{nullptr};
@@ -113,6 +124,8 @@ class DmxClipPlaybackEngine final {
   DmxUniverse hold_frame_{};
   bool hold_valid_{false};
   std::uint64_t generation_{3000000000ULL};
+  std::chrono::steady_clock::time_point monotonic_anchor_time_{};
+  std::uint64_t monotonic_anchor_samples_{0U};
 
   mutable std::mutex error_mutex_;
   std::string error_;
@@ -125,6 +138,7 @@ class DmxClipPlaybackEngine final {
   std::atomic<bool> heartbeat_ok_{false};
   std::atomic<bool> rendering_offline_{false};
   std::atomic<DmxClipTransportState> transport_{DmxClipTransportState::ready};
+  std::atomic<DmxClipClockSource> clock_source_{DmxClipClockSource::host_samples};
   std::atomic<std::uint64_t> cursor_samples_{0U};
   std::atomic<std::uint64_t> current_frame_{0U};
   std::atomic<double> progress_{0.0};

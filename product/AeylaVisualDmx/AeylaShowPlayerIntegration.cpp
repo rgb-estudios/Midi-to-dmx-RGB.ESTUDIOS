@@ -698,7 +698,11 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
         this, "CARGADA DESDE DISCO · " + selected.path.filename().string());
   }
 
-  if(!mTakeScheduler.play(error))
+  // El botón manual debe continuar aunque REAPER cierre su dispositivo de
+  // audio al perder foco. Los futuros disparos DAW/MIDI conservarán el reloj
+  // por muestras del host mediante DmxClipClockSource::host_samples.
+  if(!mTakeScheduler.play(
+         error, aeyla::capture::DmxClipClockSource::monotonic_realtime))
     return {false, {}, error};
 
   const auto edited = aeyla::take_library_session::edit_state(this, songId);
@@ -715,7 +719,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
       : "PREVIA SIN SALIDA FÍSICA";
   return {true, selected.take_name,
           authority + " · " + selected.take_name + " · " + FormatDuration(duration) +
-              " · cursor relativo por muestras"};
+              " · reloj operativo independiente"};
 }
 
 void AeylaVisualDmx::StopActiveTakePlaybackFromUI()

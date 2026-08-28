@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace aeyla::capture {
@@ -64,6 +65,10 @@ bool DmxClipPlaybackEngine::load_clip(const std::filesystem::path& path,
     current_frame_.store(0U, std::memory_order_relaxed);
     progress_.store(0.0, std::memory_order_relaxed);
     transport_.store(DmxClipTransportState::ready, std::memory_order_release);
+    clock_source_.store(DmxClipClockSource::host_samples,
+                        std::memory_order_release);
+    monotonic_anchor_samples_ = 0U;
+    monotonic_anchor_time_ = std::chrono::steady_clock::now();
     rendering_offline_.store(false, std::memory_order_release);
     heartbeat_ok_.store(false, std::memory_order_release);
     set_error({});
@@ -85,6 +90,8 @@ void DmxClipPlaybackEngine::unload() noexcept {
   hold_valid_ = false;
   loaded_.store(false, std::memory_order_release);
   transport_.store(DmxClipTransportState::ready, std::memory_order_release);
+  clock_source_.store(DmxClipClockSource::host_samples,
+                      std::memory_order_release);
   current_frame_.store(0U, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
 }
@@ -165,7 +172,9 @@ void DmxClipPlaybackEngine::disarm() noexcept {
     output_->set_override_enabled(false);
 }
 
-bool DmxClipPlaybackEngine::play_from_start(std::string& error_message) {
+bool DmxClipPlaybackEngine::play_from_start(
+    DmxClipClockSource clock_source,
+    std::string& error_message) {
   error_message.clear();
   const std::scoped_lock lock(mutex_);
   if(!loaded_.load(std::memory_order_acquire) || !reader_.info().open) {
@@ -176,25 +185,36 @@ bool DmxClipPlaybackEngine::play_from_start(std::string& error_message) {
   hold_valid_ = false;
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
+  clock_source_.store(clock_source, std::memory_order_release);
+  monotonic_anchor_samples_ = 0U;
+  monotonic_anchor_time_ = std::chrono::steady_clock::now();
   transport_.store(DmxClipTransportState::playing, std::memory_order_release);
   return true;
 }
 
 bool DmxClipPlaybackEngine::pause(std::string& error_message) {
   error_message.clear();
+  const std::scoped_lock lock(mutex_);
   if(transport_.load(std::memory_order_acquire) != DmxClipTransportState::playing) {
     error_message = "El clip DMX sólo puede pausarse mientras está reproduciendo";
     return false;
   }
+  if(uses_monotonic_clock())
+    update_monotonic_cursor_locked(std::chrono::steady_clock::now());
   transport_.store(DmxClipTransportState::paused, std::memory_order_release);
   return true;
 }
 
 bool DmxClipPlaybackEngine::resume(std::string& error_message) {
   error_message.clear();
+  const std::scoped_lock lock(mutex_);
   if(transport_.load(std::memory_order_acquire) != DmxClipTransportState::paused) {
     error_message = "El clip DMX sólo puede reanudarse desde pausa";
     return false;
+  }
+  if(uses_monotonic_clock()) {
+    monotonic_anchor_samples_ = cursor_samples_.load(std::memory_order_relaxed);
+    monotonic_anchor_time_ = std::chrono::steady_clock::now();
   }
   transport_.store(DmxClipTransportState::playing, std::memory_order_release);
   return true;
@@ -259,6 +279,8 @@ void DmxClipPlaybackEngine::stop_and_reset() noexcept {
   transport_.store(DmxClipTransportState::ready, std::memory_order_release);
   const std::scoped_lock lock(mutex_);
   cursor_samples_.store(0U, std::memory_order_relaxed);
+  monotonic_anchor_samples_ = 0U;
+  monotonic_anchor_time_ = std::chrono::steady_clock::now();
   hold_valid_ = false;
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
@@ -270,7 +292,8 @@ void DmxClipPlaybackEngine::advance_samples(std::uint32_t processed_samples,
                                             bool rendering_offline) noexcept {
   rendering_offline_.store(rendering_offline, std::memory_order_release);
   if(rendering_offline || processed_samples == 0U ||
-     transport_.load(std::memory_order_acquire) != DmxClipTransportState::playing)
+     transport_.load(std::memory_order_acquire) != DmxClipTransportState::playing ||
+     uses_monotonic_clock())
     return;
 
   cursor_samples_.fetch_add(static_cast<std::uint64_t>(processed_samples),
@@ -279,7 +302,7 @@ void DmxClipPlaybackEngine::advance_samples(std::uint32_t processed_samples,
 
 void DmxClipPlaybackEngine::set_host_heartbeat_ok(bool ok) noexcept {
   heartbeat_ok_.store(ok, std::memory_order_release);
-  if(!ok) {
+  if(!ok && !uses_monotonic_clock()) {
     const std::scoped_lock lock(mutex_);
     if(output_ != nullptr)
       output_->set_override_enabled(false);
@@ -294,6 +317,7 @@ DmxClipPlaybackStatus DmxClipPlaybackEngine::status() const {
   result.host_heartbeat_ok = heartbeat_ok_.load(std::memory_order_acquire);
   result.rendering_offline = rendering_offline_.load(std::memory_order_acquire);
   result.transport = transport_.load(std::memory_order_acquire);
+  result.clock_source = clock_source_.load(std::memory_order_acquire);
   result.current_frame = current_frame_.load(std::memory_order_relaxed);
   result.cursor_samples = cursor_samples_.load(std::memory_order_relaxed);
   result.progress = progress_.load(std::memory_order_relaxed);
@@ -305,6 +329,11 @@ DmxClipPlaybackStatus DmxClipPlaybackEngine::status() const {
     result.range_end_frame_exclusive = range_end_frame_exclusive_;
   }
   return result;
+}
+
+bool DmxClipPlaybackEngine::uses_monotonic_clock() const noexcept {
+  return clock_source_.load(std::memory_order_acquire) ==
+         DmxClipClockSource::monotonic_realtime;
 }
 
 void DmxClipPlaybackEngine::ensure_thread() {
@@ -378,6 +407,25 @@ bool DmxClipPlaybackEngine::publish_cursor_frame_locked() {
   return true;
 }
 
+void DmxClipPlaybackEngine::update_monotonic_cursor_locked(
+    std::chrono::steady_clock::time_point now) noexcept {
+  if(!uses_monotonic_clock() ||
+     transport_.load(std::memory_order_acquire) != DmxClipTransportState::playing ||
+     !valid_sample_rate(sample_rate_))
+    return;
+
+  const long double elapsed = std::max(
+      0.0L,
+      std::chrono::duration<long double>(now - monotonic_anchor_time_).count());
+  const long double advanced = elapsed * static_cast<long double>(sample_rate_);
+  const long double maximum = static_cast<long double>(
+      std::numeric_limits<std::uint64_t>::max() - monotonic_anchor_samples_);
+  const auto bounded = static_cast<std::uint64_t>(
+      std::floor(std::min(advanced, maximum)));
+  cursor_samples_.store(monotonic_anchor_samples_ + bounded,
+                        std::memory_order_relaxed);
+}
+
 void DmxClipPlaybackEngine::run() noexcept {
   running_.store(true, std::memory_order_release);
 
@@ -388,11 +436,15 @@ void DmxClipPlaybackEngine::run() noexcept {
       output = output_;
     }
 
-    if(!armed_.load(std::memory_order_acquire) || output == nullptr ||
-       !heartbeat_ok_.load(std::memory_order_acquire) ||
+    if(!armed_.load(std::memory_order_acquire) || output == nullptr) {
+      std::this_thread::sleep_for(kWorkerSleep);
+      continue;
+    }
+
+    const bool host_required = !uses_monotonic_clock();
+    if((host_required && !heartbeat_ok_.load(std::memory_order_acquire)) ||
        rendering_offline_.load(std::memory_order_acquire)) {
-      if(output != nullptr)
-        output->set_override_enabled(false);
+      output->set_override_enabled(false);
       std::this_thread::sleep_for(kWorkerSleep);
       continue;
     }
@@ -408,6 +460,8 @@ void DmxClipPlaybackEngine::run() noexcept {
     bool published = false;
     {
       const std::scoped_lock lock(mutex_);
+      if(state == DmxClipTransportState::playing && uses_monotonic_clock())
+        update_monotonic_cursor_locked(std::chrono::steady_clock::now());
       published = publish_cursor_frame_locked();
     }
 

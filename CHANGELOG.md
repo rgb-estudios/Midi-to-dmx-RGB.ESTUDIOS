@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-28 — R07 continuidad Art-Net con REAPER inactivo
+
+- La reproducción manual de una toma usa un reloj monotónico independiente del callback de audio.
+- Cambiar el foco desde REAPER a Capture ya no corta Art-Net cuando REAPER muestra `audio device closed`.
+- La reproducción DAW/MIDI conserva el reloj por muestras y el fail-closed por pérdida real de heartbeat.
+- APAGÓN, renderizado sin conexión, descarga y cierre conservan su prioridad de seguridad.
+
 ## Unreleased
 
 ### Fixed — R07 global blackout / Take authority split

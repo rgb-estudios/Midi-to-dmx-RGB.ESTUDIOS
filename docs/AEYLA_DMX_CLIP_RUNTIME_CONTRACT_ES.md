@@ -41,7 +41,7 @@ El orden físico de pistas, escenas o clips dentro del DAW **no define la posici
 
 ## 2. Regla principal de tiempo
 
-La reproducción artística no depende de la posición absoluta de la línea de tiempo del DAW y tampoco usa el reloj del sistema como reloj artístico.
+La reproducción artística no depende de la posición absoluta de la línea de tiempo del DAW. Los disparos de show desde DAW/MIDI usan el conteo de muestras del host como reloj artístico. La reproducción manual iniciada desde el botón **REPRODUCIR TOMA ACTIVA** usa un reloj monotónico operativo independiente: algunos hosts, incluido REAPER según su configuración, cierran el dispositivo de audio cuando pierden foco y dejan de entregar bloques aunque el complemento siga vivo.
 
 Después de consolidar, cada muestra posee una línea de tiempo relativa propia:
 
@@ -68,10 +68,11 @@ Consecuencias obligatorias:
 - mover, reordenar o renombrar pistas del DAW no desplaza el DMX.
 - mover el cursor, crear bucles o saltar en la línea de tiempo global del DAW no reposiciona AEYLA por sí solo.
 - únicamente un comando MIDI explícito cambia selección, transporte o posición de la muestra DMX.
-- cerrar la interfaz gráfica no puede detener el motor de ejecución.
+- cerrar o minimizar la interfaz gráfica no puede detener el motor de ejecución.
+- la reproducción manual continúa si REAPER muestra `audio device closed`; no depende de `OnIdle` ni del callback mientras el complemento siga activo.
 - un renderizado sin reproducción en tiempo real inhibe siempre la salida física Art-Net.
 
-El reloj del sistema queda prohibido para calcular la posición artística del DMX. Sólo puede utilizarse para supervisión de vida y seguridad.
+El reloj monotónico queda restringido a la reproducción manual de operador. Los disparos DAW/MIDI de show continúan gobernados exclusivamente por muestras procesadas y nunca cambian silenciosamente de fuente de reloj.
 
 ## 3. Captura
 
@@ -174,7 +175,7 @@ Estados visibles mínimos:
 
 El DAW sigue siendo necesario como anfitrión del complemento y fuente de eventos MIDI, pero su posición absoluta no gobierna la muestra DMX.
 
-El bloque de audio cumple tres funciones:
+Para la reproducción sincronizada con DAW/MIDI, el bloque de audio cumple tres funciones:
 
 1. entregar la cantidad de muestras procesadas para avanzar el cursor relativo;
 2. entregar eventos MIDI con su desplazamiento exacto dentro del bloque;
@@ -183,7 +184,8 @@ El bloque de audio cumple tres funciones:
 El reloj del sistema sólo se permite como vigilancia de vida:
 
 - cada bloque válido actualiza la señal de vida;
-- si el anfitrión deja de procesar por el umbral de seguridad, AEYLA inhibe la autoridad física;
+- si una reproducción DAW/MIDI deja de recibir bloques por el umbral de seguridad, AEYLA inhibe la autoridad física;
+- la reproducción manual conserva su reloj y autoridad al perder únicamente los bloques de audio; APAGÓN, renderizado sin conexión, descarga o cierre siguen desarmando;
 - la señal de vida jamás calcula qué cuadro artístico corresponde.
 
 La transmisión y el avance no dependen de `OnIdle`, del repintado ni de que la
