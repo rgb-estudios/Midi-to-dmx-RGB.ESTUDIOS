@@ -1,7 +1,8 @@
-# AEYLA — flujo operativo disponible en CP-AEYLA-0.3.3
+# AEYLA — flujo operativo R07 PRETEST
 
-Estado: **Scaffolded** para programación controlada; no es Show Candidate.
-Alcance: una instancia, hasta 15 Songs, Rig 10/14, preview visual/DMX interno.
+Estado: **Implemented / Simulated** para programación controlada; no es Show Candidate.
+Alcance: una instancia, hasta 15 canciones, captura RAW, edición/consolidación,
+reproducción relativa y Art-Net U1 a 44 Hz.
 
 ## Idea simple
 
@@ -27,11 +28,16 @@ y control: no se necesitan para crear un Cue desde la UI.
    El Song se extiende automáticamente si el playhead está más allá de su final
    inicial.
 11. Repite los cambios de Look y `STORE CUE` necesarios. Guarda con `SAVE AS`.
-12. Para una prueba de red controlada, pulsa `OUTPUT SETUP` e introduce la IP
-    numérica del nodo y el universo como `IPv4@universo`, por ejemplo
-    `2.0.0.20@0`. Escribe `OFF` para deshabilitar el backend.
-13. Confirma `BACKEND READY`, quita Blackout y pulsa `ARM OUTPUT`. La
-    configuración nunca rearma automáticamente la salida.
+12. Abre `RED / SALIDA`, selecciona el adaptador Ethernet TX e introduce
+    `IPv4 AEYLA / MÁSCARA`, por ejemplo `2.0.0.20 / 255.0.0.0`.
+13. Pulsa `APLICAR IP Y PREPARAR ART-NET`. En Windows, confirma UAC para el
+    helper. AEYLA agrega la IPv4 sin borrar la red previa, deriva el broadcast
+    dirigido de U1 y termina con `APAGÓN + DESARMADO`.
+14. Para transmitir una toma: detén cualquier captura, desactiva `APAGÓN`, pulsa
+    `ARMAR SALIDA DE TOMA` y después `REPRODUCIR TOMA ACTIVA`.
+15. Confirma que `TX` aumenta y que un receptor Art-Net externo recibe U1 a
+    44 Hz. Minimizar o cerrar la ventana no debe cambiar esa cadencia mientras
+    REAPER continúe procesando audio.
 
 Cada cambio artístico/estructural o selección de Look/Song fuerza
 `DISARMED + BLACKOUT`. El

@@ -1,6 +1,6 @@
 # AEYLA · Estado de Gates R07
 
-Fecha de consolidación: 25/26 agosto 2026
+Fecha de consolidación: 28 agosto 2026
 
 ## Arquitectura congelada
 
@@ -27,18 +27,24 @@ Toda superficie visible para operador debe quedar en español, salvo nombres té
 - [x] Desarme/cierre → ráfaga de 3 cuadros BLACKOUT, no un único datagrama.
 - [x] Lease process-local para impedir dos instancias AEYLA sobre el mismo destino/universo.
 - [x] Test automatizado específico R07 para normalización 44 Hz y ráfaga BLACKOUT.
+- [x] Flujo `ARMAR → REPRODUCIR` conserva autoridad y avanza por muestras del callback.
+- [x] Regresión sin llamadas UI: cuadro recibido y cadencia Art-Net sostenida a 44 Hz.
+- [x] Minimizar/cerrar editor no participa en el reloj ni en el worker UDP.
+- [x] Configuración Windows de IPv4/máscara mediante helper UAC separado, alias secundario, validación y rollback.
+- [x] Un fallo aislado se informa; tres consecutivos enclavan fail-closed hasta rearme explícito.
 
 ### Pendiente antes de cerrar Gate A
 
 - [ ] CI completo verde en Windows/macOS/Linux para el último commit.
-- [ ] Mostrar métricas TX críticas en interfaz en español.
+- [x] Mostrar métricas TX críticas en interfaz en español.
+- [ ] Compilar y ejecutar el helper de red en Windows; verificar UAC, `ipconfig`, preservación y rollback.
 - [ ] Test físico: REAPER → AEYLA → NIC seleccionada → nodo U1 → DMX/luminaria.
 - [ ] Validar unicast y broadcast dirigido con hardware real.
 - [ ] Desconectar cable/NIC/nodo durante reproducción y comprobar comportamiento.
 - [ ] Confirmar que `sendto()` del SO refleja o no la pérdida física; si no, añadir verificación de salud de enlace/NIC por separado.
 - [ ] Soak 8 h con RAM/CPU/errores registrados.
 
-**Estado Gate A:** EN DESARROLLO / NO CERRADO.
+**Estado Gate A:** IMPLEMENTED / SIMULATED · HOST/HARDWARE NO CERRADO.
 
 ---
 
@@ -58,19 +64,18 @@ Toda superficie visible para operador debe quedar en español, salvo nombres té
 - [x] Test automatizado: preservación byte por byte del RAW, 44 Hz, identidad de Song y exactitud de IN/OUT.
 - [x] Botón/acción visible `CONSOLIDAR CLIP` conectado al backend real.
 - [x] El consolidado pasa a ser el clip activo y queda preparado para reproducción.
+- [x] Timeline de actividad real de los 512 canales con picos de nivel/movimiento.
+- [x] Handles ENTRADA/SALIDA arrastrables y hit-area visible.
+- [x] Playhead, scrub seguro, timecode editable y precisión ±1 cuadro.
+- [x] Zoom horizontal y paneo.
+- [x] Navegación de versiones y retorno explícito a RAW.
 
 ### Pendiente antes de cerrar Gate B
 
-- [ ] Timeline de actividad DMX real, no sólo una barra de duración.
-- [ ] Handles ENTRADA/SALIDA arrastrables.
-- [ ] Playhead y scrub/preview.
-- [ ] Zoom horizontal.
-- [ ] Navegación de versiones: TOMA ORIGINAL / tomas / clip consolidado activo.
-- [ ] Revertir a RAW en una acción clara.
 - [ ] No introducir fades de 512 canales sin clasificación de canales continuos/discretos.
 - [ ] Prueba de editor abierto/cerrado mientras la reproducción continúa.
 
-**Estado Gate B:** FLUJO BÁSICO IN/OUT→CONSOLIDAR INTEGRADO / EDITOR AVANZADO AÚN NO CERRADO.
+**Estado Gate B:** IMPLEMENTED / SIMULATED · INTERACCIÓN EN HOST NO CERRADA.
 
 ---
 

@@ -8,6 +8,7 @@ on:
       - tests/**
       - docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md
       - tools/maintenance/windows/**
+      - tools/network/**
       - .github/workflows/reaper-windows-pretest-package.yml
   workflow_dispatch:
 
@@ -65,11 +66,16 @@ jobs:
           if (-not $bundle) { throw "AeylaVisualDmx.vst3 bundle not found" }
           $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
           if (-not $binary) { throw "AeylaVisualDmx VST3 binary not found" }
+          $helper = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
+          if (-not $helper) { throw "AeylaNetworkHelper.exe not embedded in VST3 bundle" }
           if ($binary.Length -lt 1MB) { throw "AeylaVisualDmx VST3 binary unexpectedly small" }
           $stream = [System.IO.File]::OpenRead($binary.FullName)
           try { $b0=$stream.ReadByte(); $b1=$stream.ReadByte() } finally { $stream.Dispose() }
           if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "AeylaVisualDmx VST3 binary lacks PE/MZ header" }
-          Write-Host "Verified bundle $($bundle.FullName) binarySize=$($binary.Length)"
+          $helperStream = [System.IO.File]::OpenRead($helper.FullName)
+          try { $h0=$helperStream.ReadByte(); $h1=$helperStream.ReadByte() } finally { $helperStream.Dispose() }
+          if ($h0 -ne 0x4D -or $h1 -ne 0x5A) { throw "AeylaNetworkHelper.exe lacks PE/MZ header" }
+          Write-Host "Verified bundle $($bundle.FullName) binarySize=$($binary.Length) helperSize=$($helper.Length)"
 
       - name: Package manual REAPER pretest
         shell: pwsh
@@ -137,23 +143,30 @@ jobs:
           H. Master general, Velocidad, Blanco, Ambar y UV responden a clic y arrastre.
           I. Los 8 ejecutores responden por mouse y liberan al soltar.
           J. MIDI fisico incrementa contador y activa el runtime correspondiente.
-          K. ARMAR con SALIDA DESACTIVADA muestra una causa visible del bloqueo.
-          L. Abrir/cerrar UI 5 veces mantiene todas las interacciones.
-          M. Ajustar ENTRADA/SALIDA y pulsar CONSOLIDAR CLIP crea otro .aeylatake.
-          N. El clip consolidado comienza en 00:00 y la TOMA ORIGINAL no cambia.
-          O. La actividad DMX visible coincide con zonas encendidas y cambios de la toma.
-          P. Clic/arrastre mueve libremente el cabezal; MARCAR IN/OUT fija puntos no redondos.
-          Q. Los grips IN/OUT se arrastran desde toda su etiqueta, no sólo desde la línea.
-          R. Los campos MM:SS.mmm y ±1f actualizan tiempos con precisión de cuadro DMX.
-          S. Rueda/controles de zoom y Shift+arrastre navegan horizontalmente la toma.
-          T. Con salida DESARMADA, clic/arrastre del cabezal previsualiza la posicion.
-          U. Con salida ARMADA, el scrub queda bloqueado y muestra la causa.
-          V. Las flechas recorren versiones y VOLVER A RAW recupera la toma original.
+          K. RED / SALIDA detecta el Ethernet fisico y permite editar IPv4 / mascara.
+          L. APLICAR IP solicita UAC, agrega la IPv4 AEYLA sin borrar la red previa y
+             deja APAGON activo / salida DESARMADA. Confirmar ambas IPv4 con ipconfig.
+          M. Una IPv4 invalida, duplicada o no confirmada se rechaza o revierte y nunca arma TX.
+          N. Secuencia operativa: desactivar APAGON, ARMAR SALIDA DE TOMA y REPRODUCIR.
+             El contador TX debe subir continuamente y un receptor externo debe ver U1 a 44 Hz.
+          O. Minimizar o cerrar la ventana del plugin durante 5 minutos no cambia la cadencia,
+             no incrementa errores TX y no desarma la toma mientras REAPER sigue procesando audio.
+          P. Abrir/cerrar UI 5 veces mantiene todas las interacciones.
+          Q. Ajustar ENTRADA/SALIDA y pulsar CONSOLIDAR CLIP crea otro .aeylatake.
+          R. El clip consolidado comienza en 00:00 y la TOMA ORIGINAL no cambia.
+          S. La actividad DMX visible coincide con zonas encendidas y cambios de la toma.
+          T. Clic/arrastre mueve libremente el cabezal; MARCAR IN/OUT fija puntos no redondos.
+          U. Los grips IN/OUT se arrastran desde toda su etiqueta, no sólo desde la línea.
+          V. Los campos MM:SS.mmm y ±1f actualizan tiempos con precisión de cuadro DMX.
+          W. Rueda/controles de zoom y Shift+arrastre navegan horizontalmente la toma.
+          X. Con salida DESARMADA, clic/arrastre del cabezal previsualiza la posicion.
+          Y. Con salida ARMADA, el scrub queda bloqueado y muestra la causa.
+          Z. Las flechas recorren versiones y VOLVER A RAW recupera la toma original.
 
           PRUEBA HOST / ESTADO
-          W. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
-          X. La instancia sigue presente y vuelve DESARMADA/APAGON.
-          Y. Mueve el cursor, reproduce/deten y usa loop; registra cualquier desviacion.
+          1. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
+          2. La instancia sigue presente y vuelve DESARMADA/APAGON.
+          3. Mueve el cursor, reproduce/deten y usa loop; registra cualquier desviacion.
 
           IMPORTANTE
           PRETEST NO significa Show Candidate. No dependas todavia de este build para
@@ -162,9 +175,13 @@ jobs:
           '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
 
           $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $helper = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
+          if (-not $helper) { throw "AeylaNetworkHelper.exe missing from package" }
           $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helperHash = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $sourceCommit = (git rev-parse HEAD).Trim()
           "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "NETWORK_HELPER_SHA256=$helperHash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "BUILD_KIND=REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "MAINTENANCE_SCRIPT=AEYLA_VST3_MAINTENANCE.ps1" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")

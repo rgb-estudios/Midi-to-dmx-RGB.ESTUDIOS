@@ -1,6 +1,7 @@
 #include "AeylaVisualDmx.h"
 #include "AeylaTakeLibrarySession.h"
 #include "capture/dmx_take_file_store.h"
+#include "network/ipv4_configuration.h"
 
 #include <algorithm>
 #include <cctype>
@@ -206,34 +207,59 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
 bool AeylaVisualDmx::RefreshNetworkInterfacesFromUI()
 {
   const auto discovered = aeyla::network::enumerate_ipv4_interfaces();
+  std::string previousRxId;
+  std::string previousTxId;
   std::string previousRx;
   std::string previousTx;
   {
     const std::scoped_lock lock(mNetworkMutex);
-    if(mRxInterfaceIndex < mNetworkInterfaces.size())
+    if(mRxInterfaceIndex < mNetworkInterfaces.size()) {
+      previousRxId = mNetworkInterfaces[mRxInterfaceIndex].id;
       previousRx = mNetworkInterfaces[mRxInterfaceIndex].ipv4;
-    if(mTxInterfaceIndex < mNetworkInterfaces.size())
+    }
+    if(mTxInterfaceIndex < mNetworkInterfaces.size()) {
+      previousTxId = mNetworkInterfaces[mTxInterfaceIndex].id;
       previousTx = mNetworkInterfaces[mTxInterfaceIndex].ipv4;
+    }
 
     mNetworkInterfaces = discovered;
-    mRxInterfaceIndex = 0U;
-    mTxInterfaceIndex = mNetworkInterfaces.size() > 1U ? 1U : 0U;
+    const auto preferred = std::find_if(
+        mNetworkInterfaces.begin(), mNetworkInterfaces.end(),
+        [](const aeyla::network::NetworkInterface& item) {
+          return !item.wireless && !item.ipv4.empty();
+        });
+    const std::size_t preferredIndex = preferred == mNetworkInterfaces.end()
+        ? 0U
+        : static_cast<std::size_t>(
+              std::distance(mNetworkInterfaces.begin(), preferred));
+    mRxInterfaceIndex = preferredIndex;
+    mTxInterfaceIndex = preferredIndex;
 
-    const auto restore = [&](const std::string& address,
+    const auto restore = [&](const std::string& id,
+                             const std::string& address,
                              std::size_t fallback) -> std::size_t {
-      if(address.empty()) return fallback;
+      if(id.empty()) return fallback;
       const auto found = std::find_if(
           mNetworkInterfaces.begin(), mNetworkInterfaces.end(),
           [&](const aeyla::network::NetworkInterface& item) {
-            return item.ipv4 == address;
+            return item.id == id &&
+                   (address.empty() || item.ipv4 == address);
           });
-      return found == mNetworkInterfaces.end()
-                 ? fallback
-                 : static_cast<std::size_t>(
-                       std::distance(mNetworkInterfaces.begin(), found));
+      if(found != mNetworkInterfaces.end())
+        return static_cast<std::size_t>(
+            std::distance(mNetworkInterfaces.begin(), found));
+      const auto sameAdapter = std::find_if(
+          mNetworkInterfaces.begin(), mNetworkInterfaces.end(),
+          [&](const aeyla::network::NetworkInterface& item) {
+            return item.id == id;
+          });
+      return sameAdapter == mNetworkInterfaces.end()
+          ? fallback
+          : static_cast<std::size_t>(
+                std::distance(mNetworkInterfaces.begin(), sameAdapter));
     };
-    mRxInterfaceIndex = restore(previousRx, mRxInterfaceIndex);
-    mTxInterfaceIndex = restore(previousTx, mTxInterfaceIndex);
+    mRxInterfaceIndex = restore(previousRxId, previousRx, mRxInterfaceIndex);
+    mTxInterfaceIndex = restore(previousTxId, previousTx, mTxInterfaceIndex);
     if(mNetworkInterfaces.empty())
       mCaptureInputError = "No se detectaron adaptadores IPv4 activos";
   }
@@ -267,7 +293,7 @@ bool AeylaVisualDmx::CycleRxInterfaceFromUI(int direction)
 
 bool AeylaVisualDmx::CycleTxInterfaceFromUI(int direction)
 {
-  if(direction == 0)
+  if(direction == 0 || mNetworkConfiguration.Snapshot().busy())
     return false;
 
   mTakeScheduler.disarm();
@@ -309,8 +335,10 @@ std::string AeylaVisualDmx::RxInterfaceStatus() const
   if(mRxInterfaceIndex >= mNetworkInterfaces.size())
     return "RX · SIN ADAPTADOR";
   const auto& item = mNetworkInterfaces[mRxInterfaceIndex];
-  return "RX · " + item.name + " · " + item.ipv4 + "/" +
-         std::to_string(item.prefix_length);
+  return "RX · " + item.name + " · " +
+         (item.ipv4.empty()
+              ? std::string("SIN IPv4")
+              : item.ipv4 + "/" + std::to_string(item.prefix_length));
 }
 
 std::string AeylaVisualDmx::TxInterfaceStatus() const
@@ -319,8 +347,90 @@ std::string AeylaVisualDmx::TxInterfaceStatus() const
   if(mTxInterfaceIndex >= mNetworkInterfaces.size())
     return "TX · SIN ADAPTADOR";
   const auto& item = mNetworkInterfaces[mTxInterfaceIndex];
-  return "TX · " + item.name + " · " + item.ipv4 + "/" +
-         std::to_string(item.prefix_length);
+  return "TX · " + item.name + " · " +
+         (item.ipv4.empty()
+              ? std::string("SIN IPv4")
+              : item.ipv4 + "/" + std::to_string(item.prefix_length));
+}
+
+aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
+    std::string ipv4,
+    std::string mask)
+{
+  std::string error;
+  const auto network = aeyla::network::make_ipv4_network(ipv4, mask, error);
+  if(!network.has_value())
+    return {false, {}, std::move(error)};
+  if(TakeRecording())
+    return {false, {}, "Detén GRABAR antes de cambiar la red TX"};
+  if(mNetworkConfiguration.Snapshot().busy())
+    return {false, {}, "Espera a que termine el cambio de red actual"};
+
+  aeyla::network::NetworkInterface adapter;
+  {
+    const std::scoped_lock lock(mNetworkMutex);
+    if(mTxInterfaceIndex >= mNetworkInterfaces.size())
+      return {false, {}, "Selecciona primero un adaptador TX físico"};
+    adapter = mNetworkInterfaces[mTxInterfaceIndex];
+  }
+  if(adapter.wireless)
+    return {false, {},
+            "La red de show debe usar Ethernet; selecciona un adaptador cableado"};
+
+  // A network change can never hot-swap below an authoritative clip.
+  mTakeScheduler.stop_hold();
+  mTakeScheduler.disarm();
+  SetBlackoutFromUI(true);
+
+  if(adapter.ipv4 == network->address &&
+     adapter.prefix_length == network->prefix_length)
+  {
+    mArtNetOutput.set_preferred_source_ipv4(network->address);
+    auto result = ConfigureArtNetFromUI(network->directed_broadcast + "@0");
+    if(result.succeeded)
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkConfigurationMessage = "RED LISTA · " + network->address +
+          "/" + std::to_string(network->prefix_length) + " → " +
+          network->directed_broadcast + " · U1 · SALIDA DESARMADA";
+      result.message = mNetworkConfigurationMessage;
+    }
+    return result;
+  }
+
+  {
+    const std::scoped_lock lock(mNetworkMutex);
+    mPendingTxAdapterId = adapter.id;
+    mNetworkConfigurationMessage =
+        "CAMBIO EN CURSO · confirma la solicitud UAC de Windows";
+  }
+  if(!mNetworkConfiguration.Start(adapter, network->address,
+                                  network->prefix_length, error))
+  {
+    const std::scoped_lock lock(mNetworkMutex);
+    mPendingTxAdapterId.clear();
+    mNetworkConfigurationMessage = "CAMBIO NO INICIADO · " + error;
+    return {false, {}, std::move(error)};
+  }
+  return {true, network->address,
+          "CAMBIO EN CURSO · AEYLA agregará " + network->address + "/" +
+              std::to_string(network->prefix_length) + " a " + adapter.name +
+              " sin borrar su red existente"};
+}
+
+std::string AeylaVisualDmx::NetworkConfigurationStatus() const
+{
+  const auto operation = mNetworkConfiguration.Snapshot();
+  if(operation.busy()) return operation.message;
+  const std::scoped_lock lock(mNetworkMutex);
+  return mNetworkConfigurationMessage.empty()
+      ? std::string("SIN CAMBIOS DE RED PENDIENTES")
+      : mNetworkConfigurationMessage;
+}
+
+bool AeylaVisualDmx::NetworkConfigurationBusy() const
+{
+  return mNetworkConfiguration.Snapshot().busy();
 }
 
 void AeylaVisualDmx::RestartCaptureInputFromRouting()
@@ -357,6 +467,9 @@ std::string AeylaVisualDmx::ActiveSongIdLocked() const
 
 aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
 {
+  if(NetworkConfigurationBusy())
+    return {false, {}, "Espera a que termine el cambio de red antes de grabar"};
+
   std::string projectId;
   std::string songId;
   std::string songName;
@@ -619,6 +732,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
     mTakeScheduler.disarm();
     return {true, {}, "SALIDA DE TOMA DESARMADA"};
   }
+  if(NetworkConfigurationBusy())
+    return {false, {}, "Espera a que termine el cambio de red antes de armar"};
   if(OutputArmed())
     return {false, {}, "Desarma la salida del modelo antes de armar la toma DMX"};
   if(TakeRecording())

@@ -6,6 +6,7 @@
 #include "capture/dmx_take_activity.h"
 #include "capture/dmx_take_scheduler.h"
 #include "network/network_interfaces.h"
+#include "AeylaNetworkConfiguration.h"
 #include "product/application_model.h"
 #include "product/project_file_controller.h"
 #include "product/project_identity.h"
@@ -132,6 +133,10 @@ public:
   [[nodiscard]] std::string RxInterfaceStatus() const;
   [[nodiscard]] std::string TxInterfaceStatus() const;
   [[nodiscard]] std::size_t NetworkInterfaceCount() const;
+  [[nodiscard]] aeyla::product::AuthoringResult
+  ApplyTxNetworkFromUI(std::string ipv4, std::string mask);
+  [[nodiscard]] std::string NetworkConfigurationStatus() const;
+  [[nodiscard]] bool NetworkConfigurationBusy() const;
 
   [[nodiscard]] aeyla::product::AuthoringResult ToggleTakeCaptureFromUI();
   [[nodiscard]] aeyla::product::AuthoringResult ToggleActiveTakePlaybackFromUI();
@@ -345,6 +350,7 @@ private:
   void StopRuntimeWorker() noexcept;
   void RuntimeLoop() noexcept;
   void RuntimeTick() noexcept;
+  void ReconcileNetworkConfiguration() noexcept;
   void ApplyPendingHostStateLocked();
   void ApplyPendingParameterStateLocked();
   void DrainHostEventsLocked();
@@ -433,6 +439,10 @@ private:
   std::size_t mRxInterfaceIndex{0U};
   std::size_t mTxInterfaceIndex{0U};
   std::string mCaptureInputError;
+  AeylaNetworkConfiguration mNetworkConfiguration{};
+  std::uint64_t mLastNetworkConfigurationRevision{0U};
+  std::string mPendingTxAdapterId;
+  std::string mNetworkConfigurationMessage;
 
   aeyla::capture::DmxTakeScheduler mTakeScheduler{};
 

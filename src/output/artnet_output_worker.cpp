@@ -371,15 +371,14 @@ class ArtNetOutputWorker::Impl final {
     has_override_frame_ = true;
   }
 
-  void clear_fail_closed_for_explicit_rearm() noexcept {
+  void prepare_explicit_rearm() noexcept {
     fail_closed_.store(false, std::memory_order_release);
     consecutive_send_errors_.store(0U, std::memory_order_relaxed);
     blackout_burst_remaining_.store(0U, std::memory_order_release);
   }
 
   void set_enabled(bool next_enabled) noexcept {
-    if(next_enabled)
-      clear_fail_closed_for_explicit_rearm();
+    if(next_enabled && fail_closed_.load(std::memory_order_acquire)) return;
     const bool previous = enabled_.exchange(next_enabled, std::memory_order_acq_rel);
     if(previous && !next_enabled &&
        !override_enabled_.load(std::memory_order_acquire))
@@ -390,8 +389,7 @@ class ArtNetOutputWorker::Impl final {
   }
 
   void set_override_enabled(bool next_enabled) noexcept {
-    if(next_enabled)
-      clear_fail_closed_for_explicit_rearm();
+    if(next_enabled && fail_closed_.load(std::memory_order_acquire)) return;
     const bool previous =
         override_enabled_.exchange(next_enabled, std::memory_order_acq_rel);
     if(previous && !next_enabled &&
@@ -646,6 +644,10 @@ void ArtNetOutputWorker::stop() noexcept { impl_->shutdown(); }
 void ArtNetOutputWorker::publish_latest(const DmxUniverse& universe,
                                         std::uint64_t generation) {
   impl_->publish(universe, generation);
+}
+
+void ArtNetOutputWorker::prepare_explicit_rearm() noexcept {
+  impl_->prepare_explicit_rearm();
 }
 
 void ArtNetOutputWorker::set_enabled(bool enabled) noexcept {

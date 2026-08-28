@@ -186,6 +186,17 @@ El reloj del sistema sólo se permite como vigilancia de vida:
 - si el anfitrión deja de procesar por el umbral de seguridad, AEYLA inhibe la autoridad física;
 - la señal de vida jamás calcula qué cuadro artístico corresponde.
 
+La transmisión y el avance no dependen de `OnIdle`, del repintado ni de que la
+ventana del complemento permanezca abierta. Minimizar/cerrar la UI sólo detiene
+redibujos; el worker de 44 Hz y el cursor por muestras continúan mientras el
+anfitrión siga procesando audio. Si el anfitrión suspende esos bloques durante
+el umbral de seguridad, AEYLA desarma por seguridad en vez de cambiar a un reloj
+visual o inventar tiempo artístico.
+
+Tres errores UDP consecutivos enclavan `fail-closed`, desarman tanto la salida
+del modelo como la autoridad de la toma y exigen un rearme explícito. Un error
+aislado se informa como transitorio sin interrumpir inmediatamente la toma.
+
 DETENER, mover el cursor o crear un bucle en la línea de tiempo del DAW no reposiciona AEYLA salvo que la sesión envíe además un comando MIDI definido para hacerlo.
 
 ## 9. Editor DMX

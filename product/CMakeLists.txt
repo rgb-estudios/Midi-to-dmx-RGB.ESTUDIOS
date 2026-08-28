@@ -166,4 +166,22 @@ set(IGRAPHICS_BACKEND NANOVG CACHE STRING "Lightweight shared UI backend" FORCE)
 include(${IPLUG2_DIR}/iPlug2.cmake)
 find_package(iPlug2 REQUIRED)
 
+if(WIN32)
+  add_executable(AeylaNetworkHelper
+    ../tools/network/windows/AeylaNetworkHelper.cpp
+    ../src/network/ipv4_configuration.cpp
+    ../src/network/network_change_protocol.cpp
+    ../src/network/network_interfaces.cpp
+  )
+  target_include_directories(AeylaNetworkHelper PRIVATE ../src)
+  target_compile_features(AeylaNetworkHelper PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(AeylaNetworkHelper PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(AeylaNetworkHelper PRIVATE
+      -Wall -Wextra -Wpedantic -Werror)
+  endif()
+  target_link_libraries(AeylaNetworkHelper PRIVATE ws2_32 iphlpapi advapi32)
+endif()
+
 add_subdirectory(AeylaVisualDmx)

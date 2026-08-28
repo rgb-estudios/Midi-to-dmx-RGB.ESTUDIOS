@@ -71,6 +71,10 @@ class ArtNetOutputWorker final {
   void stop() noexcept;
 
   void publish_latest(const DmxUniverse& universe, std::uint64_t generation);
+  // Única vía para limpiar un fail-closed. Debe invocarse exclusivamente desde
+  // una acción de ARMAR explícita del operador; los ticks periódicos no pueden
+  // recuperar autoridad por sí solos.
+  void prepare_explicit_rearm() noexcept;
   void set_enabled(bool enabled) noexcept;
 
   void publish_override(const DmxUniverse& universe, std::uint64_t generation);

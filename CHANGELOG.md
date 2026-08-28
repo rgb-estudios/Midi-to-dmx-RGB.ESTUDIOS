@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Fixed — R07 headless/minimized Art-Net stability
+
+- Added a regression that runs `ARMAR → REPRODUCIR` for one second without any
+  UI/idle calls and verifies relative sample-clock advance, received DMX frame,
+  zero send errors and a sustained 44 Hz packet envelope.
+- Kept file reads, cursor publication and UDP pacing on independent workers;
+  minimizing or closing the plugin window no longer participates in runtime
+  scheduling.
+- Latched three consecutive UDP failures until an explicit operator re-arm,
+  and made that latch disarm both model and Take authority. Isolated send errors
+  remain visible but do not immediately interrupt output.
+
+### Added — R07 Windows IPv4/subnet configuration
+
+- Replaced the cosmetic network field with a real Ethernet adapter workflow.
+  A least-privilege elevated helper adds a secondary IPv4 alias, preserves the
+  existing network, validates adapter identity/address/bind and rolls back the
+  exact alias on failed verification.
+- Added strict IPv4/mask parsing, directed-broadcast derivation and a bounded
+  nonce-bound request/result protocol. REAPER and the VST3 remain unelevated.
+- Embedded and hashed `AeylaNetworkHelper.exe` in the Windows VST3 PRETEST.
+
+### Changed — R07 operator surface hierarchy
+
+- Split the crowded center/right surface into `TOMA / EDICIÓN` and
+  `RED / SALIDA` workspaces while keeping ARMAR and APAGÓN persistent.
+- Raised operational typography to 12 px and made setlist, workspace, network
+  diagnostics and footer regions responsive at compact window heights.
+
+### Validation boundary — R07 P0 repairs
+
+- IPv4/protocol, output-worker and headless ARM/PLAY loopback tests pass in a
+  strict local C++ build. Windows helper/VST3 compilation, REAPER interaction,
+  real UAC/IP rollback, physical Art-Net node/DMX and soak remain open.
+
 ### Fixed — R07 real-time Take Art-Net authority
 
 - Fixed the operator sequence `ARMAR SALIDA DE TOMA` followed by `REPRODUCIR`:
@@ -22,8 +57,8 @@
 - The audio callback performs atomic clock publication only; file reads and UDP
   transmission remain on their dedicated workers. Offline render and lost-host
   heartbeat continue to fail closed and require explicit re-arm.
-- Simultaneous capture and RX→TX monitoring remains intentionally blocked; it
-  requires a separately specified pass-through mode with loop prevention.
+- Simultaneous capture and RX→TX monitoring remains intentionally unsupported
+  by product decision. R07 only permits capture → RAW → edit/consolidate → TX.
 - The affected native test passes in strict local C++ compilation and simulated
   loopback Art-Net. Windows/macOS product CI, REAPER host evidence and physical
   node/DMX validation remain open before hardware- or show-tested status.

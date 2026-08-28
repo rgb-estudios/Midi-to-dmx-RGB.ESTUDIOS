@@ -3,6 +3,7 @@
 #include "AeylaMainControl.h"
 #include "AeylaRuntimeStatusControl.h"
 #include "IPlug_include_in_plug_src.h"
+#include "network/ipv4_configuration.h"
 #include "runtime/host_song_binding.h"
 
 #include <algorithm>
@@ -177,6 +178,7 @@ AeylaVisualDmx::~AeylaVisualDmx()
 {
   mArtNetOutput.set_enabled(false);
   StopRuntimeWorker();
+  mNetworkConfiguration.Shutdown();
   mArtNetOutput.stop();
 }
 
@@ -462,6 +464,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 {
   try
   {
+    ReconcileNetworkConfiguration();
     const std::scoped_lock lock(mModelMutex);
     if(mRuntimeFaulted.load(std::memory_order_acquire))
     {
@@ -619,6 +622,123 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     catch(...)
     {
     }
+  }
+}
+
+void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
+{
+  try
+  {
+    const auto operation = mNetworkConfiguration.Snapshot();
+    if(operation.revision == 0U ||
+       operation.revision == mLastNetworkConfigurationRevision)
+      return;
+    mLastNetworkConfigurationRevision = operation.revision;
+    if(operation.busy() ||
+       operation.state == AeylaNetworkConfigurationState::idle)
+      return;
+
+    if(operation.state != AeylaNetworkConfigurationState::committed)
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkConfigurationMessage = operation.state ==
+              AeylaNetworkConfigurationState::rolled_back
+          ? "CAMBIO REVERTIDO · " + operation.message
+          : "CAMBIO RECHAZADO · " + operation.message;
+      return;
+    }
+
+    std::string networkError;
+    const auto network = aeyla::network::make_ipv4_network(
+        operation.ipv4, operation.prefix_length, networkError);
+    if(!network.has_value())
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkConfigurationMessage =
+          "CAMBIO NO APLICADO AL RUNTIME · " + networkError;
+      return;
+    }
+
+    const auto discovered = aeyla::network::enumerate_ipv4_interfaces();
+    std::string pendingTxId;
+    std::string previousRxId;
+    std::string previousRxAddress;
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      pendingTxId = mPendingTxAdapterId;
+      if(mRxInterfaceIndex < mNetworkInterfaces.size())
+      {
+        previousRxId = mNetworkInterfaces[mRxInterfaceIndex].id;
+        previousRxAddress = mNetworkInterfaces[mRxInterfaceIndex].ipv4;
+      }
+    }
+
+    const auto tx = std::find_if(
+        discovered.begin(), discovered.end(),
+        [&](const aeyla::network::NetworkInterface& item) {
+          return item.id == pendingTxId && item.ipv4 == operation.ipv4 &&
+                 item.prefix_length == operation.prefix_length;
+        });
+    if(tx == discovered.end())
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkConfigurationMessage =
+          "CAMBIO SIN CONFIRMAR · Windows no devolvió la IPv4 en el adaptador TX";
+      return;
+    }
+
+    std::size_t nextRx = 0U;
+    const auto rx = std::find_if(
+        discovered.begin(), discovered.end(),
+        [&](const aeyla::network::NetworkInterface& item) {
+          return item.id == previousRxId &&
+                 (previousRxAddress.empty() || item.ipv4 == previousRxAddress);
+        });
+    if(rx != discovered.end())
+      nextRx = static_cast<std::size_t>(std::distance(discovered.begin(), rx));
+    const auto nextTx =
+        static_cast<std::size_t>(std::distance(discovered.begin(), tx));
+
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkInterfaces = discovered;
+      mRxInterfaceIndex = nextRx;
+      mTxInterfaceIndex = nextTx;
+      mNetworkConfigurationMessage = operation.message;
+    }
+
+    mTakeScheduler.disarm();
+    mArtNetOutput.set_preferred_source_ipv4(network->address);
+    {
+      const std::scoped_lock lock(mModelMutex);
+      const auto configured = mModel.configure_artnet_output(
+          network->directed_broadcast, 0U);
+      if(!configured.succeeded)
+      {
+        const std::scoped_lock networkLock(mNetworkMutex);
+        mNetworkConfigurationMessage =
+            "IPv4 APLICADA / SALIDA BLOQUEADA · " + configured.message;
+        SyncSnapshotToAtomicsLocked();
+        return;
+      }
+      RefreshOutputBackendFromProjectLocked();
+      mParamBlackout.store(true, std::memory_order_release);
+      SyncSnapshotToAtomicsLocked();
+      const bool ready = mModel.snapshot().backend_ready;
+      const std::scoped_lock networkLock(mNetworkMutex);
+      mNetworkConfigurationMessage = ready
+          ? "RED LISTA · " + network->address + "/" +
+                std::to_string(network->prefix_length) + " → " +
+                network->directed_broadcast + " · U1 · SALIDA DESARMADA"
+          : "IPv4 APLICADA / BACKEND BLOQUEADO · " + mOutputBackendError;
+    }
+    RestartCaptureInputFromRouting();
+  }
+  catch(...)
+  {
+    const std::scoped_lock lock(mNetworkMutex);
+    mNetworkConfigurationMessage =
+        "FALLA AL CONFIRMAR LA RED · salida física permanece desarmada";
   }
 }
 
@@ -1236,11 +1356,27 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
   mArtNetOutput.set_enabled(snapshot.output_armed && !renderingOffline);
 
   const auto stats = mArtNetOutput.stats();
-  if(stats.send_errors <= mLastArtNetSendErrors)
+  if(!stats.fail_closed)
+  {
+    if(stats.send_errors > mLastArtNetSendErrors)
+    {
+      mLastArtNetSendErrors = stats.send_errors;
+      mOutputBackendError =
+          "Art-Net registró un error transitorio; la salida continúa vigilada";
+    }
+    else if(stats.consecutive_send_errors == 0U &&
+            mOutputBackendError.rfind(
+                "Art-Net registró un error transitorio", 0U) == 0U)
+    {
+      mOutputBackendError.clear();
+    }
     return;
+  }
 
   mLastArtNetSendErrors = stats.send_errors;
-  mOutputBackendError = "Falló el envío Art-Net; la salida fue desarmada";
+  mOutputBackendError =
+      "Art-Net acumuló tres errores consecutivos; la toma y la salida fueron desarmadas";
+  mTakeScheduler.disarm();
   mArtNetOutput.set_enabled(false);
   mModel.release_transients();
   mModel.set_backend_ready(false);
@@ -1255,7 +1391,10 @@ void AeylaVisualDmx::SetOutputArmed(bool armed)
   const std::scoped_lock lock(mModelMutex);
   if(armed && RuntimeHealthy() &&
      !mRenderingOffline.load(std::memory_order_acquire))
-    (void) mModel.request_arm();
+  {
+    if(mModel.request_arm())
+      mArtNetOutput.prepare_explicit_rearm();
+  }
   else if(armed)
     mModel.disarm(mRenderingOffline.load(std::memory_order_acquire)
                       ? aeyla::runtime::RuntimeSafetyReason::offline_render

@@ -2,6 +2,7 @@
 
 #include "AeylaVisualDmx.h"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -38,7 +39,7 @@ public:
     {
       g.FillRoundRect(raised, mButtons[index], 5.0F);
       g.DrawRoundRect(line, mButtons[index], 5.0F, nullptr, 1.0F);
-      g.DrawText(IText(9.0F, text,
+      g.DrawText(IText(12.0F, text,
                        "AeylaUI", EAlign::Center, EVAlign::Middle),
                  labels[index], mButtons[index]);
     }
@@ -47,22 +48,18 @@ public:
     projectLabel += mPlug.ProjectName();
     if(!mPlug.CurrentProjectPath().empty())
       projectLabel += "  ·  " + mPlug.CurrentProjectPath().filename().string();
-    g.DrawText(IText(8.5F, mPlug.ProjectDirty() ? warning : valid,
+    g.DrawText(IText(12.0F, mPlug.ProjectDirty() ? warning : valid,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
-               projectLabel.c_str(),
-               IRECT(footer.L + 270.0F, footer.T,
-                     footer.L + 610.0F, footer.B));
+               projectLabel.c_str(), mProjectStatus);
 
     // Output configuration has exactly one operator authority: the ART-NET
     // NETWORK panel in AeylaMainControl. The footer is status-only and can no
     // longer open the legacy IPv4@universe editor that previously overrode the
     // simplified TX route.
     const std::string backend = mPlug.OutputBackendStatus();
-    g.DrawText(IText(8.5F, mPlug.BackendReady() ? valid : warning,
+    g.DrawText(IText(12.0F, mPlug.BackendReady() ? valid : warning,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
-               backend.c_str(),
-               IRECT(footer.L + 610.0F, footer.T,
-                     footer.L + 875.0F, footer.B));
+               backend.c_str(), mBackendStatus);
 
     std::string state;
     if(mPlug.TakeOutputLive())
@@ -87,10 +84,8 @@ public:
     else if(mPlug.TakeRecording()) stateColor = warning;
     else if(mPlug.RenderingOffline() || !mPlug.RuntimeHealthy()) stateColor = danger;
 
-    g.DrawText(IText(8.5F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
-               state.c_str(),
-               IRECT(footer.L + 875.0F, footer.T,
-                     footer.R - 14.0F, footer.B));
+    g.DrawText(IText(12.0F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
+               state.c_str(), mOutputStatus);
   }
 
   bool IsHit(float x, float y) const override
@@ -133,7 +128,7 @@ public:
 private:
   [[nodiscard]] IRECT Footer() const noexcept
   {
-    return IRECT(mRECT.L, mRECT.B - 42.0F, mRECT.R, mRECT.B);
+    return IRECT(mRECT.L, mRECT.B - 50.0F, mRECT.R, mRECT.B);
   }
 
   static bool Contains(const IRECT& rectangle, float x, float y) noexcept
@@ -170,6 +165,15 @@ private:
                               cursor + widths[index], footer.B - topPad);
       cursor += widths[index] + gap;
     }
+
+    const float statusLeft = mButtons.back().R + 14.0F;
+    const float statusRight = footer.R - 14.0F;
+    const float available = std::max(0.0F, statusRight - statusLeft);
+    const float projectRight = statusLeft + available * 0.40F;
+    const float backendRight = projectRight + available * 0.28F;
+    mProjectStatus = IRECT(statusLeft, footer.T, projectRight, footer.B);
+    mBackendStatus = IRECT(projectRight, footer.T, backendRight, footer.B);
+    mOutputStatus = IRECT(backendRight, footer.T, statusRight, footer.B);
   }
 
   void ReportFileStatus(const aeyla::product::ProjectFileStatus& status)
@@ -234,6 +238,9 @@ private:
 
   AeylaVisualDmx& mPlug;
   std::array<IRECT, 4> mButtons{};
+  IRECT mProjectStatus{};
+  IRECT mBackendStatus{};
+  IRECT mOutputStatus{};
   WDL_String mDialogFileName;
   WDL_String mDialogPath;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AeylaVisualDmx.h"
+#include "network/ipv4_configuration.h"
 
 #include <algorithm>
 #include <array>
@@ -30,13 +31,30 @@ public:
     g.FillRect(kBackground, mRECT);
     DrawHeader(g);
     DrawSetlist(g);
-    DrawTakeEditor(g);
-    DrawRouting(g);
+    if(mWorkspaceView == WorkspaceView::take_editor)
+      DrawTakeEditor(g);
+    else
+      DrawRouting(g);
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
     BuildLayout();
+
+    if(Contains(mTakeEditorTab, x, y))
+    {
+      mWorkspaceView = WorkspaceView::take_editor;
+      mMessage = "TOMA / EDICIÓN · captura, recorte y reproducción de muestras DMX.";
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mNetworkOutputTab, x, y))
+    {
+      mWorkspaceView = WorkspaceView::network_output;
+      mMessage = "RED / SALIDA · adaptadores, IPv4, armado y telemetría Art-Net.";
+      SetDirty(false);
+      return;
+    }
 
     if(Contains(mBlackoutButton, x, y))
     {
@@ -74,85 +92,89 @@ public:
       return;
     }
 
-    if(Contains(mRecordButton, x, y))
+    if(mWorkspaceView == WorkspaceView::take_editor)
     {
-      Report(mPlug.ToggleTakeCaptureFromUI());
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mPlayButton, x, y))
-    {
-      Report(mPlug.ToggleActiveTakePlaybackFromUI());
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mStopButton, x, y))
-    {
-      mPlug.StopActiveTakePlaybackFromUI();
-      mMessage = "DETENER · se mantiene el cuadro DMX actual.";
-      SetDirty(false);
-      return;
-    }
-
-    if(Contains(mVersionPrevious, x, y)) { Report(mPlug.CycleActiveTakeVersionFromUI(-1)); SetDirty(false); return; }
-    if(Contains(mVersionNext, x, y)) { Report(mPlug.CycleActiveTakeVersionFromUI(1)); SetDirty(false); return; }
-    if(Contains(mReturnRawButton, x, y)) { Report(mPlug.ReturnToRawTakeFromUI()); SetDirty(false); return; }
-    if(Contains(mZoomOutButton, x, y)) { ZoomAt(2.0, 0.5F); SetDirty(false); return; }
-    if(Contains(mZoomResetButton, x, y)) { mViewStart = 0.0; mViewEnd = 1.0; SetDirty(false); return; }
-    if(Contains(mZoomInButton, x, y)) { ZoomAt(0.5, 0.5F); SetDirty(false); return; }
-
-    if(Contains(mTimeline, x, y))
-    {
-      const auto snapshot = mPlug.ActiveTakeEditorSnapshot();
-      if(!snapshot.available || snapshot.frame_count == 0U) return;
-      if(mod.S)
+      if(Contains(mRecordButton, x, y))
       {
-        mDragKind = DragKind::pan;
+        Report(mPlug.ToggleTakeCaptureFromUI());
         SetDirty(false);
         return;
       }
-      const float inX = XAtBoundary(snapshot.start_frame, snapshot.frame_count);
-      const float outX = XAtBoundary(snapshot.end_frame_exclusive,
-                                     snapshot.frame_count);
-      if(x >= inX - 6.0F && x <= inX + 32.0F)
-        mDragKind = DragKind::in_handle;
-      else if(x >= outX - 37.0F && x <= outX + 6.0F)
-        mDragKind = DragKind::out_handle;
-      else
+      if(Contains(mPlayButton, x, y))
       {
-        mDragKind = DragKind::playhead;
-        ReportInline(mPlug.SeekActiveTakeFrameFromUI(
-            FrameAtX(x, snapshot.frame_count)));
+        Report(mPlug.ToggleActiveTakePlaybackFromUI());
+        SetDirty(false);
+        return;
       }
-      SetDirty(false);
-      return;
-    }
+      if(Contains(mStopButton, x, y))
+      {
+        mPlug.StopActiveTakePlaybackFromUI();
+        mMessage = "DETENER · se mantiene el cuadro DMX actual.";
+        SetDirty(false);
+        return;
+      }
 
-    const auto editor = mPlug.ActiveTakeEditorSnapshot();
-    if(Contains(mInTimeField, x, y) && editor.available)
-    {
-      BeginTextEdit(EditKind::take_in_time, mInTimeField,
-                    FormatTime(static_cast<double>(editor.start_frame) /
-                               editor.frames_per_second));
+      if(Contains(mVersionPrevious, x, y)) { Report(mPlug.CycleActiveTakeVersionFromUI(-1)); SetDirty(false); return; }
+      if(Contains(mVersionNext, x, y)) { Report(mPlug.CycleActiveTakeVersionFromUI(1)); SetDirty(false); return; }
+      if(Contains(mReturnRawButton, x, y)) { Report(mPlug.ReturnToRawTakeFromUI()); SetDirty(false); return; }
+      if(Contains(mZoomOutButton, x, y)) { ZoomAt(2.0, 0.5F); SetDirty(false); return; }
+      if(Contains(mZoomResetButton, x, y)) { mViewStart = 0.0; mViewEnd = 1.0; SetDirty(false); return; }
+      if(Contains(mZoomInButton, x, y)) { ZoomAt(0.5, 0.5F); SetDirty(false); return; }
+
+      if(Contains(mTimeline, x, y))
+      {
+        const auto snapshot = mPlug.ActiveTakeEditorSnapshot();
+        if(!snapshot.available || snapshot.frame_count == 0U) return;
+        if(mod.S)
+        {
+          mDragKind = DragKind::pan;
+          SetDirty(false);
+          return;
+        }
+        const float inX = XAtBoundary(snapshot.start_frame, snapshot.frame_count);
+        const float outX = XAtBoundary(snapshot.end_frame_exclusive,
+                                       snapshot.frame_count);
+        if(x >= inX - 6.0F && x <= inX + 32.0F)
+          mDragKind = DragKind::in_handle;
+        else if(x >= outX - 37.0F && x <= outX + 6.0F)
+          mDragKind = DragKind::out_handle;
+        else
+        {
+          mDragKind = DragKind::playhead;
+          ReportInline(mPlug.SeekActiveTakeFrameFromUI(
+              FrameAtX(x, snapshot.frame_count)));
+        }
+        SetDirty(false);
+        return;
+      }
+
+      const auto editor = mPlug.ActiveTakeEditorSnapshot();
+      if(Contains(mInTimeField, x, y) && editor.available)
+      {
+        BeginTextEdit(EditKind::take_in_time, mInTimeField,
+                      FormatTime(static_cast<double>(editor.start_frame) /
+                                 editor.frames_per_second));
+        return;
+      }
+      if(Contains(mOutTimeField, x, y) && editor.available)
+      {
+        BeginTextEdit(EditKind::take_out_time, mOutTimeField,
+                      FormatTime(static_cast<double>(editor.end_frame_exclusive) /
+                                 editor.frames_per_second));
+        return;
+      }
+      if(Contains(mMarkInButton, x, y) && editor.available) { Report(mPlug.SetActiveTakeInFrameFromUI(editor.current_frame)); SetDirty(false); return; }
+      if(Contains(mMarkOutButton, x, y) && editor.available) { Report(mPlug.SetActiveTakeOutFrameFromUI(std::min(editor.current_frame + 1U, editor.frame_count))); SetDirty(false); return; }
+      if(Contains(mGoInButton, x, y) && editor.available) { ReportInline(mPlug.SeekActiveTakeFrameFromUI(editor.start_frame)); SetDirty(false); return; }
+      if(Contains(mGoOutButton, x, y) && editor.available) { ReportInline(mPlug.SeekActiveTakeFrameFromUI(editor.end_frame_exclusive - 1U)); SetDirty(false); return; }
+      if(Contains(mInFrameMinus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeInFrameFromUI(editor.start_frame == 0U ? 0U : editor.start_frame - 1U)); SetDirty(false); return; }
+      if(Contains(mInFramePlus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeInFrameFromUI(editor.start_frame + 1U)); SetDirty(false); return; }
+      if(Contains(mOutFrameMinus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeOutFrameFromUI(editor.end_frame_exclusive - 1U)); SetDirty(false); return; }
+      if(Contains(mOutFramePlus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeOutFrameFromUI(std::min(editor.end_frame_exclusive + 1U, editor.frame_count))); SetDirty(false); return; }
+      if(Contains(mResetTrimButton, x, y)) { Report(mPlug.ResetActiveTakeTrimFromUI()); SetDirty(false); return; }
+      if(Contains(mConsolidateButton, x, y)) { Report(mPlug.ConsolidateActiveTakeFromUI()); SetDirty(false); return; }
       return;
     }
-    if(Contains(mOutTimeField, x, y) && editor.available)
-    {
-      BeginTextEdit(EditKind::take_out_time, mOutTimeField,
-                    FormatTime(static_cast<double>(editor.end_frame_exclusive) /
-                               editor.frames_per_second));
-      return;
-    }
-    if(Contains(mMarkInButton, x, y) && editor.available) { Report(mPlug.SetActiveTakeInFrameFromUI(editor.current_frame)); SetDirty(false); return; }
-    if(Contains(mMarkOutButton, x, y) && editor.available) { Report(mPlug.SetActiveTakeOutFrameFromUI(std::min(editor.current_frame + 1U, editor.frame_count))); SetDirty(false); return; }
-    if(Contains(mGoInButton, x, y) && editor.available) { ReportInline(mPlug.SeekActiveTakeFrameFromUI(editor.start_frame)); SetDirty(false); return; }
-    if(Contains(mGoOutButton, x, y) && editor.available) { ReportInline(mPlug.SeekActiveTakeFrameFromUI(editor.end_frame_exclusive - 1U)); SetDirty(false); return; }
-    if(Contains(mInFrameMinus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeInFrameFromUI(editor.start_frame == 0U ? 0U : editor.start_frame - 1U)); SetDirty(false); return; }
-    if(Contains(mInFramePlus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeInFrameFromUI(editor.start_frame + 1U)); SetDirty(false); return; }
-    if(Contains(mOutFrameMinus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeOutFrameFromUI(editor.end_frame_exclusive - 1U)); SetDirty(false); return; }
-    if(Contains(mOutFramePlus, x, y) && editor.available) { ReportInline(mPlug.SetActiveTakeOutFrameFromUI(std::min(editor.end_frame_exclusive + 1U, editor.frame_count))); SetDirty(false); return; }
-    if(Contains(mResetTrimButton, x, y)) { Report(mPlug.ResetActiveTakeTrimFromUI()); SetDirty(false); return; }
-    if(Contains(mConsolidateButton, x, y)) { Report(mPlug.ConsolidateActiveTakeFromUI()); SetDirty(false); return; }
 
     if(Contains(mRxPrevious, x, y))
     {
@@ -170,17 +192,25 @@ public:
     }
     if(Contains(mTxPrevious, x, y))
     {
-      (void)mPlug.CycleTxInterfaceFromUI(-1);
-      RestoreNetworkFieldFromSelectedTx();
-      mMessage = "Adaptador TX cambiado · verifica IPv4/máscara y luego APLICAR.";
+      if(mPlug.CycleTxInterfaceFromUI(-1))
+      {
+        RestoreNetworkFieldFromSelectedTx();
+        mMessage = "Adaptador TX cambiado · verifica IPv4/máscara y luego APLICAR.";
+      }
+      else
+        mMessage = "Espera a que termine el cambio de red actual.";
       SetDirty(false);
       return;
     }
     if(Contains(mTxNext, x, y))
     {
-      (void)mPlug.CycleTxInterfaceFromUI(1);
-      RestoreNetworkFieldFromSelectedTx();
-      mMessage = "Adaptador TX cambiado · verifica IPv4/máscara y luego APLICAR.";
+      if(mPlug.CycleTxInterfaceFromUI(1))
+      {
+        RestoreNetworkFieldFromSelectedTx();
+        mMessage = "Adaptador TX cambiado · verifica IPv4/máscara y luego APLICAR.";
+      }
+      else
+        mMessage = "Espera a que termine el cambio de red actual.";
       SetDirty(false);
       return;
     }
@@ -199,7 +229,9 @@ public:
     }
     if(Contains(mRefreshNetworkButton, x, y))
     {
-      if(mPlug.RefreshNetworkInterfacesFromUI())
+      if(mPlug.NetworkConfigurationBusy())
+        mMessage = "Espera a que termine el cambio de red actual.";
+      else if(mPlug.RefreshNetworkInterfacesFromUI())
       {
         RestoreNetworkFieldFromSelectedTx();
         mMessage = "Adaptadores de red actualizados.";
@@ -217,7 +249,8 @@ public:
     (void)y;
     (void)dY;
     (void)mod;
-    if(mDragKind == DragKind::none) return;
+    if(mWorkspaceView != WorkspaceView::take_editor ||
+       mDragKind == DragKind::none) return;
     if(mDragKind == DragKind::pan)
     {
       const double span = mViewEnd - mViewStart;
@@ -251,7 +284,8 @@ public:
   void OnMouseWheel(float x, float y, const IMouseMod& mod, float d) override
   {
     (void)mod;
-    if(!Contains(mTimeline, x, y)) return;
+    if(mWorkspaceView != WorkspaceView::take_editor ||
+       !Contains(mTimeline, x, y)) return;
     const float anchor = std::clamp((x - mTimeline.L) /
                                     std::max(1.0F, mTimeline.W()), 0.0F, 1.0F);
     ZoomAt(d > 0.0F ? 0.8 : 1.25, anchor);
@@ -288,7 +322,7 @@ public:
     else if(mEditKind == EditKind::local_network)
     {
       mLocalNetworkText = value;
-      mMessage = "Red editada · presiona APLICAR RED.";
+      mMessage = "Red editada · presiona APLICAR IP Y PREPARAR ART-NET.";
     }
     else if(mEditKind == EditKind::take_in_time ||
             mEditKind == EditKind::take_out_time)
@@ -314,6 +348,7 @@ public:
   }
 
 private:
+  enum class WorkspaceView { take_editor, network_output };
   enum class EditKind {
     none,
     song_name,
@@ -430,63 +465,6 @@ private:
     return std::isfinite(seconds);
   }
 
-  static bool ParseIpv4(std::string_view text, std::uint32_t& result)
-  {
-    result = 0U;
-    std::size_t begin = 0U;
-    for(int index = 0; index < 4; ++index)
-    {
-      const std::size_t end = index == 3 ? text.size() : text.find('.', begin);
-      if(end == std::string_view::npos || end == begin) return false;
-      unsigned value = 0U;
-      const auto parsed = std::from_chars(text.data() + begin,
-                                          text.data() + end, value);
-      if(parsed.ec != std::errc{} || parsed.ptr != text.data() + end || value > 255U)
-        return false;
-      result = (result << 8U) | value;
-      begin = end + 1U;
-    }
-    return begin == text.size() + 1U;
-  }
-
-  static std::string FormatIpv4(std::uint32_t value)
-  {
-    return std::to_string((value >> 24U) & 0xFFU) + "." +
-           std::to_string((value >> 16U) & 0xFFU) + "." +
-           std::to_string((value >> 8U) & 0xFFU) + "." +
-           std::to_string(value & 0xFFU);
-  }
-
-  static std::string MaskFromPrefix(unsigned prefix)
-  {
-    if(prefix > 32U) prefix = 32U;
-    const std::uint32_t mask = prefix == 0U
-        ? 0U
-        : static_cast<std::uint32_t>(0xFFFFFFFFULL << (32U - prefix));
-    return FormatIpv4(mask);
-  }
-
-  static bool IsContiguousMask(std::uint32_t mask)
-  {
-    const std::uint32_t inverted = ~mask;
-    return (inverted & (inverted + 1U)) == 0U;
-  }
-
-  static bool SplitNetwork(const std::string& text,
-                           std::string& ipText,
-                           std::string& maskText,
-                           std::uint32_t& ip,
-                           std::uint32_t& mask)
-  {
-    const auto separator = text.find('/');
-    if(separator == std::string::npos) return false;
-    ipText = Trim(std::string_view(text).substr(0U, separator));
-    maskText = Trim(std::string_view(text).substr(separator + 1U));
-    if(!ParseIpv4(ipText, ip) || !ParseIpv4(maskText, mask)) return false;
-    if(mask == 0U || !IsContiguousMask(mask)) return false;
-    return true;
-  }
-
   static void Card(IGraphics& g, const IRECT& rect)
   {
     g.FillRoundRect(kPanel, rect, 9.0F);
@@ -499,18 +477,18 @@ private:
   {
     g.FillRoundRect(fill, rect, 6.0F);
     g.DrawRoundRect(border, rect, 6.0F, nullptr, 1.0F);
-    g.DrawText(IText(9.0F, text, "AeylaUI", EAlign::Center, EVAlign::Middle),
+    g.DrawText(IText(12.0F, text, "AeylaUI", EAlign::Center, EVAlign::Middle),
                label, rect.GetPadded(-4.0F));
   }
 
   static void Field(IGraphics& g, const IRECT& rect, const char* label,
                     const std::string& value, const IColor& valueColor = kText)
   {
-    g.DrawText(IText(8.0F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Middle),
                label, IRECT(rect.L, rect.T - 16.0F, rect.R, rect.T - 2.0F));
     g.FillRoundRect(IColor(255, 10, 12, 17), rect, 5.0F);
     g.DrawRoundRect(kLineStrong, rect, 5.0F, nullptr, 1.0F);
-    g.DrawText(IText(9.0F, valueColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, valueColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
                value.c_str(), rect.GetPadded(-8.0F));
   }
 
@@ -520,23 +498,14 @@ private:
     if(ui == nullptr) return;
     mEditKind = kind;
     ui->CreateTextEntry(*this,
-                        IText(10.0F, kText, "AeylaUI", EAlign::Near,
+                        IText(12.0F, kText, "AeylaUI", EAlign::Near,
                               EVAlign::Middle),
                         rect, current.c_str(), kNoValIdx);
   }
 
-  std::string SelectedTxIpFromStatus() const
-  {
-    const std::string status = mPlug.TxInterfaceStatus();
-    const auto slash = status.rfind('/');
-    if(slash == std::string::npos) return {};
-    const auto delimiter = status.rfind(" · ", slash);
-    if(delimiter == std::string::npos) return {};
-    return status.substr(delimiter + 3U, slash - (delimiter + 3U));
-  }
-
   void RestoreNetworkFieldFromSelectedTx()
   {
+    mLocalNetworkText.clear();
     const std::string status = mPlug.TxInterfaceStatus();
     const auto slash = status.rfind('/');
     if(slash == std::string::npos) return;
@@ -549,70 +518,38 @@ private:
                                         prefixText.data() + prefixText.size(), prefix);
     if(parsed.ec != std::errc{} || parsed.ptr != prefixText.data() + prefixText.size())
       return;
-    mLocalNetworkText = ip + " / " + MaskFromPrefix(prefix);
+    if(prefix == 0U || prefix > 32U) return;
+    mLocalNetworkText = ip + " / " + aeyla::network::format_ipv4(
+        aeyla::network::mask_from_prefix(static_cast<std::uint8_t>(prefix)));
   }
 
   void ApplySimpleNetwork()
   {
-    if(mPlug.TakeRecording())
+    if(mPlug.NetworkConfigurationBusy())
     {
-      mMessage = "Detén GRABAR antes de cambiar la red TX.";
+      mMessage = mPlug.NetworkConfigurationStatus();
       return;
     }
-
-    // Network configuration is never hot-swapped while a Take owns output.
-    mPlug.StopActiveTakePlaybackFromUI();
-    if(mPlug.TakeOutputArmed())
-      (void)mPlug.ToggleTakeOutputArmFromUI();
-    mPlug.ForceDisarmFromUI();
-
-    std::string ipText;
-    std::string maskText;
-    std::uint32_t ip = 0U;
-    std::uint32_t mask = 0U;
-    if(!SplitNetwork(mLocalNetworkText, ipText, maskText, ip, mask))
+    const auto separator = mLocalNetworkText.find('/');
+    if(separator == std::string::npos)
     {
-      mMessage = "Use: 2.0.0.20 / 255.0.0.0";
+      mMessage = "Usa IPv4 / máscara, por ejemplo 2.0.0.20 / 255.0.0.0";
       return;
     }
-
-    const std::string selectedIp = SelectedTxIpFromStatus();
-    if(selectedIp.empty())
-    {
-      mMessage = "Selecciona primero un adaptador TX válido.";
-      return;
-    }
-    if(selectedIp != ipText)
-    {
-      mMessage = "La IPv4 local debe coincidir con el adaptador TX: " + selectedIp;
-      return;
-    }
-
-    const std::uint32_t broadcast = (ip & mask) | (~mask);
-    if(broadcast == ip || broadcast == 0xFFFFFFFFU)
-    {
-      mMessage = "La máscara no produce un broadcast dirigido utilizable.";
-      return;
-    }
-
-    // AEYLA show contract: one universe only. User-facing U1 maps to Art-Net
-    // Port-Address 0. The directed broadcast is derived, never typed manually.
-    const std::string destination = FormatIpv4(broadcast);
-    const auto result = mPlug.ConfigureArtNetFromUI(destination + "@0");
-    Report(result);
-    if(result.succeeded)
-      mMessage = "RED LISTA · " + ipText + " / " + maskText +
-                 " · U1 · SALIDA DESARMADA";
+    const std::string ipv4 = Trim(
+        std::string_view(mLocalNetworkText).substr(0U, separator));
+    const std::string mask = Trim(
+        std::string_view(mLocalNetworkText).substr(separator + 1U));
+    Report(mPlug.ApplyTxNetworkFromUI(ipv4, mask));
   }
 
   void BuildLayout()
   {
     constexpr float margin = 14.0F;
-    constexpr float headerHeight = 70.0F;
-    constexpr float footerReserve = 54.0F;
+    constexpr float headerHeight = 82.0F;
+    constexpr float footerReserve = 62.0F;
     constexpr float gap = 10.0F;
-    const float leftWidth = std::clamp(mRECT.W() * 0.21F, 210.0F, 270.0F);
-    const float rightWidth = std::clamp(mRECT.W() * 0.28F, 300.0F, 360.0F);
+    const float leftWidth = std::clamp(mRECT.W() * 0.20F, 218.0F, 252.0F);
 
     mHeader = IRECT(mRECT.L + margin, mRECT.T + 8.0F,
                     mRECT.R - margin, mRECT.T + headerHeight);
@@ -620,30 +557,36 @@ private:
     const float contentBottom = mRECT.B - footerReserve;
     mSetlist = IRECT(mRECT.L + margin, contentTop,
                      mRECT.L + margin + leftWidth, contentBottom);
-    mRouting = IRECT(mRECT.R - margin - rightWidth, contentTop,
-                     mRECT.R - margin, contentBottom);
     mWorkspace = IRECT(mSetlist.R + gap, contentTop,
-                       mRouting.L - gap, contentBottom);
+                       mRECT.R - margin, contentBottom);
+    mRouting = mWorkspace;
 
-    mBlackoutButton = IRECT(mHeader.R - 146.0F, mHeader.T + 14.0F,
-                            mHeader.R, mHeader.B - 14.0F);
-    mTakeArmButton = IRECT(mHeader.R - 302.0F, mHeader.T + 14.0F,
-                           mHeader.R - 154.0F, mHeader.B - 14.0F);
+    mBlackoutButton = IRECT(mHeader.R - 146.0F, mHeader.T + 18.0F,
+                            mHeader.R, mHeader.B - 18.0F);
+    mTakeArmButton = IRECT(mHeader.R - 302.0F, mHeader.T + 18.0F,
+                           mHeader.R - 154.0F, mHeader.B - 18.0F);
+    mTakeEditorTab = IRECT(mHeader.L + 300.0F, mHeader.T + 18.0F,
+                           mHeader.L + 432.0F, mHeader.B - 18.0F);
+    mNetworkOutputTab = IRECT(mTakeEditorTab.R + 8.0F, mTakeEditorTab.T,
+                              mTakeEditorTab.R + 154.0F, mTakeEditorTab.B);
 
     const IRECT listBody = mSetlist.GetPadded(-10.0F);
+    mNewSongButton = IRECT(listBody.L, mSetlist.B - 42.0F,
+                           listBody.R, mSetlist.B - 12.0F);
     float top = listBody.T + 42.0F;
-    const float rowHeight = 28.0F;
+    const float availableRows = std::max(0.0F, mNewSongButton.T - 8.0F - top);
+    const float rowHeight = std::clamp(
+        availableRows / static_cast<float>(mSongRows.size()), 21.0F, 28.0F);
     for(std::size_t index = 0; index < mSongRows.size(); ++index)
     {
       mSongRows[index] = IRECT(listBody.L, top,
-                               listBody.R, top + rowHeight - 3.0F);
+                               listBody.R, top + rowHeight - 2.0F);
       top += rowHeight;
     }
-    mNewSongButton = IRECT(listBody.L, mSetlist.B - 42.0F,
-                           listBody.R, mSetlist.B - 12.0F);
 
     const IRECT work = mWorkspace.GetPadded(-16.0F);
-    const float versionTop = work.T + 70.0F;
+    const bool compactEditor = work.H() < 560.0F;
+    const float versionTop = work.T + (compactEditor ? 58.0F : 70.0F);
     mReturnRawButton = IRECT(work.L, versionTop, work.L + 124.0F,
                              versionTop + 26.0F);
     mVersionPrevious = IRECT(mReturnRawButton.R + 8.0F, versionTop,
@@ -656,19 +599,23 @@ private:
                              mZoomInButton.L - 5.0F, versionTop + 26.0F);
     mZoomOutButton = IRECT(mZoomResetButton.L - 39.0F, versionTop,
                            mZoomResetButton.L - 5.0F, versionTop + 26.0F);
-    mTimeline = IRECT(work.L, work.T + 104.0F, work.R, work.T + 198.0F);
-    const float transportTop = mTimeline.B + 14.0F;
+    mTimeline = IRECT(work.L,
+                      work.T + (compactEditor ? 92.0F : 104.0F),
+                      work.R,
+                      work.T + (compactEditor ? 172.0F : 198.0F));
+    const float transportTop = mTimeline.B + (compactEditor ? 8.0F : 14.0F);
     const float transportGap = 8.0F;
     const float transportWidth = (work.W() - transportGap * 2.0F) / 3.0F;
     mRecordButton = IRECT(work.L, transportTop,
-                          work.L + transportWidth, transportTop + 40.0F);
+                          work.L + transportWidth,
+                          transportTop + (compactEditor ? 36.0F : 40.0F));
     mPlayButton = IRECT(mRecordButton.R + transportGap, transportTop,
                         mRecordButton.R + transportGap + transportWidth,
-                        transportTop + 40.0F);
+                        transportTop + (compactEditor ? 36.0F : 40.0F));
     mStopButton = IRECT(mPlayButton.R + transportGap, transportTop,
-                        work.R, transportTop + 40.0F);
+                        work.R, transportTop + (compactEditor ? 36.0F : 40.0F));
 
-    const float editorTop = mStopButton.B + 36.0F;
+    const float editorTop = mStopButton.B + (compactEditor ? 12.0F : 36.0F);
     const float smallGap = 6.0F;
     const float timeWidth = std::clamp(work.W() * 0.20F, 112.0F, 150.0F);
     const float frameWidth = 36.0F;
@@ -687,7 +634,7 @@ private:
     left = mMarkInButton.R + smallGap;
     mGoInButton = IRECT(left, editorTop, work.R, editorTop + 32.0F);
 
-    const float outTop = editorTop + 48.0F;
+    const float outTop = editorTop + (compactEditor ? 40.0F : 48.0F);
     left = work.L + labelWidth;
     mOutTimeField = IRECT(left, outTop, left + timeWidth, outTop + 32.0F);
     left = mOutTimeField.R + smallGap;
@@ -698,14 +645,25 @@ private:
     mMarkOutButton = IRECT(left, outTop, left + markWidth, outTop + 32.0F);
     left = mMarkOutButton.R + smallGap;
     mGoOutButton = IRECT(left, outTop, work.R, outTop + 32.0F);
-    mResetTrimButton = IRECT(work.L, outTop + 45.0F, work.R, outTop + 76.0F);
+    mResetTrimButton = IRECT(work.L,
+                             outTop + (compactEditor ? 38.0F : 45.0F),
+                             work.R,
+                             outTop + (compactEditor ? 66.0F : 76.0F));
     mConsolidateButton = IRECT(work.L, mResetTrimButton.B + 8.0F,
-                               work.R, mResetTrimButton.B + 43.0F);
+                               work.R,
+                               mResetTrimButton.B +
+                                   (compactEditor ? 38.0F : 43.0F));
 
     const IRECT route = mRouting.GetPadded(-12.0F);
-    const float cardTop = route.T + 46.0F;
-    mRxCard = IRECT(route.L, cardTop, route.R, cardTop + 108.0F);
-    mTxCard = IRECT(route.L, mRxCard.B + 10.0F, route.R, mRxCard.B + 118.0F);
+    const bool compactRouting = route.H() < 520.0F;
+    const float cardTop = route.T + (compactRouting ? 42.0F : 46.0F);
+    const float routeGap = 12.0F;
+    const float cardWidth = (route.W() - routeGap) * 0.5F;
+    const float routeCardHeight = compactRouting ? 128.0F : 150.0F;
+    mRxCard = IRECT(route.L, cardTop, route.L + cardWidth,
+                    cardTop + routeCardHeight);
+    mTxCard = IRECT(mRxCard.R + routeGap, cardTop, route.R,
+                    cardTop + routeCardHeight);
     mRxPrevious = IRECT(mRxCard.L + 10.0F, mRxCard.B - 34.0F,
                         mRxCard.L + 46.0F, mRxCard.B - 8.0F);
     mRxNext = IRECT(mRxCard.R - 46.0F, mRxCard.B - 34.0F,
@@ -715,23 +673,38 @@ private:
     mTxNext = IRECT(mTxCard.R - 46.0F, mTxCard.B - 34.0F,
                     mTxCard.R - 10.0F, mTxCard.B - 8.0F);
 
-    mLocalNetworkField = IRECT(route.L, mTxCard.B + 36.0F,
-                               route.R, mTxCard.B + 70.0F);
-    mApplyNetworkButton = IRECT(route.L, mLocalNetworkField.B + 12.0F,
-                                route.R, mLocalNetworkField.B + 46.0F);
-    mRefreshNetworkButton = IRECT(route.L, mApplyNetworkButton.B + 8.0F,
-                                  route.R, mApplyNetworkButton.B + 38.0F);
+    const float networkTop = mTxCard.B + (compactRouting ? 32.0F : 44.0F);
+    const float networkFieldWidth = route.W() * 0.56F;
+    mLocalNetworkField = IRECT(route.L, networkTop,
+                               route.L + networkFieldWidth, networkTop + 40.0F);
+    mApplyNetworkButton = IRECT(mLocalNetworkField.R + 12.0F, networkTop,
+                                route.R, networkTop + 40.0F);
+    mRefreshNetworkButton = IRECT(
+        mApplyNetworkButton.L,
+        mApplyNetworkButton.B + (compactRouting ? 8.0F : 10.0F),
+        route.R,
+        mApplyNetworkButton.B + (compactRouting ? 40.0F : 46.0F));
   }
 
   void DrawHeader(IGraphics& g)
   {
-    g.DrawText(IText(20.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "AEYLA  /  REPRODUCTOR DE SHOW",
-               IRECT(mHeader.L, mHeader.T, mHeader.L + 360.0F, mHeader.B - 20.0F));
-    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(21.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "AEYLA",
+               IRECT(mHeader.L, mHeader.T, mHeader.L + 282.0F, mHeader.B - 20.0F));
+    g.DrawText(IText(12.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                ("RGB ESTUDIOS · " + mPlug.ProjectName() + " · R07 PRETEST").c_str(),
                IRECT(mHeader.L, mHeader.B - 27.0F,
-                     mHeader.L + 620.0F, mHeader.B));
+                     mHeader.L + 290.0F, mHeader.B));
+
+    const bool editorView = mWorkspaceView == WorkspaceView::take_editor;
+    Button(g, mTakeEditorTab, "TOMA / EDICIÓN",
+           editorView ? kPanelSelected : kPanelRaised,
+           editorView ? kAccent : kLineStrong,
+           editorView ? kText : kMuted);
+    Button(g, mNetworkOutputTab, "RED / SALIDA",
+           editorView ? kPanelRaised : kPanelSelected,
+           editorView ? kLineStrong : kAccent,
+           editorView ? kMuted : kText);
 
     const bool blackout = mPlug.EffectiveBlackout();
     Button(g, mBlackoutButton, blackout ? "APAGÓN ACTIVO" : "APAGÓN DESACTIVADO",
@@ -750,8 +723,8 @@ private:
   void DrawSetlist(IGraphics& g)
   {
     Card(g, mSetlist);
-    g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "LISTA DE CANCIONES · DOBLE CLIC = RENOMBRAR",
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "CANCIONES · DOBLE CLIC RENOMBRA",
                IRECT(mSetlist.L + 12.0F, mSetlist.T + 8.0F,
                      mSetlist.R - 12.0F, mSetlist.T + 36.0F));
 
@@ -770,12 +743,12 @@ private:
       if(selected) g.DrawRoundRect(kAccent, row, 5.0F, nullptr, 1.0F);
       char number[8];
       std::snprintf(number, sizeof(number), "%02d", static_cast<int>(index + 1U));
-      g.DrawText(IText(9.0F, selected ? kAccent : kFaint,
+      g.DrawText(IText(12.0F, selected ? kAccent : kFaint,
                        "AeylaUI", EAlign::Near, EVAlign::Middle),
                  number, IRECT(row.L + 8.0F, row.T, row.L + 34.0F, row.B));
       std::string name = mPlug.SongName(index);
       if(name.empty()) name = "Canción";
-      g.DrawText(IText(9.0F, selected ? kText : kMuted,
+      g.DrawText(IText(12.0F, selected ? kText : kMuted,
                        "AeylaUI", EAlign::Near, EVAlign::Middle),
                  name.c_str(), IRECT(row.L + 38.0F, row.T, row.R - 8.0F, row.B));
     }
@@ -789,6 +762,7 @@ private:
   {
     Card(g, mWorkspace);
     const IRECT work = mWorkspace.GetPadded(-16.0F);
+    const bool compact = work.H() < 560.0F;
     const std::size_t count = mPlug.SongCount();
     const std::size_t active = mPlug.ActiveSongIndex();
     std::string title = "SIN CANCIÓN SELECCIONADA";
@@ -800,11 +774,19 @@ private:
       title = prefix + mPlug.SongName(active);
     }
     g.DrawText(IText(18.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               title.c_str(), IRECT(work.L, work.T, work.R, work.T + 34.0F));
-    g.DrawText(IText(10.0F, mPlug.TakeRecording() ? kAccent : kMuted,
+               title.c_str(),
+               IRECT(work.L, work.T, work.R,
+                     work.T + (compact ? 28.0F : 34.0F)));
+    const std::string editorStatus = compact && !mMessage.empty()
+        ? mMessage
+        : mPlug.ActiveTakeStatus();
+    g.DrawText(IText(12.0F,
+                     mPlug.TakeRecording() ? kAccent :
+                         (compact && !mMessage.empty() ? kWarn : kMuted),
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
-               mPlug.ActiveTakeStatus().c_str(),
-               IRECT(work.L, work.T + 38.0F, work.R, work.T + 66.0F));
+               editorStatus.c_str(),
+               IRECT(work.L, work.T + (compact ? 29.0F : 38.0F),
+                     work.R, work.T + (compact ? 53.0F : 66.0F)));
 
     const auto editor = mPlug.ActiveTakeEditorSnapshot();
     if(editor.path != mLastEditorPath)
@@ -836,7 +818,7 @@ private:
         ? "VERSIÓN " + std::to_string(editor.version_index + 1U) + " / " +
               std::to_string(editor.version_count) + " · " + editor.take_name
         : "SIN TOMA DMX";
-    g.DrawText(IText(8.4F, editor.raw_source ? kMuted : kGood,
+    g.DrawText(IText(12.0F, editor.raw_source ? kMuted : kGood,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
                version.c_str(),
                IRECT(mVersionNext.R + 8.0F, mVersionNext.T,
@@ -894,10 +876,10 @@ private:
                           mTimeline.T + 3.0F, outX, mTimeline.T + 23.0F);
       g.FillRoundRect(kGood, inGrip, 4.0F);
       g.FillRoundRect(kGood, outGrip, 4.0F);
-      g.DrawText(IText(8.0F, IColor(255, 7, 24, 16), "AeylaUI",
+      g.DrawText(IText(12.0F, IColor(255, 7, 24, 16), "AeylaUI",
                        EAlign::Center, EVAlign::Middle),
                  "IN", inGrip);
-      g.DrawText(IText(8.0F, IColor(255, 7, 24, 16), "AeylaUI",
+      g.DrawText(IText(12.0F, IColor(255, 7, 24, 16), "AeylaUI",
                        EAlign::Center, EVAlign::Middle),
                  "OUT", outGrip);
 
@@ -915,11 +897,11 @@ private:
 
       const double viewStartTime = mViewStart * original;
       const double viewEndTime = mViewEnd * original;
-      g.DrawText(IText(7.5F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Middle),
+      g.DrawText(IText(12.0F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Middle),
                  FormatTime(viewStartTime).c_str(),
                  IRECT(mTimeline.L + 5.0F, mTimeline.B - 17.0F,
                        mTimeline.L + 82.0F, mTimeline.B));
-      g.DrawText(IText(7.5F, kFaint, "AeylaUI", EAlign::Far, EVAlign::Middle),
+      g.DrawText(IText(12.0F, kFaint, "AeylaUI", EAlign::Far, EVAlign::Middle),
                  FormatTime(viewEndTime).c_str(),
                  IRECT(mTimeline.R - 82.0F, mTimeline.B - 17.0F,
                        mTimeline.R - 5.0F, mTimeline.B));
@@ -937,11 +919,11 @@ private:
     Button(g, mStopButton, "DETENER / MANTENER", kPanelRaised, kLineStrong);
 
     const float editorTop = mInTimeField.T;
-    g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
                "IN", IRECT(work.L, editorTop, work.L + 34.0F, editorTop + 32.0F));
     g.FillRoundRect(IColor(255, 10, 12, 17), mInTimeField, 5.0F);
     g.DrawRoundRect(kGood, mInTimeField, 5.0F, nullptr, 1.0F);
-    g.DrawText(IText(9.0F, kText, "AeylaUI", EAlign::Center, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Center, EVAlign::Middle),
                FormatTime(inTime).c_str(), mInTimeField.GetPadded(-5.0F));
     Button(g, mInFrameMinus, "-1f", kPanelRaised, kLineStrong);
     Button(g, mInFramePlus, "+1f", kPanelRaised, kLineStrong);
@@ -950,11 +932,11 @@ private:
     Button(g, mGoInButton, "IR A IN", kPanelRaised, kLineStrong);
 
     const float outTop = mOutTimeField.T;
-    g.DrawText(IText(10.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
                "OUT", IRECT(work.L, outTop, work.L + 34.0F, outTop + 32.0F));
     g.FillRoundRect(IColor(255, 10, 12, 17), mOutTimeField, 5.0F);
     g.DrawRoundRect(kGood, mOutTimeField, 5.0F, nullptr, 1.0F);
-    g.DrawText(IText(9.0F, kText, "AeylaUI", EAlign::Center, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Center, EVAlign::Middle),
                FormatTime(outTime).c_str(), mOutTimeField.GetPadded(-5.0F));
     Button(g, mOutFrameMinus, "-1f", kPanelRaised, kLineStrong);
     Button(g, mOutFramePlus, "+1f", kPanelRaised, kLineStrong);
@@ -970,24 +952,28 @@ private:
         "   ·   SALIDA " + FormatTime(outTime) +
         "   ·   DURACIÓN " + FormatTime(effective) +
         "   ·   ORIGINAL " + FormatTime(original);
-    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                times.c_str(), IRECT(work.L, infoTop, work.R, infoTop + 28.0F));
 
-    const IRECT messageRect(work.L, work.B - 48.0F, work.R, work.B);
-    g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
-    const std::string message = mMessage.empty()
-        ? "CLIC/ARRASTRE = CABEZAL · ARRASTRA IN/OUT · RUEDA = ZOOM · SHIFT+ARRASTRE = PAN."
-        : mMessage;
-    g.DrawText(IText(8.8F, mMessage.empty() ? kFaint : kWarn,
-                     "AeylaUI", EAlign::Near, EVAlign::Middle),
-               message.c_str(), messageRect.GetPadded(-10.0F));
+    if(!compact)
+    {
+      const IRECT messageRect(work.L, work.B - 48.0F, work.R, work.B);
+      g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
+      const std::string message = mMessage.empty()
+          ? "CLIC/ARRASTRE = CABEZAL · ARRASTRA IN/OUT · RUEDA = ZOOM · SHIFT+ARRASTRE = PAN."
+          : mMessage;
+      g.DrawText(IText(12.0F, mMessage.empty() ? kFaint : kWarn,
+                       "AeylaUI", EAlign::Near, EVAlign::Middle),
+                 message.c_str(), messageRect.GetPadded(-10.0F));
+    }
   }
 
   void DrawRouting(IGraphics& g)
   {
     Card(g, mRouting);
-    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "RED ART-NET · U1",
+    const bool compact = mRouting.GetPadded(-12.0F).H() < 520.0F;
+    g.DrawText(IText(16.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "RED Y SALIDA ART-NET · UNIVERSO 1",
                IRECT(mRouting.L + 12.0F, mRouting.T + 8.0F,
                      mRouting.R - 12.0F, mRouting.T + 34.0F));
 
@@ -1000,13 +986,18 @@ private:
                   mTxPrevious, mTxNext,
                   mPlug.BackendReady() ? kGood : kWarn);
 
-    Field(g, mLocalNetworkField, "IPv4 LOCAL / MÁSCARA DE SUBRED",
+    Field(g, mLocalNetworkField, "IPv4 AEYLA / MÁSCARA DE SUBRED",
           mLocalNetworkText.empty() ? "clic para configurar" : mLocalNetworkText,
           mLocalNetworkText.empty() ? kWarn : kText);
-    Button(g, mApplyNetworkButton, "APLICAR RED",
-           mPlug.BackendReady() ? IColor(255, 18, 51, 38) : kPanelRaised,
-           mPlug.BackendReady() ? kGood : kLineStrong,
-           mPlug.BackendReady() ? kGood : kText);
+    const bool networkBusy = mPlug.NetworkConfigurationBusy();
+    Button(g, mApplyNetworkButton,
+           networkBusy ? "APLICANDO RED · ESPERA" : "APLICAR IP Y PREPARAR ART-NET",
+           networkBusy ? IColor(255, 54, 42, 22) :
+               (mPlug.BackendReady() ? IColor(255, 18, 51, 38) : kPanelRaised),
+           networkBusy ? kWarn :
+               (mPlug.BackendReady() ? kGood : kLineStrong),
+           networkBusy ? kWarn :
+               (mPlug.BackendReady() ? kGood : kText));
     Button(g, mRefreshNetworkButton, "ACTUALIZAR ADAPTADORES",
            kPanelRaised, kLineStrong);
 
@@ -1021,19 +1012,49 @@ private:
                   mPlug.TakeOutputLive() ? "AL AIRE" :
                       (mPlug.TakeOutputArmed() ? "ARMADA / ESPERA PLAY" :
                                                 "DESARMADA"));
-    g.DrawText(IText(8.2F,
+    g.DrawText(IText(12.0F,
                      mPlug.ArtNetSendErrors() > 0U ? kWarn : kFaint,
                      "AeylaUI", EAlign::Near, EVAlign::Top),
                diagnostics,
                IRECT(mRouting.L + 14.0F, infoTop,
                      mRouting.R - 14.0F, infoTop + 30.0F));
 
+    const std::string networkStatus = mPlug.NetworkConfigurationStatus();
+    g.DrawText(IText(12.0F,
+                     networkBusy ? kWarn :
+                         (mPlug.BackendReady() ? kGood : kFaint),
+                     "AeylaUI", EAlign::Near, EVAlign::Top),
+               networkStatus.c_str(),
+               IRECT(mRouting.L + 14.0F, infoTop + 28.0F,
+                     mRouting.R - 14.0F, infoTop + 64.0F));
+
     const std::string backendError = mPlug.OutputBackendError();
     if(!backendError.empty())
-      g.DrawText(IText(8.2F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
+      g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
                  backendError.c_str(),
-                 IRECT(mRouting.L + 14.0F, infoTop + 28.0F,
-                       mRouting.R - 14.0F, infoTop + 72.0F));
+                 IRECT(mRouting.L + 14.0F, infoTop + 64.0F,
+                       mRouting.R - 14.0F, infoTop + 96.0F));
+
+    if(compact)
+    {
+      if(backendError.empty() && !mMessage.empty())
+        g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
+                   mMessage.c_str(),
+                   IRECT(mRouting.L + 14.0F, infoTop + 64.0F,
+                         mRouting.R - 14.0F, infoTop + 96.0F));
+    }
+    else
+    {
+      const IRECT messageRect(mRouting.L + 14.0F, mRouting.B - 64.0F,
+                              mRouting.R - 14.0F, mRouting.B - 14.0F);
+      g.FillRoundRect(IColor(255, 11, 13, 18), messageRect, 6.0F);
+      const std::string message = mMessage.empty()
+          ? "Selecciona Ethernet TX, define IPv4/máscara y aplica. La salida permanece desarmada."
+          : mMessage;
+      g.DrawText(IText(12.0F, mMessage.empty() ? kFaint : kWarn,
+                       "AeylaUI", EAlign::Near, EVAlign::Middle),
+                 message.c_str(), messageRect.GetPadded(-10.0F));
+    }
   }
 
   void DrawRouteCard(IGraphics& g, const IRECT& rect,
@@ -1043,13 +1064,13 @@ private:
   {
     g.FillRoundRect(kPanelRaised, rect, 7.0F);
     g.DrawRoundRect(kLine, rect, 7.0F, nullptr, 1.0F);
-    g.DrawText(IText(8.5F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                title, IRECT(rect.L + 10.0F, rect.T + 5.0F,
                             rect.R - 10.0F, rect.T + 23.0F));
-    g.DrawText(IText(8.2F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
                adapter.c_str(), IRECT(rect.L + 10.0F, rect.T + 24.0F,
                                       rect.R - 10.0F, rect.T + 48.0F));
-    g.DrawText(IText(8.0F, statusColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
+    g.DrawText(IText(12.0F, statusColor, "AeylaUI", EAlign::Near, EVAlign::Middle),
                signal.c_str(), IRECT(rect.L + 52.0F, rect.B - 34.0F,
                                      rect.R - 52.0F, rect.B - 7.0F));
     Button(g, previous, "<", kPanel, kLineStrong);
@@ -1074,6 +1095,7 @@ private:
   std::string mLocalNetworkText;
   EditKind mEditKind{EditKind::none};
   DragKind mDragKind{DragKind::none};
+  WorkspaceView mWorkspaceView{WorkspaceView::take_editor};
   std::size_t mEditingSongIndex{0U};
   std::filesystem::path mLastEditorPath;
   double mViewStart{0.0};
@@ -1085,6 +1107,8 @@ private:
   IRECT mRouting{};
   IRECT mBlackoutButton{};
   IRECT mTakeArmButton{};
+  IRECT mTakeEditorTab{};
+  IRECT mNetworkOutputTab{};
   std::array<IRECT, 15> mSongRows{};
   IRECT mNewSongButton{};
   IRECT mReturnRawButton{};

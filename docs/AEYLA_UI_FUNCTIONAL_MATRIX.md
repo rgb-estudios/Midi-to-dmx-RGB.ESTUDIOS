@@ -1,41 +1,37 @@
 # AEYLA — matriz funcional de UI
 
-Checkpoint: `CP-AEYLA-0.3.3`
+Checkpoint: `R07 PRETEST / P0 network-output repair`
 Regla: visible = funcional, bloqueado con causa o no presente.
 
 | Superficie | Evento → handler → efecto | Persistencia | Estado actual |
 |---|---|---:|---|
-| NEW | click → `NewProjectFromUI` → bundle nuevo seguro | sí | **Implemented** en SHA previo; revalidación del producto pendiente |
-| OPEN | click → diálogo → carga transaccional | sí | **Implemented** en SHA previo; revalidación pendiente |
-| SAVE / SAVE AS | click → ZIP atómico + read-back + `.bak` | sí | **Implemented** en SHA previo; revalidación pendiente |
-| BLACKOUT | click → parámetro → modelo → DMX cero | host/show | **Implemented**; cambio de runtime en revalidación |
-| ARM | click → gates → arma o explica proyecto/backend/runtime/offline | ARM nunca persiste | **Scaffolded**; Art-Net integrado, CI/nodo pendientes |
-| RIG 10/14 | click → fixtures físicos habilitados | sí | **Implemented** en modelo |
-| Source | click → selecciona Look base y carga sus valores propios | sí | **Scaffolded**; producto pendiente de CI |
-| Paleta primaria/secundaria | click → color del Look → preview/DMX semántico | sí | **Scaffolded**; 8 colores, sin selector continuo |
-| Look Intensity | drag → intensidad propia del Look | sí | **Scaffolded** |
-| Speed / W / A / UV | drag → valores propios del Look | sí | **Scaffolded** |
-| Grand Master | drag → intensidad global de operador | host state | **Implemented**; separado de Look Intensity |
-| Fixtures | click → selección; botón include/exclude → máscara del Look | sí | **Scaffolded**; sin grupos |
-| STORE LOOK | click → duplica estado artístico completo con ID/nombre seguro | sí | **Scaffolded**; nombre automático, sin rename/delete |
-| Look anterior/siguiente | click → recupera cualquier Look almacenado | sí | **Scaffolded**; máximo acotado a 2048 |
-| NEW SONG | click → crea y selecciona Song editable, máximo 15 | sí | **Scaffolded** |
-| Song anterior/siguiente | click → selección segura + blackout/disarm | sesión | **Scaffolded**; sin reorder/rename/delete |
-| SET SONG START | click → `Song ID → host PPQ` | estado del plugin | **Scaffolded**; no asume PPQ cero |
-| STORE CUE @ PLAYHEAD | click → Cue LATCH + placement; extiende Song si hace falta | sí | **Scaffolded**; sin edición/move/delete |
-| MIDI mapping | Cue recibe primer note/channel libre, oculto | sí | **Scaffolded**; UI MIDI Learn manual no presente |
-| Executors | mouse/MIDI → Cue o diagnóstico sin Show | runtime | **Implemented** en modelo; revalidación de host pendiente |
-| Runtime con editor cerrado | worker 4 ms independiente de `OnIdle` | no | **Scaffolded**; falta prueba real en hosts |
-| Offline render | hard disarm + blackout cada tick offline | no | **Scaffolded**; falta prueba de host y backend conectado |
-| OUTPUT SETUP | texto `IPv4@universe`/`OFF` → valida, persiste, abre/cierra socket y desarma | sí | **Scaffolded**; CI/nodo pendientes |
+| NUEVO | clic → `NewProjectFromUI` → bundle nuevo seguro | sí | **Implemented**; host por revalidar |
+| ABRIR | clic → diálogo → carga transaccional | sí | **Implemented**; host por revalidar |
+| GUARDAR / GUARDAR COMO | clic → ZIP atómico + read-back + `.bak` | sí | **Implemented**; host por revalidar |
+| APAGÓN | clic → desarma modelo+toma → DMX cero | host/show | **Implemented** |
+| ARMAR SALIDA DE TOMA | clic → gates → arma o explica causa exacta | ARM nunca persiste | **Implemented / Simulated**; nodo pendiente |
+| TOMA / EDICIÓN | clic → workspace de captura/editor | sesión UI | **Implemented** |
+| RED / SALIDA | clic → workspace de red/telemetría | sesión UI | **Implemented** |
+| Lista de canciones | clic selecciona; doble clic renombra; nueva hasta 15 | sí | **Implemented** |
+| GRABAR NUEVA TOMA | clic → captura Art-Net U1 a disco; segundo clic finaliza RAW | sí, archivo | **Implemented / Simulated** |
+| REPRODUCIR / DETENER | clic → cursor relativo por muestras / pausa HOLD | runtime | **Implemented / Simulated** |
+| Timeline y cabezal | clic/arrastre → scrub libre si está desarmado | edit state | **Implemented** |
+| Handles / marcar IN-OUT | arrastre, timecode o ±1f → rango no destructivo | edit state | **Implemented** |
+| Zoom / pan | rueda, `-/+`, `Shift+arrastre` | sesión UI | **Implemented** |
+| Versiones / volver a RAW | flechas/acción → selecciona archivo y rango reales | sesión | **Implemented** |
+| CONSOLIDAR CLIP | clic → nuevo `.aeylatake`, RAW byte-identical | sí, archivo | **Implemented** |
+| Adaptador RX/TX | flechas → selecciona NIC; cambiar TX desarma | sesión | **Implemented** |
+| IPv4 AEYLA / MÁSCARA | texto → parser estricto → helper UAC → alias/validación/rollback | sistema Windows | **Implemented / Simulated**; UAC físico pendiente |
+| Telemetría TX | worker → paquetes/errores/autoridad visible | no | **Implemented** |
+| Runtime con editor cerrado | audio publica muestras/heartbeat; workers de clip y UDP continúan sin `OnIdle` | no | **Simulated**; REAPER real pendiente |
+| Offline render | hard disarm + blackout | no | **Implemented / Simulated**; host pendiente |
 | SHOW MODE | no presente | UI state | **Specified** |
 
 ## Límites visibles de esta entrega
 
-- No hay selector continuo de color, rename/delete/reorder, undo/redo ni grilla
-  de timeline.
-- La Cue creada desde UI es LATCH; el modelo soporta MOMENTARY pero todavía no
-  hay selector visible.
+- No hay delete/reorder, undo/redo ni clasificación de canales para fades.
+- El Programmer semántico y Show Mode permanecen fuera de esta superficie R07;
+  no se dibujan como controles disponibles.
 - Art-Net está conectado al producto, pero no existe evidencia de nodo/PAR
   físico ni detección positiva de recepción.
 - Nada en esta matriz autoriza uso de show sin CI actual, hosts reales,

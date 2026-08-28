@@ -17,6 +17,10 @@ AEYLA debe enumerar directamente los adaptadores IPv4 activos del sistema y perm
 
 RX y TX pueden usar adaptadores distintos.
 
+R07 no implementa monitor ni retransmisión `RX→TX`: CAPTURAR y la autoridad
+física de una toma son modos mutuamente excluyentes. La ruta aprobada es
+capturar, guardar RAW, editar/consolidar y sólo después transmitir.
+
 Ejemplo soportado:
 
 Avolites -> USB-C Ethernet 2.0.0.20 -> AEYLA RX
@@ -48,7 +52,8 @@ Cambiar la configuración IPv4 real de Windows/macOS es una operación privilegi
 
 Nunca ejecutar REAPER/Ableton/Logic completo como Administrator/root para permitirlo.
 
-Si el producto añade en el futuro `SET ADAPTER IP`, debe existir un helper separado con privilegio mínimo que:
+R07 implementa `APLICAR IP Y PREPARAR ART-NET` en Windows mediante un helper
+separado de privilegio mínimo que:
 
 1. reciba sólo adaptador + IP + máscara/prefijo solicitados;
 2. valide que el adaptador sigue siendo el mismo;
@@ -57,7 +62,20 @@ Si el producto añade en el futuro `SET ADAPTER IP`, debe existir un helper sepa
 5. devuelva resultado auditable;
 6. termine inmediatamente.
 
-El plugin continúa sin privilegios elevados.
+El helper agrega una IPv4 secundaria persistente a la NIC Ethernet; no reemplaza
+ni elimina la configuración anterior. Verifica que la identidad e índice del
+adaptador no hayan cambiado, rechaza Wi-Fi y direcciones duplicadas, confirma la
+IPv4/prefijo por enumeración y prueba un bind UDP local. Si falla la validación
+posterior, retira exactamente el alias agregado y declara `CAMBIO REVERTIDO`.
+
+La solicitud y el resultado usan una transacción acotada con nonce dentro de la
+carpeta temporal AEYLA. El resultado debe coincidir en nonce, IPv4 y prefijo.
+REAPER y el plugin continúan sin privilegios elevados; sólo el helper solicita
+UAC y termina al completar la operación.
+
+Estado de evidencia: **Implemented / Simulated**. Compilación Windows, prueba
+UAC real, `ipconfig`, adaptador físico y rollback inducido siguen siendo gates
+obligatorios. La modificación interna de red en macOS aún no está implementada.
 
 ## 3. Presupuesto de memoria
 
@@ -150,6 +168,12 @@ No llenar la vista SHOW con esta información. Debe vivir en Routing/Diagnostics
 - desconectar/reconectar ambas rutas;
 - Wi-Fi presente no captura accidentalmente autoridad Art-Net;
 - ninguna configuración depende del DAW.
+- aplicar IPv4/máscara conserva la red previa y deja salida desarmada/apagón;
+- una solicitud inválida o no confirmada no modifica autoridad Art-Net;
+- minimizar o cerrar la ventana del plugin no altera la cadencia TX mientras el
+  host continúa entregando bloques de audio;
+- prueba externa de 44 Hz, errores y continuidad durante al menos 5 minutos,
+  seguida por el soak prolongado contractual.
 
 ### Memory
 

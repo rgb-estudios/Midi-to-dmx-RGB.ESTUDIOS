@@ -270,6 +270,7 @@ bool DmxTakeScheduler::arm(std::string& error_message) {
 
   if(file_mode_.load(std::memory_order_acquire)) {
     file_player_.set_host_heartbeat_ok(true);
+    output->prepare_explicit_rearm();
     if(!file_player_.arm(error_message))
       return false;
     armed_.store(true, std::memory_order_release);
@@ -283,6 +284,7 @@ bool DmxTakeScheduler::arm(std::string& error_message) {
     return false;
   }
 
+  output_->prepare_explicit_rearm();
   heartbeat_ok_.store(true, std::memory_order_release);
   armed_.store(true, std::memory_order_release);
   output_->publish_override(hold_frame_, generation_++);

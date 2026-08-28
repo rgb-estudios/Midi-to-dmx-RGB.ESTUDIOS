@@ -22,6 +22,11 @@ No se aceptan botones, menús, sliders, pads o selectores "muertos" que parezcan
 | GUARDAR COMO | guardar nueva ruta | funcional; fuerza extensión `.aeylashow` |
 | ARMAR SALIDA | habilitar salida física | nunca silencioso: arma o muestra causa exacta del bloqueo |
 | APAGÓN | alternar apagón | funcional y con prioridad de seguridad |
+| TOMA / EDICIÓN | abrir el flujo de captura y edición | pestaña funcional; no comparte controles de red en un panel estrecho |
+| RED / SALIDA | abrir routing, IPv4 y telemetría | pestaña funcional; conserva ARMAR y APAGÓN siempre visibles |
+| ADAPTADOR RX / TX | seleccionar NIC física | funcional; cambiar TX desarma la salida y nunca elige Wi-Fi silenciosamente |
+| IPv4 AEYLA / MÁSCARA | editar la red local de show | campo real; valida IPv4, máscara contigua y dirección de host utilizable |
+| APLICAR IP Y PREPARAR ART-NET | configurar la NIC TX | Windows: solicita UAC sólo para el helper, conserva la red existente, valida/rollback y termina desarmado |
 | TIMELINE DMX | posicionar el cabezal | clic/arrastre libre; scrub local sólo con salida física desarmada |
 | HANDLE IN / OUT | delimitar el rango no destructivo | grip visible y arrastrable; no depende de botones por segundos |
 | MARCAR IN / OUT EN CABEZAL | fijar un punto exacto | usa la posición actual del cabezal con precisión de un cuadro DMX |
@@ -81,5 +86,9 @@ Cada PRETEST que cambie UI debe comprobar manualmente en REAPER/Windows:
 12. arrastrar ambos handles, editar ambos timecodes y ajustar ±1 cuadro;
 13. usar zoom + paneo y comprobar que los puntos conservan su posición;
 14. consolidar y comprobar que el RAW no cambia.
+15. cambiar a `RED / SALIDA`, seleccionar Ethernet y comprobar feedback legible;
+16. aplicar una IPv4/máscara real, confirmar UAC y verificar que la red previa se conserva;
+17. ejecutar `APAGÓN OFF → ARMAR → REPRODUCIR` y observar TX creciente a 44 Hz;
+18. minimizar/cerrar la UI durante 5 minutos y verificar continuidad con un receptor externo.
 
 Un screenshot correcto no constituye PASS de interacción. Se requiere click/input real en host.

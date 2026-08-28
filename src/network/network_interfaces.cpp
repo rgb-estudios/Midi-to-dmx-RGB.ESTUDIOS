@@ -114,6 +114,7 @@ std::vector<NetworkInterface> enumerate_ipv4_interfaces() {
                                  ? name
                                  : std::string(adapter->AdapterName);
 
+      bool found_ipv4 = false;
       for(auto* address = adapter->FirstUnicastAddress;
           address != nullptr; address = address->Next) {
         if(address->Address.lpSockaddr == nullptr ||
@@ -124,11 +125,16 @@ std::vector<NetworkInterface> enumerate_ipv4_interfaces() {
         std::array<char, INET_ADDRSTRLEN> text{};
         if(inet_ntop(AF_INET, &ipv4->sin_addr, text.data(), text.size()) == nullptr)
           continue;
+        found_ipv4 = true;
         result.push_back({id, name, text.data(),
                           static_cast<std::uint8_t>(
                               std::min<ULONG>(address->OnLinkPrefixLength, 32U)),
-                          loopback});
+                          loopback, adapter->IfIndex,
+                          adapter->IfType == IF_TYPE_IEEE80211});
       }
+      if(!found_ipv4)
+        result.push_back({id, name, {}, 0U, loopback, adapter->IfIndex,
+                          adapter->IfType == IF_TYPE_IEEE80211});
     }
   }
   (void)WSACleanup();
@@ -152,7 +158,8 @@ std::vector<NetworkInterface> enumerate_ipv4_interfaces() {
                            : reinterpret_cast<const sockaddr_in*>(item->ifa_netmask);
     const bool loopback = (item->ifa_flags & IFF_LOOPBACK) != 0;
     const std::string name = item->ifa_name == nullptr ? "IPv4" : item->ifa_name;
-    result.push_back({name, name, text.data(), prefix_from_mask(mask), loopback});
+    result.push_back({name, name, text.data(), prefix_from_mask(mask), loopback,
+                      if_nametoindex(name.c_str()), false});
   }
   freeifaddrs(addresses);
 #endif

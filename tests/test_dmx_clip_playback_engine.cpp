@@ -222,13 +222,33 @@ int main() {
       return scheduler.status().current_frame == 0U && output.override_enabled();
     }), "ARM -> PLAY did not establish physical Take authority");
 
-    scheduler.advance_samples(48000U, false);
-    host.publish(false, false, 777.0, 0.0, 120.0);
+    // Simula un segundo de callbacks sin ninguna llamada de UI. Esta es la
+    // propiedad requerida cuando el editor está cerrado o minimizado: el host
+    // continúa publicando bloques, el scheduler avanza y el worker mantiene su
+    // propia cadencia de red.
+    const auto packets_before_headless_second = output.stats().sent_packets;
+    for(int block = 0; block < 100; ++block) {
+      scheduler.advance_samples(480U, false);
+      host.publish(false, false, 777.0, 0.0, 120.0);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     require(wait_until([&]() { return scheduler.status().current_frame == 44U; }),
             "stopped Arrangement did not advance from callback sample count");
     require(wait_until([&]() {
       return scheduler.status().armed && output.override_enabled();
     }), "real-time Take playback lost authority after callback advance");
+    require(wait_until([&]() {
+      DmxUniverse received{};
+      return receiver.latest_frame(received) && received == expected_frame(44U);
+    }), "headless/minimized path did not transmit the advanced DMX frame");
+    const auto headless_stats = output.stats();
+    const auto headless_packets =
+        headless_stats.sent_packets - packets_before_headless_second;
+    require(headless_stats.configured_fps == 44U &&
+                headless_packets >= 30U && headless_packets <= 60U &&
+                headless_stats.send_errors == 0U &&
+                !headless_stats.fail_closed,
+            "headless/minimized path did not sustain healthy 44 Hz Art-Net");
     scheduler.disarm();
   }
 
