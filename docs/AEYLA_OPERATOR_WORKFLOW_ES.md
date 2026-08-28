@@ -1,61 +1,150 @@
-# AEYLA — flujo operativo disponible en CP-AEYLA-0.3.3
+# AEYLA — flujo operativo R07 PRETEST
 
-Estado: **Scaffolded** para programación controlada; no es Show Candidate.
-Alcance: una instancia, hasta 15 Songs, Rig 10/14, preview visual/DMX interno.
+Estado actual: **Simulated** con entradas/paquetes generados por software. No es
+**Host-tested**, **Hardware-tested** ni Show Candidate.
 
-## Idea simple
+Alcance congelado: una instancia, un universo Art-Net, hasta 15 canciones,
+captura directa a disco a 44 Hz, referencia automática de inicio desde el
+transporte que genera MTC, edición no destructiva y reproducción Art-Net.
 
-El DAW reproduce el audio. AEYLA programa luces como
-`Look → Cue → Song → Show`. Las notas MIDI son un detalle interno de transporte
-y control: no se necesitan para crear un Cue desde la UI.
+## 1. Preparación
 
-## Crear una programación mínima
+1. Cierra REAPER antes de instalar otra compilación de AEYLA.
+2. Ejecuta `CLEAN_INSTALL_AEYLA.cmd` y vuelve a abrir el DAW.
+3. Inserta una sola instancia de AEYLA en una pista de control.
+4. Crea un proyecto con `NUEVO` o abre un `.aeylashow`.
+5. Crea/selecciona una canción. El doble clic permite renombrarla.
 
-1. Inserta una sola instancia en una pista `AEYLA CONTROL`.
-2. Pulsa `NEW` o abre un `.aeylashow`.
-3. Elige `RIG 10` o `RIG 14` y una fuente visual.
-4. Edita color primario/secundario, Look Intensity, Speed y extracción W/A/UV.
-5. Selecciona cada fixture requerido y usa `FIXTURE INCLUDED/EXCLUDED` para la
-   máscara del Look.
-6. Pulsa `STORE LOOK`. En este checkpoint el nombre se asigna automáticamente.
-7. Usa los `<` y `>` del selector LOOK para recuperar Looks guardados.
-8. Pulsa `NEW SONG`. Usa los `<` y `>` del selector SONG para moverte entre
-   Songs existentes.
-9. Coloca el playhead del DAW exactamente en el comienzo musical de esa Song y
-   pulsa `SET SONG START`.
-10. Mueve el playhead al momento deseado y pulsa `STORE CUE @ PLAYHEAD`.
-   El Song se extiende automáticamente si el playhead está más allá de su final
-   inicial.
-11. Repite los cambios de Look y `STORE CUE` necesarios. Guarda con `SAVE AS`.
-12. Para una prueba de red controlada, pulsa `OUTPUT SETUP` e introduce la IP
-    numérica del nodo y el universo como `IPv4@universo`, por ejemplo
-    `2.0.0.20@0`. Escribe `OFF` para deshabilitar el backend.
-13. Confirma `BACKEND READY`, quita Blackout y pulsa `ARM OUTPUT`. La
-    configuración nunca rearma automáticamente la salida.
+`NUEVO` y `ABRIR` quedan bloqueados mientras GRABAR está activo. GUARDAR sigue
+disponible. El armado de salida nunca se restaura desde el archivo del host.
 
-Cada cambio artístico/estructural o selección de Look/Song fuerza
-`DISARMED + BLACKOUT`. El
-operador debe salir de Blackout y solicitar ARM otra vez de forma explícita.
+## 2. Red de captura
 
-## Playback y reconstrucción
+1. Abre `RED / SALIDA`.
+2. Selecciona el adaptador Ethernet correcto en `ENTRADA / ADAPTADOR RX`.
+3. Confirma `RX ACTIVO` o `RX LISTO · ESPERANDO ART-NET`.
+4. En Avolites habilita Art-Net continuo para el mismo universo.
+5. No inicies GRABAR hasta que AEYLA muestre `SEÑAL PRESENTE`.
 
-- Play/Seek/Loop se proyectan desde PPQ absoluto del host al tick relativo del
-  Song seleccionado.
-- Un Song sin `SET SONG START` no supone PPQ cero: resuelve a estado seguro.
-- Stop libera overrides transitorios.
-- El runtime musical continúa en un worker propio aunque el editor no reciba
-  `OnIdle`; esta propiedad todavía requiere evidencia de host real.
-- Un bounce/render offline fuerza disarm y blackout y nunca se rearma solo.
+AEYLA nunca captura y transmite simultáneamente. Si una salida está armada,
+GRABAR muestra el motivo del bloqueo y no modifica la toma existente.
 
-## Lo que aún no debe intentarse como show
+## 3. Grabación alineada con MTC
 
-- Art-Net está conectado en software con preflight de configuración/socket y
-  fail-closed ante error de envío, pero no hay watchdog de recepción del nodo
-  ni hardware validado.
-- No hay Show Mode, edición de Cue, MOMENTARY visible, rename/delete/reorder,
-  undo/redo ni timeline gráfica.
-- Windows standalone mantiene el P0 de OpenGL nulo; REAPER/Ableton/Logic y el
-  cierre de ventana deben revalidarse en máquinas/hosts reales.
+Este es el orden requerido cuando el mismo DAW envía MTC a Avolites:
 
-Por lo tanto este flujo sirve para programación y prueba Art-Net controlada en
-laboratorio, no para operar una función.
+1. Detén el transporte del DAW.
+2. Pulsa `GRABAR NUEVA TOMA` en AEYLA.
+3. Comprueba `ESPERANDO REPRODUCIR / MTC`.
+4. Inicia el transporte del DAW. El DAW envía MTC a Avolites y, en paralelo,
+   entrega a AEYLA el flanco de transporte y su conteo de muestras.
+5. AEYLA conserva el pre-roll en la TOMA BRUTA y fija ese cuadro como
+   `ENTRADA AUTO`; no modifica el archivo original.
+6. Al terminar la canción, detén primero el transporte y luego pulsa
+   `DETENER + GUARDAR TOMA`.
+
+AEYLA usa el transporte directo del host, no necesita decodificar los mensajes
+MTC Quarter Frame `0xF1` que el propio DAW está enviando a la consola. Si GRABAR
+comienza con el DAW ya reproduciendo, la toma se guarda, pero la ENTRADA debe
+ajustarse manualmente.
+
+## 4. Edición y consolidación
+
+1. En `TOMA / EDICIÓN`, revisa el cabezal y la actividad DMX.
+2. Arrastra `ENTRADA` y `SALIDA`, escribe `MM:SS.mmm` o ajusta `±1f`.
+3. Usa rueda para ampliar y `Mayús + arrastre` para desplazarte.
+4. Comprueba la duración efectiva.
+5. Pulsa `CONSOLIDAR MUESTRA DMX` si deseas materializar el rango.
+
+La consolidación crea otro `.aeylatake` cuyo `00:00` corresponde a ENTRADA.
+La TOMA BRUTA permanece byte por byte intacta. Las flechas cambian de versión y
+`VOLVER A TOMA BRUTA` recupera la fuente original.
+
+No se permiten cambios de rango, versión o canción mientras GRABAR,
+REPRODUCIR o la salida física estén activos.
+
+## 5. Preparar la salida
+
+1. Abre `RED / SALIDA`.
+2. Selecciona el adaptador Ethernet correcto en `SALIDA / ADAPTADOR TX`.
+3. Introduce `IPv4 AEYLA / MÁSCARA`, por ejemplo
+   `2.0.0.20 / 255.0.0.0`.
+4. Pulsa `APLICAR IP Y PREPARAR ART-NET`.
+5. En Windows confirma UAC. El helper agrega una IPv4 secundaria, conserva la
+   red previa, verifica el bind y hace rollback si la validación falla.
+6. Confirma `RED LISTA`, motor a `44 Hz`, `DESARMADA` y cero errores nuevos.
+
+Cambiar el adaptador o la red fuerza `APAGÓN + DESARMADO`.
+
+## 6. Transmitir una toma
+
+1. Comprueba que GRABAR está detenido.
+2. Desactiva `APAGÓN`.
+3. Pulsa `ARMAR SALIDA DE TOMA`.
+4. Pulsa `REPRODUCIR TOMA ACTIVA`.
+5. Verifica `TOMA AL AIRE`, contador TX creciente y recepción en el nodo.
+6. Minimiza/cierra solamente la ventana del plugin y comprueba durante al
+   menos cinco minutos que el receptor externo continúa cerca de 44 Hz.
+
+`DETENER / MANTENER` conserva el último cuadro. `APAGÓN` tiene prioridad,
+desarma toda autoridad y solicita una ráfaga de tres cuadros DMX en cero.
+
+## 7. Recuperación de fallos
+
+Tres errores UDP consecutivos enclavan el fail-closed una sola vez:
+
+1. AEYLA desarma toma y modelo.
+2. Activa APAGÓN y muestra `FALLO ENCLAVADO · REARME MANUAL`.
+3. Corrige cable, NIC o configuración.
+4. Desactiva APAGÓN.
+5. Pulsa ARMAR explícitamente.
+
+AEYLA no se rearma sola. Si se cambia de red, se desactiva el FX, se descarga
+el plugin, el host entra en render sin conexión o se pierde su vida operativa,
+la salida vuelve al estado seguro.
+
+Si el host descarga el plugin durante GRABAR, AEYLA intenta finalizar en disco
+una toma recuperable en vez de borrar el temporal. Esa recuperación no sustituye
+`DETENER + GUARDAR`: al reabrir, vuelve a seleccionar la misma biblioteca y
+verifica la toma antes de editarla o transmitirla.
+
+## 8. Automatización MIDI del show
+
+1. Con la salida desarmada, abre `MIDI / SHOW`.
+2. Elige el canal o usa `APRENDER MIDI` para cada acción.
+3. Activa `MIDI SHOW` y espera `PRECARGA MIDI COMPLETA`.
+4. Desactiva APAGÓN y arma la salida manualmente. MIDI nunca puede realizar
+   ninguna de esas dos acciones de seguridad.
+5. Coloca la nota PLAY o LANZAR exactamente en el inicio de la pista de audio.
+6. Inicia el transporte del DAW. AEYLA compensa el `sampleOffset` de la nota y
+   avanza con las mismas muestras que procesa el audio.
+7. El MTC puede seguir saliendo del mismo DAW hacia Avolites; no debe volver a
+   entrar en AEYLA.
+
+Mapa inicial, desactivado por defecto:
+
+| Canal 16 | Acción |
+|---:|---|
+| Nota 36 | CANCIÓN ANTERIOR |
+| Nota 37 | SIGUIENTE CANCIÓN |
+| Nota 38 | PLAY / REINICIAR |
+| Nota 39 | PAUSA / REANUDAR |
+| Nota 40 | STOP / RESET |
+| Notas 48–62 | LANZAR CANCIONES 01–15 |
+
+ANTERIOR/SIGUIENTE cambian sólo la canción `PREPARADA`; la `ACTIVA` continúa
+sin interrupción. PLAY/LANZAR hace el cambio mediante un lector ya validado,
+sin desarmar Art-Net ni insertar APAGÓN. STOP del DAW congela el reloj; al
+continuar, la toma sigue desde el mismo cursor relativo.
+
+## 9. Gates aún abiertos
+
+- REAPER, Ableton Live y Logic con una matriz formal y repetible.
+- UAC/rollback en un Windows físico.
+- NIC → nodo → DMX/luminaria, pérdida/reconexión y unicast/broadcast dirigido.
+- interacción visual completa a 960×620 y 1280×800 en ambos sistemas.
+- soak de 8 horas y tres ensayos completos.
+- MIDI/SHOW dentro de REAPER y Ableton con notas en sample 0, pausa, retrigger
+  y cambios repetidos entre 15 canciones.
+
+Hasta cerrar esos gates, todo paquete debe llamarse **PRETEST**.

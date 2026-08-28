@@ -1,6 +1,199 @@
 # Changelog
 
+## 2026-08-28 — R07 ancla automática de captura DAW/MTC
+
+- GRABAR iniciado con el transporte detenido queda en `ESPERANDO PLAY/MTC`.
+- El primer inicio de transporte fija un ancla contra el contador real de cuadros DMX.
+- Al finalizar, el RAW permanece completo y el editor coloca `IN` automáticamente en el ancla; CONSOLIDAR sigue creando un clip nuevo con ese punto en `00:00`.
+- El VST3 usa el transporte/muestras del host que origina el MTC, sin depender de que mensajes Quarter Frame `0xF1` atraviesen el wrapper VST3.
+
+## 2026-08-28 — R07 continuidad Art-Net con REAPER inactivo
+
+- La reproducción manual de una toma usa un reloj monotónico independiente del callback de audio.
+- Cambiar el foco desde REAPER a Capture ya no corta Art-Net cuando REAPER muestra `audio device closed`.
+- La reproducción DAW/MIDI conserva el reloj por muestras y el fail-closed por pérdida real de heartbeat.
+- APAGÓN, renderizado sin conexión, descarga y cierre conservan su prioridad de seguridad.
+
 ## Unreleased
+
+### Fixed — R07 auditoría integral de operación
+
+- La finalización de una captura ya resuelve el archivo exacto que abrió el
+  escritor; nunca sustituye la toma por el primer resultado del directorio.
+- Crear/abrir proyecto, crear/renombrar/cambiar canción y actualizar RX/TX
+  quedan bloqueados o desarman de forma explícita cuando GRABAR o una autoridad
+  física siguen activos.
+- La transacción IPv4/UAC permanece bloqueante hasta que el runtime confirma el
+  resultado final; otro cambio de adaptador no puede adelantarse a esa
+  reconciliación.
+- Un fail-closed Art-Net se procesa una sola vez: conserva la prevalidación de
+  red, impone APAGÓN y exige `APAGÓN OFF → ARMAR`, sin volver a enclavar el
+  apagón entre ambos clics.
+- Desactivar el host, entrar en render offline, rechazar estado, fallar el
+  runtime o descargar el plugin desarma también la autoridad file-backed de la
+  toma, no sólo el modelo semántico.
+- Un cierre inesperado del receptor/host finaliza una captura streamed
+  recuperable cuando ya existen cuadros válidos, en lugar de borrar siempre su
+  archivo temporal.
+
+### Changed — R07 limpieza y redistribución de interfaz
+
+- Eliminada la superposición de runtime/editor que no tenía autoridad real y
+  liberado su estado global al destruir cada instancia.
+- La vista de edición ya no enumera y analiza todos los archivos en cada
+  repintado; conserva actividad, versión y búsquedas vacías por canción.
+- La timeline utiliza el espacio vertical disponible, los controles visibles
+  quedan en español y ENTRADA/SALIDA poseen agarres y etiquetas completas.
+- `RED / SALIDA` muestra por separado RECEPCIÓN, TRANSMISIÓN y AUTORIDAD con
+  paquetes, saltos, errores, retrasos y fail-closed, sin depender sólo del
+  color.
+- El campo IPv4/máscara consume el adaptador estructurado seleccionado; ya no
+  reconstruye datos de red analizando una cadena destinada a pantalla.
+
+### Validation boundary — R07 auditoría integral
+
+- La suite nativa pasa a 28 targets e incluye aislamiento por instancia,
+  selección exacta de archivo y recuperación de captura al descargar el host.
+- Las pruebas UDP esperan de forma acotada la publicación de telemetría después
+  de confirmar el datagrama; ya no dependen del orden de planificación entre
+  `recvfrom()` y el contador atómico del worker en Windows.
+- El flujo portable se simula con Art-Net loopback, captura y TX a 44 Hz,
+  `ARMAR → REPRODUCIR`, reloj sin UI y escritura file-backed. La compilación
+  gráfica/VST3 Windows/macOS, interacción en host, UAC físico, nodo y soak
+  continúan siendo gates separados.
+
+### Fixed — R07 global blackout / Take authority split
+
+- Separated the global operator/safety blackout latch from the Show renderer's
+  effective artistic black state. A new Song, missing Cue or out-of-range host
+  position can keep the semantic Show frame black without reactivating the red
+  `APAGÓN` control.
+- Made `ARMAR SALIDA DE TOMA` consult only the global latch, allowing an
+  explicitly selected recorded Take to become the independent Art-Net
+  authority while the Show renderer has no resolved Cue.
+- Stopped persisting a transient Cue blackout as the host's global blackout
+  preference and added regressions for both an empty Song and an out-of-range
+  Song position.
+
+### Safety boundary — R07 global blackout / Take authority split
+
+- Activating global `APAGÓN` still disarms both model and Take authority and
+  schedules the deterministic zero-DMX burst. Project/backend/runtime/offline
+  failures continue to force the same global latch; only artistic Cue black is
+  excluded from the Take arm gate.
+
+### Fixed — R07 headless/minimized Art-Net stability
+
+- Added a regression that runs `ARMAR → REPRODUCIR` for one second without any
+  UI/idle calls and verifies relative sample-clock advance, received DMX frame,
+  zero send errors and a sustained 44 Hz packet envelope.
+- Kept file reads, cursor publication and UDP pacing on independent workers;
+  minimizing or closing the plugin window no longer participates in runtime
+  scheduling.
+- Latched three consecutive UDP failures until an explicit operator re-arm,
+  and made that latch disarm both model and Take authority. Isolated send errors
+  remain visible but do not immediately interrupt output.
+
+### Added — R07 Windows IPv4/subnet configuration
+
+- Replaced the cosmetic network field with a real Ethernet adapter workflow.
+  A least-privilege elevated helper adds a secondary IPv4 alias, preserves the
+  existing network, validates adapter identity/address/bind and rolls back the
+  exact alias on failed verification.
+- Added strict IPv4/mask parsing, directed-broadcast derivation and a bounded
+  nonce-bound request/result protocol. REAPER and the VST3 remain unelevated.
+- Embedded and hashed `AeylaNetworkHelper.exe` in the Windows VST3 PRETEST.
+
+### Changed — R07 operator surface hierarchy
+
+- Split the crowded center/right surface into `TOMA / EDICIÓN` and
+  `RED / SALIDA` workspaces while keeping ARMAR and APAGÓN persistent.
+- Raised operational typography to 12 px and made setlist, workspace, network
+  diagnostics and footer regions responsive at compact window heights.
+
+### Validation boundary — R07 P0 repairs
+
+- IPv4/protocol, output-worker and headless ARM/PLAY loopback tests pass in a
+  strict local C++ build. Windows helper/VST3 compilation, REAPER interaction,
+  real UAC/IP rollback, physical Art-Net node/DMX and soak remain open.
+
+### Fixed — R07 real-time Take Art-Net authority
+
+- Fixed the operator sequence `ARMAR SALIDA DE TOMA` followed by `REPRODUCIR`:
+  PLAY now reuses the already validated clip instead of reloading it and
+  silently removing its physical-output authority.
+- Made the host audio callback the single relative Take clock. Each processed
+  block advances by its exact sample count; absolute REAPER Arrangement
+  position is now heartbeat/safety information only and can no longer freeze,
+  duplicate or relocate Take playback after Stop, Seek or Loop.
+- Reject reloading a Take while output is armed and distinguish `ARMADA ·
+  ESPERA REPRODUCIR`, `PREVIA SIN SALIDA FÍSICA` and `AL AIRE` in operator
+  feedback instead of reporting armed-but-idle output as live.
+- Added a loopback Art-Net regression covering ARM → PLAY, a stopped absolute
+  host position, callback-driven progression and retained physical authority.
+
+### Safety boundary — R07 real-time Take Art-Net authority
+
+- The audio callback performs atomic clock publication only; file reads and UDP
+  transmission remain on their dedicated workers. Offline render and lost-host
+  heartbeat continue to fail closed and require explicit re-arm.
+- Simultaneous capture and RX→TX monitoring remains intentionally unsupported
+  by product decision. R07 only permits capture → RAW → edit/consolidate → TX.
+- The affected native test passes in strict local C++ compilation and simulated
+  loopback Art-Net. Windows/macOS product CI, REAPER host evidence and physical
+  node/DMX validation remain open before hardware- or show-tested status.
+
+### Fixed — R07 free-point Take marking
+
+- Replaced the prominent second-based trim controls with a playhead-first
+  workflow: freely click/drag the timeline, then mark IN or OUT at the current
+  DMX frame.
+- Added large labelled IN/OUT grips, editable `MM:SS.mmm` fields, direct
+  navigation to each boundary and one-frame nudging (about 22.7 ms at 44 Hz).
+- Expanded handle hit targets so the visible grip, not only its three-pixel
+  boundary line, owns the drag interaction.
+
+### Added — R07 advanced DMX Take editor
+
+- Replaced the duration-only trim bar with a bounded, file-backed activity
+  envelope built from real 512-channel level and motion peaks.
+- Added draggable IN/OUT handles, a relative playhead, safe stopped/disarmed
+  scrub preview, pointer-anchored horizontal zoom and Shift-drag panning.
+- Added chronological Take-version navigation and an explicit return-to-RAW
+  action; changing versions never mutates or replaces a source recording.
+- Made playback and physical-output arming honor the selected version and its
+  non-destructive IN/OUT range instead of silently reselecting the newest file.
+
+### Safety boundary — R07 advanced DMX Take editor
+
+- Scrub reads and holds a frame locally but cannot publish Art-Net; it fails
+  closed while physical Take output is armed or transport is running.
+- The activity envelope is capped at 256 buckets and the file reader remains
+  bounded-cache; no complete Take payload is retained in RAM.
+- Native core/runtime tests pass locally. Windows product compilation, REAPER
+  interaction, physical Art-Net/DMX hardware and the two-hour field soak remain
+  required before any Show Ready claim.
+
+### Added — R07 clip consolidation UI
+
+- Connected the visible `CONSOLIDAR CLIP` action to the file-backed DMX Take
+  consolidator, producing a new bounded 44 Hz `.aeylatake` from the active
+  non-destructive IN/OUT range while preserving the source RAW file.
+- Made the newly consolidated clip the active playback source and surfaced an
+  explicit Spanish success/failure result to the operator.
+
+### Changed — R07 operator surface
+
+- Updated the native control surface and project actions to Spanish and
+  corrected the visible PRETEST identity from R03 to R07.
+- Aligned graphical-product Art-Net setup explicitly with the contractual
+  44 Hz output cadence; the worker continues to normalize legacy requests.
+
+### Validation boundary — R07 clip consolidation UI
+
+- Core tests and product CI must pass on the resulting commit. REAPER host
+  interaction, physical Art-Net/DMX hardware and the field soak remain open
+  until evidence is captured on the target systems.
 
 ### Added — native installer delivery
 

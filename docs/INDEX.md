@@ -3,7 +3,7 @@
 ## Product and design
 
 0. [`AEYLA_OPERATOR_WORKFLOW_ES.md`](AEYLA_OPERATOR_WORKFLOW_ES.md) — flujo
-   humano objetivo Look → Cue → Song → Show y frontera del build actual.
+   operativo real de captura MTC, edición, red y transmisión del PRETEST.
 1. [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md) — complete product definition and boundaries.
 2. [`USER_WORKFLOWS.md`](USER_WORKFLOWS.md) — editor, corrections, runtime and emergency workflows.
 3. [`VISUAL_DESIGN_SYSTEM.md`](VISUAL_DESIGN_SYSTEM.md) — mandatory visual and interaction direction.

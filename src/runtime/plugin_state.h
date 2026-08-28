@@ -1,5 +1,7 @@
 #pragma once
 
+#include "runtime/show_midi_control.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -10,7 +12,7 @@
 namespace aeyla::runtime {
 
 inline constexpr std::uint16_t kPluginStateFormatMajor = 1;
-inline constexpr std::uint16_t kPluginStateFormatMinor = 1;
+inline constexpr std::uint16_t kPluginStateFormatMinor = 2;
 inline constexpr std::size_t kMaxProjectLocatorBytes = 4096;
 inline constexpr std::size_t kMaxPluginStateBytes = 64 * 1024;
 inline constexpr std::size_t kMaxSessionSongBindings = 15;
@@ -41,6 +43,7 @@ struct PluginComponentState {
   ProjectLocatorMode locator_mode{ProjectLocatorMode::none};
   std::string project_locator{};
   std::vector<SessionSongBinding> song_bindings{};
+  ShowMidiMapping show_midi{};
 
   bool operator==(const PluginComponentState&) const = default;
 };
@@ -58,7 +61,8 @@ enum class PluginStateError : std::uint8_t {
   invalid_locator_mode,
   invalid_grand_master,
   inconsistent_locator,
-  invalid_song_binding
+  invalid_song_binding,
+  invalid_show_midi_mapping
 };
 
 struct PluginStateEncodeResult {

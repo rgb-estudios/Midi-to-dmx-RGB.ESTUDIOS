@@ -1,5 +1,6 @@
 #pragma once
 
+#include "capture/dmx_take_stream_writer.h"
 #include "core/dmx_compiler.h"
 
 #include <algorithm>
@@ -71,6 +72,8 @@ struct DmxTake {
 struct ArtNetCaptureStats {
   bool running{false};
   bool recording{false};
+  bool streaming_to_disk{false};
+  bool storage_failed{false};
   bool signal_present{false};
   bool overflowed{false};
   std::uint64_t packets_received{0U};
@@ -79,9 +82,11 @@ struct ArtNetCaptureStats {
   std::uint64_t ignored_packets{0U};
   std::uint64_t recorded_frames{0U};
   std::uint64_t sequence_gaps{0U};
+  std::size_t peak_buffered_frames{0U};
   double last_packet_age_ms{0.0};
   std::string listen_ipv4;
   std::string source_ipv4;
+  std::string storage_error;
   std::uint16_t port_address{0U};
 };
 
@@ -106,8 +111,19 @@ class ArtNetCaptureWorker final {
                            std::string& error_message);
   void stop() noexcept;
 
+  // Legacy bounded-duration in-memory capture retained for compatibility tests.
+  // Product capture should use begin_streamed_recording().
   [[nodiscard]] bool begin_recording(std::string& error_message);
   [[nodiscard]] std::optional<DmxTake> end_recording(std::string name);
+
+  // Production capture path. Frames are sampled at the configured rate and
+  // passed into a fixed 512 KiB queue backed by a dedicated disk thread.
+  [[nodiscard]] bool begin_streamed_recording(
+      const DmxTakeStreamConfig& config,
+      std::string& error_message);
+  [[nodiscard]] bool end_streamed_recording(std::string& error_message);
+  [[nodiscard]] bool streamed_recording_active() const noexcept;
+
   void discard_recording() noexcept;
 
   [[nodiscard]] bool latest_frame(DmxUniverse& frame) const noexcept;

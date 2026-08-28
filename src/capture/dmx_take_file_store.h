@@ -79,4 +79,11 @@ struct TakeLibraryScanResult {
     const std::filesystem::path& directory,
     std::string_view song_id_filter = {});
 
+// Resolves the exact file a streamed capture was configured to create. The
+// product must not substitute "the newest" entry because filesystem timestamp
+// ties or external files can otherwise bind MTC/trim metadata to another Take.
+[[nodiscard]] std::optional<TakeFileIndexEntry> find_take_entry_by_path(
+    const TakeLibraryScanResult& scan,
+    const std::filesystem::path& expected_path);
+
 }  // namespace aeyla::capture

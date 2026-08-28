@@ -81,6 +81,7 @@ add_test(NAME aeyla_core_tests COMMAND aeyla_core_tests)
 
 add_library(aeyla_runtime
   src/runtime/plugin_state.cpp
+  src/runtime/show_midi_control.cpp
   src/runtime/runtime_safety_state.cpp
   src/runtime/host_song_binding.cpp
   src/product/application_model.cpp
@@ -92,9 +93,18 @@ add_library(aeyla_runtime
   src/show/show_program.cpp
   src/show/show_program_codec.cpp
   src/network/network_interfaces.cpp
+  src/network/ipv4_configuration.cpp
+  src/network/network_change_protocol.cpp
   src/capture/artnet_capture_worker.cpp
+  src/capture/dmx_capture_sync_anchor.cpp
+  src/capture/dmx_clip_playback_engine.cpp
+  src/capture/dmx_take_activity.cpp
+  src/capture/dmx_take_consolidator.cpp
   src/capture/dmx_take_file_store.cpp
+  src/capture/dmx_take_file_reader.cpp
   src/capture/dmx_take_scheduler.cpp
+  src/capture/dmx_take_transport.cpp
+  src/capture/dmx_take_stream_writer.cpp
   src/output/artnet_output_worker.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
@@ -127,6 +137,7 @@ aeyla_add_strict_test(aeyla_runtime_tests tests/test_host_event_queue.cpp)
 aeyla_add_strict_test(aeyla_host_transport_mailbox_tests tests/test_host_transport_mailbox.cpp)
 aeyla_add_strict_test(aeyla_host_song_binding_tests tests/test_host_song_binding.cpp)
 aeyla_add_strict_test(aeyla_plugin_state_tests tests/test_plugin_state.cpp)
+aeyla_add_strict_test(aeyla_show_midi_control_tests tests/test_show_midi_control.cpp)
 aeyla_add_strict_test(aeyla_runtime_safety_tests tests/test_runtime_safety.cpp)
 aeyla_add_strict_test(aeyla_application_model_tests tests/test_application_model.cpp)
 aeyla_add_strict_test(aeyla_project_document_tests tests/test_project_document.cpp)
@@ -138,8 +149,34 @@ aeyla_add_strict_test(aeyla_show_performance_preflight_tests tests/test_show_per
 aeyla_add_strict_test(aeyla_show_program_codec_tests tests/test_show_program_codec.cpp)
 aeyla_add_strict_test(aeyla_programmer_tests tests/test_programmer.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
+aeyla_add_strict_test(aeyla_artnet_output_gate_r07_tests tests/test_artnet_output_gate_r07.cpp)
 aeyla_add_strict_test(aeyla_artnet_capture_worker_tests tests/test_artnet_capture_worker.cpp)
+aeyla_add_strict_test(aeyla_dmx_capture_sync_anchor_tests tests/test_dmx_capture_sync_anchor.cpp)
+aeyla_add_strict_test(aeyla_ipv4_configuration_tests tests/test_ipv4_configuration.cpp)
+aeyla_add_strict_test(aeyla_dmx_clip_playback_engine_tests tests/test_dmx_clip_playback_engine.cpp)
+aeyla_add_strict_test(aeyla_dmx_take_activity_tests tests/test_dmx_take_activity.cpp)
+aeyla_add_strict_test(aeyla_dmx_take_consolidator_tests tests/test_dmx_take_consolidator.cpp)
 aeyla_add_strict_test(aeyla_dmx_take_file_store_tests tests/test_dmx_take_file_store.cpp)
+aeyla_add_strict_test(aeyla_dmx_take_file_reader_tests tests/test_dmx_take_file_reader.cpp)
+aeyla_add_strict_test(aeyla_dmx_take_transport_tests tests/test_dmx_take_transport.cpp)
+aeyla_add_strict_test(aeyla_dmx_take_stream_writer_tests tests/test_dmx_take_stream_writer.cpp)
+
+add_executable(aeyla_take_library_session_tests
+  tests/test_take_library_session.cpp
+  product/AeylaVisualDmx/AeylaTakeLibrarySession.cpp
+)
+target_include_directories(aeyla_take_library_session_tests PRIVATE
+  product/AeylaVisualDmx
+)
+target_link_libraries(aeyla_take_library_session_tests PRIVATE aeyla_runtime)
+if(MSVC)
+  target_compile_options(aeyla_take_library_session_tests PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(aeyla_take_library_session_tests PRIVATE
+    -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME aeyla_take_library_session_tests
+         COMMAND aeyla_take_library_session_tests)
 
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)

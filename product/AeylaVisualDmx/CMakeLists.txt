@@ -19,12 +19,14 @@ iplug_add_plugin(${PROJECT_NAME}
   SOURCES
     AeylaVisualDmx.cpp
     AeylaShowPlayerIntegration.cpp
+    AeylaMidiShowIntegration.cpp
     AeylaTakeTrimIntegration.cpp
     AeylaTakeLibrarySession.cpp
     AeylaTakeLibrarySession.h
+    AeylaNetworkConfiguration.cpp
+    AeylaNetworkConfiguration.h
     AeylaVisualDmx.h
     AeylaMainControl.h
-    AeylaExecutorRuntimeControl.h
     AeylaRuntimeStatusControl.h
     config.h
     resources/resource.h
@@ -34,6 +36,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/core/dmx_compiler.cpp
     ../../src/core/rig.cpp
     ../../src/runtime/plugin_state.cpp
+    ../../src/runtime/show_midi_control.cpp
     ../../src/runtime/runtime_safety_state.cpp
     ../../src/runtime/host_song_binding.cpp
     ../../src/project/project_document.cpp
@@ -45,9 +48,18 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/show/show_program.cpp
     ../../src/show/show_program_codec.cpp
     ../../src/network/network_interfaces.cpp
+    ../../src/network/ipv4_configuration.cpp
+    ../../src/network/network_change_protocol.cpp
     ../../src/capture/artnet_capture_worker.cpp
+    ../../src/capture/dmx_capture_sync_anchor.cpp
+    ../../src/capture/dmx_clip_playback_engine.cpp
+    ../../src/capture/dmx_take_activity.cpp
+    ../../src/capture/dmx_take_consolidator.cpp
+    ../../src/capture/dmx_take_file_reader.cpp
     ../../src/capture/dmx_take_file_store.cpp
     ../../src/capture/dmx_take_scheduler.cpp
+    ../../src/capture/dmx_take_stream_writer.cpp
+    ../../src/capture/dmx_take_transport.cpp
     ../../src/output/artnet_output_worker.cpp
   FORMATS
     ${AEYLA_PLUGIN_FORMATS}
@@ -71,7 +83,7 @@ foreach(target_name
     )
     target_link_libraries(${target_name} PRIVATE aeyla_product_miniz)
     if(WIN32)
-      target_link_libraries(${target_name} PRIVATE ws2_32 iphlpapi)
+      target_link_libraries(${target_name} PRIVATE ws2_32 iphlpapi shell32)
     endif()
     target_compile_features(${target_name} PRIVATE cxx_std_20)
     if(MSVC)
@@ -82,3 +94,16 @@ foreach(target_name
     endif()
   endif()
 endforeach()
+
+if(WIN32 AND TARGET AeylaNetworkHelper)
+  foreach(target_name AeylaVisualDmx-app AeylaVisualDmx-vst3)
+    if(TARGET ${target_name})
+      add_dependencies(${target_name} AeylaNetworkHelper)
+      add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:AeylaNetworkHelper>
+          $<TARGET_FILE_DIR:${target_name}>/AeylaNetworkHelper.exe
+        COMMENT "Embedding the least-privilege AEYLA network helper")
+    endif()
+  endforeach()
+endif()

@@ -1,0 +1,480 @@
+#include "capture/artnet_capture_worker.h"
+#include "capture/dmx_clip_playback_engine.h"
+#include "capture/dmx_take_file_store.h"
+#include "capture/dmx_take_scheduler.h"
+#include "capture/dmx_take_stream_writer.h"
+#include "output/artnet_output_worker.h"
+#include "runtime/host_transport_mailbox.h"
+
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <thread>
+
+namespace {
+
+void require(bool condition, const std::string& message) {
+  if(!condition) {
+    std::cerr << "FAILED: " << message << '\n';
+    std::exit(1);
+  }
+}
+
+template <typename Predicate>
+bool wait_until(Predicate predicate,
+                std::chrono::milliseconds timeout = std::chrono::seconds(2)) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while(std::chrono::steady_clock::now() < deadline) {
+    if(predicate()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return predicate();
+}
+
+std::filesystem::path unique_test_directory() {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  return std::filesystem::temp_directory_path() /
+         ("aeyla-dmx-clip-engine-" + std::to_string(stamp));
+}
+
+aeyla::DmxUniverse expected_frame(std::uint64_t index) {
+  aeyla::DmxUniverse frame{};
+  frame[0] = static_cast<std::uint8_t>((index + 1U) & 0xFFU);
+  frame[20] = static_cast<std::uint8_t>((index * 3U + 7U) & 0xFFU);
+  frame[511] = static_cast<std::uint8_t>((index * 13U + 5U) & 0xFFU);
+  return frame;
+}
+
+aeyla::DmxUniverse replacement_frame(std::uint64_t index) {
+  auto frame = expected_frame(index);
+  frame[0] = static_cast<std::uint8_t>((index + 101U) & 0xFFU);
+  frame[100] = 231U;
+  return frame;
+}
+
+}  // namespace
+
+int main() {
+  using namespace aeyla;
+  using namespace aeyla::capture;
+
+  const auto directory = unique_test_directory();
+  std::string error;
+  require(prepare_take_directory(directory, error), error);
+
+  constexpr std::uint64_t kFrames = 44U * 3U;
+  DmxTakeStreamConfig stream_config;
+  stream_config.target_path = directory / "MidiRelative.aeylatake";
+  stream_config.song_id = "song-midi-relative";
+  stream_config.song_name = "MIDI Relative";
+  stream_config.take_name = "Take 01";
+  stream_config.source_ipv4 = "2.0.0.10";
+  stream_config.port_address = 0U;
+  stream_config.frames_per_second = 44U;
+
+  DmxTakeStreamWriter writer;
+  require(writer.start(stream_config, error), error);
+  for(std::uint64_t index = 0U; index < kFrames; ++index)
+    require(writer.try_push_frame(expected_frame(index)),
+            "writer rejected DMX clip fixture frame");
+  require(writer.finalize(error), error);
+
+  DmxTakeStreamConfig replacement_config = stream_config;
+  replacement_config.target_path = directory / "MidiReplacement.aeylatake";
+  replacement_config.song_id = "song-midi-replacement";
+  replacement_config.song_name = "MIDI Replacement";
+  DmxTakeStreamWriter replacement_writer;
+  require(replacement_writer.start(replacement_config, error), error);
+  for(std::uint64_t index = 0U; index < kFrames; ++index)
+    require(replacement_writer.try_push_frame(replacement_frame(index)),
+            "writer rejected replacement DMX frame");
+  require(replacement_writer.finalize(error), error);
+
+  constexpr std::uint16_t kUdpPort = 17645U;
+  ArtNetCaptureWorker receiver;
+  ArtNetCaptureConfig receive_config;
+  receive_config.listen_ipv4 = "127.0.0.1";
+  receive_config.udp_port = kUdpPort;
+  receive_config.port_address = 0U;
+  receive_config.frames_per_second = 44U;
+  require(receiver.start(receive_config, error), error);
+  require(wait_until([&]() { return receiver.stats().running; }),
+          "Art-Net receiver did not start");
+
+  output::ArtNetOutputWorker output;
+  output::ArtNetOutputConfig output_config;
+  output_config.source_ipv4 = "127.0.0.1";
+  output_config.target_ipv4 = "127.0.0.1";
+  output_config.udp_port = kUdpPort;
+  output_config.port_address = 0U;
+  output_config.channel_count = 512U;
+  output_config.frames_per_second = 44U;
+  require(output.start(output_config, error), error);
+
+  DmxClipPlaybackEngine engine;
+  engine.attach(&output);
+  require(engine.load_clip(stream_config.target_path, 48000.0, error), error);
+
+  // El worker de runtime recibe los comandos unos milisegundos después del
+  // callback MIDI. PLAY entra con las muestras ya transcurridas desde el
+  // sampleOffset; PAUSA las descuenta y REANUDAR las suma. Así el cursor
+  // artístico queda en la muestra de la nota, no en la del thread auxiliar.
+  require(engine.play_from_start(DmxClipClockSource::host_samples, error,
+                                 12000U), error);
+  require(engine.status().cursor_samples == 12000U,
+          "sample-offset PLAY compensation did not seed exact cursor");
+  engine.advance_samples(512U, false);
+  require(engine.pause(error, 128U), error);
+  require(engine.status().cursor_samples == 12384U,
+          "sample-offset PAUSE compensation did not rewind runtime delay");
+  require(engine.resume(error, 256U), error);
+  require(engine.status().cursor_samples == 12640U,
+          "sample-offset RESUME compensation did not include runtime delay");
+  engine.synchronize_host_cursor(33333U);
+  require(engine.status().cursor_samples == 33333U,
+          "host mutation handshake could not publish an exact cursor");
+  engine.stop_and_reset();
+
+  // El scrub del editor es una previsualización local y segura: actualiza el
+  // cuadro retenido y el cursor relativo, sin obtener autoridad Art-Net.
+  require(engine.seek_frame(88U, error), error);
+  auto scrubbed = engine.status();
+  require(scrubbed.current_frame == 88U && scrubbed.cursor_samples == 96000U &&
+              scrubbed.transport == DmxClipTransportState::paused &&
+              scrubbed.hold_valid && !output.override_enabled(),
+          "safe editor scrub did not resolve frame 88 at two relative seconds");
+  require(!engine.seek_frame(kFrames, error),
+          "editor scrub accepted a frame outside the selected range");
+  engine.stop_and_reset();
+
+  engine.set_host_heartbeat_ok(true);
+  require(engine.arm(error), error);
+  require(!engine.seek_frame(44U, error),
+          "editor scrub must fail closed while physical DMX is armed");
+  require(engine.play_from_start(DmxClipClockSource::host_samples, error), error);
+
+  require(wait_until([&]() {
+    return engine.status().current_frame == 0U && output.override_enabled();
+  }), "PLAY did not start consolidated clip at frame zero");
+  require(wait_until([&]() {
+    DmxUniverse received{};
+    return receiver.latest_frame(received) && received == expected_frame(0U);
+  }), "physical Art-Net path did not receive frame zero");
+
+  // One processed host second advances exactly one relative second regardless
+  // of where the DAW Arrangement playhead lives.
+  engine.advance_samples(48000U, false);
+  require(wait_until([&]() { return engine.status().current_frame == 44U; }),
+          "one processed second did not resolve to frame 44");
+  require(wait_until([&]() {
+    DmxUniverse received{};
+    return receiver.latest_frame(received) && received == expected_frame(44U);
+  }), "Art-Net output did not follow relative clip cursor");
+
+  // PAUSE freezes the cursor and holds the last DMX frame even while callbacks
+  // continue to process more samples.
+  require(engine.pause(error), error);
+  const auto paused_cursor = engine.status().cursor_samples;
+  engine.advance_samples(96000U, false);
+  std::this_thread::sleep_for(std::chrono::milliseconds(40));
+  require(engine.status().cursor_samples == paused_cursor,
+          "PAUSE must freeze the relative sample cursor");
+  require(engine.status().current_frame == 44U && output.override_enabled(),
+          "PAUSE must HOLD the last DMX frame");
+
+  require(engine.resume(error), error);
+  engine.advance_samples(24000U, false);
+  require(wait_until([&]() { return engine.status().current_frame == 66U; }),
+          "RESUME did not continue from the paused cursor");
+
+  // Retrigger is independent from absolute host position: it deterministically
+  // returns the consolidated clip to zero.
+  require(engine.play_from_start(DmxClipClockSource::host_samples, error), error);
+  require(wait_until([&]() { return engine.status().current_frame == 0U; }),
+          "RETRIGGER did not return clip to frame zero");
+
+  engine.advance_samples(4U * 48000U, false);
+  require(wait_until([&]() {
+    const auto status = engine.status();
+    return status.transport == DmxClipTransportState::ended &&
+           status.current_frame == kFrames - 1U && status.progress == 1.0 &&
+           output.override_enabled();
+  }), "clip end must HOLD the final source frame");
+
+  // Offline render never emits physical Art-Net and does not consume artistic
+  // cursor time.
+  require(engine.play_from_start(DmxClipClockSource::host_samples, error), error);
+  const auto before_offline = engine.status().cursor_samples;
+  engine.advance_samples(48000U, true);
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "offline render must inhibit physical DMX output");
+  require(engine.status().cursor_samples == before_offline,
+          "offline render must not advance the live clip cursor");
+  engine.advance_samples(0U, false);
+  require(wait_until([&]() { return output.override_enabled(); }),
+          "physical output did not recover after offline render ended");
+
+  // Host heartbeat is purely a liveness gate. Losing it disables physical
+  // authority without changing the artistic cursor.
+  const auto before_dead_host = engine.status().cursor_samples;
+  engine.set_host_heartbeat_ok(false);
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "dead host heartbeat did not fail closed");
+  require(engine.status().cursor_samples == before_dead_host,
+          "heartbeat must not alter artistic clip position");
+
+  engine.set_host_heartbeat_ok(true);
+  require(wait_until([&]() { return output.override_enabled(); }),
+          "clip authority did not recover after host heartbeat returned");
+
+  engine.stop_and_reset();
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "STOP/RESET must remove physical clip authority");
+  require(engine.status().cursor_samples == 0U,
+          "STOP/RESET must return cursor to zero");
+
+  // Regresión de la evidencia física en REAPER 7.78: al cambiar el foco a
+  // Capture, REAPER muestra "audio device closed" y deja de entregar callbacks.
+  // La reproducción iniciada manualmente debe conservar reloj, autoridad y
+  // paquetes Art-Net; sólo la ruta sincronizada DAW/MIDI exige heartbeat.
+  require(engine.play_from_start(
+              DmxClipClockSource::monotonic_realtime, error), error);
+  require(wait_until([&]() { return output.override_enabled(); }),
+          "manual playback did not establish Art-Net authority");
+  const auto manual_packets_before = output.stats().sent_packets;
+  engine.set_host_heartbeat_ok(false);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  const auto manual_status = engine.status();
+  const auto manual_packets =
+      output.stats().sent_packets - manual_packets_before;
+  require(manual_status.clock_source ==
+              DmxClipClockSource::monotonic_realtime &&
+              !manual_status.host_heartbeat_ok && manual_status.armed &&
+              manual_status.transport == DmxClipTransportState::playing &&
+              manual_status.current_frame >= 35U &&
+              manual_status.current_frame <= 60U &&
+              output.override_enabled() && manual_packets >= 30U,
+          "manual playback did not survive REAPER audio-device suspension");
+  require(engine.pause(error), error);
+  const auto manual_paused_cursor = engine.status().cursor_samples;
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  require(engine.status().cursor_samples == manual_paused_cursor &&
+              output.override_enabled(),
+          "manual PAUSE did not HOLD through missing host callbacks");
+  require(engine.resume(error), error);
+  require(wait_until([&]() {
+    return engine.status().cursor_samples > manual_paused_cursor;
+  }), "manual REANUDAR did not restart the monotonic clock");
+  engine.advance_samples(0U, true);
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "offline render did not inhibit independent manual playback");
+  engine.advance_samples(0U, false);
+  require(wait_until([&]() { return output.override_enabled(); }),
+          "manual output did not recover after offline inhibition");
+  engine.stop_and_reset();
+
+  engine.disarm();
+  engine.unload();
+
+  // Song changes validate a second file without touching the current reader.
+  // The final reader swap keeps Art-Net authority continuously enabled and
+  // starts the replacement at the sample-accurate elapsed cursor.
+  {
+    DmxClipPlaybackEngine switch_engine;
+    switch_engine.attach(&output);
+    require(switch_engine.load_clip(stream_config.target_path, 48000.0, error),
+            error);
+    switch_engine.set_host_heartbeat_ok(true);
+    require(switch_engine.arm(error), error);
+    require(switch_engine.play_from_start(
+                DmxClipClockSource::host_samples, error), error);
+    require(wait_until([&]() { return output.override_enabled(); }),
+            "switch fixture did not establish old Song authority");
+
+    DmxTakeFileReader prepared;
+    require(prepared.open(replacement_config.target_path, error), error);
+    const auto blackouts_before = output.stats().blackout_packets;
+    require(switch_engine.replace_armed_clip(
+                prepared, 48000.0, 0U, kFrames,
+                DmxClipClockSource::host_samples, 24000U, error), error);
+    require(output.override_enabled() && switch_engine.status().armed &&
+                switch_engine.status().cursor_samples == 24000U,
+            "atomic Song replacement dropped authority or lost MIDI cursor");
+    require(wait_until([&]() {
+      DmxUniverse received{};
+      return receiver.latest_frame(received) &&
+             received == replacement_frame(22U);
+    }), "replacement Song did not publish its sample-accurate DMX frame");
+    require(output.stats().blackout_packets == blackouts_before,
+            "atomic Song replacement emitted an intermediate BLACKOUT packet");
+
+    // `prepared` now owns the previous reader, proving that the handoff is
+    // reversible and does not reopen/revalidate the old file at commit time.
+    require(switch_engine.replace_armed_clip(
+                prepared, 48000.0, 0U, kFrames,
+                DmxClipClockSource::host_samples, 0U, error), error);
+    require(wait_until([&]() {
+      DmxUniverse received{};
+      return receiver.latest_frame(received) && received == expected_frame(0U);
+    }), "reader handoff could not restore the previous Song without blackout");
+    switch_engine.disarm();
+    switch_engine.unload();
+  }
+
+  // Regression del flujo real del operador: ARMAR primero y REPRODUCIR después
+  // debe conservar la autoridad. El reloj avanza por nFrames del callback aun
+  // cuando la posición absoluta del Arrangement permanece detenida.
+  {
+    runtime::HostTransportMailbox host;
+    host.publish(false, false, 777.0, 0.0, 120.0);
+
+    DmxTakeScheduler scheduler;
+    scheduler.attach(&output, &host);
+    require(scheduler.load_take_file(stream_config.target_path, 48000.0, error),
+            error);
+    require(scheduler.arm(error), error);
+    require(!scheduler.load_take_file(stream_config.target_path, 48000.0, error),
+            "an armed Take reload must fail instead of silently disarming output");
+    require(scheduler.status().armed,
+            "rejected armed reload unexpectedly removed Take authority");
+    require(scheduler.play(error), error);
+    require(wait_until([&]() {
+      return scheduler.status().current_frame == 0U && output.override_enabled();
+    }), "ARM -> PLAY did not establish physical Take authority");
+
+    // Simula un segundo de callbacks sin ninguna llamada de UI. Esta es la
+    // propiedad requerida cuando el editor está cerrado o minimizado: el host
+    // continúa publicando bloques, el scheduler avanza y el worker mantiene su
+    // propia cadencia de red.
+    const auto packets_before_headless_second = output.stats().sent_packets;
+    const auto headless_started = std::chrono::steady_clock::now();
+    for(int block = 0; block < 100; ++block) {
+      scheduler.advance_samples(480U, false);
+      host.publish(false, false, 777.0, 0.0, 120.0);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    require(wait_until([&]() { return scheduler.status().current_frame == 44U; }),
+            "stopped Arrangement did not advance from callback sample count");
+    require(wait_until([&]() {
+      return scheduler.status().armed && output.override_enabled();
+    }), "real-time Take playback lost authority after callback advance");
+    require(wait_until([&]() {
+      DmxUniverse received{};
+      return receiver.latest_frame(received) && received == expected_frame(44U);
+    }), "headless/minimized path did not transmit the advanced DMX frame");
+    const auto headless_stats = output.stats();
+    const auto headless_packets =
+        headless_stats.sent_packets - packets_before_headless_second;
+    const auto headless_elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - headless_started).count();
+    const auto headless_packets_per_second =
+        static_cast<double>(headless_packets) / headless_elapsed;
+    if(headless_stats.configured_fps != 44U ||
+       headless_elapsed < 0.9 || headless_packets < 20U ||
+       headless_packets_per_second < 30.0 ||
+       headless_packets_per_second > 58.0 ||
+       headless_stats.send_errors != 0U || headless_stats.fail_closed) {
+      std::cerr << "Headless Art-Net diagnostics: packets="
+                << headless_packets << " elapsed=" << headless_elapsed
+                << " rate=" << headless_packets_per_second
+                << " configured_fps=" << headless_stats.configured_fps
+                << " send_errors=" << headless_stats.send_errors
+                << " fail_closed=" << headless_stats.fail_closed << '\n';
+    }
+    require(headless_stats.configured_fps == 44U &&
+                headless_elapsed >= 0.9 && headless_packets >= 20U &&
+                headless_packets_per_second >= 30.0 &&
+                headless_packets_per_second <= 58.0 &&
+                headless_stats.send_errors == 0U &&
+                !headless_stats.fail_closed,
+            "headless/minimized path did not sustain healthy 44 Hz Art-Net");
+    scheduler.disarm();
+  }
+
+  // La ruta sincronizada DAW/MIDI conserva el cierre seguro original. Sin
+  // heartbeat no puede inventar tiempo ni mantener autoridad física.
+  {
+    runtime::HostTransportMailbox host;
+    host.publish(true, false, 999.0, 4.0, 120.0);
+
+    DmxTakeScheduler scheduler;
+    scheduler.attach(&output, &host);
+    require(scheduler.load_take_file(stream_config.target_path, 48000.0, error),
+            error);
+    require(scheduler.arm(error), error);
+    require(scheduler.play(error, DmxClipClockSource::host_samples), error);
+    scheduler.advance_samples(12000U, false);
+    require(wait_until([&]() { return output.override_enabled(); }),
+            "host-sample playback did not establish authority");
+    require(wait_until([&]() {
+      const auto status = scheduler.status();
+      return !status.armed && !output.override_enabled();
+    }, std::chrono::milliseconds(1200)),
+            "host-sample playback did not fail closed after heartbeat loss");
+    require(scheduler.status().error.find("pulso del host") != std::string::npos,
+            "heartbeat fail-closed did not expose an operator diagnosis");
+  }
+
+  // Regresión completa del video: existe un pulso válido al armar, el operador
+  // inicia PLAY y luego REAPER deja de publicar por más de los 750 ms del
+  // watchdog al perder foco. La toma manual debe seguir avanzando y el receptor
+  // debe conservar un stream continuo a 44 Hz.
+  {
+    runtime::HostTransportMailbox host;
+    host.publish(false, false, 888.0, 0.0, 120.0);
+
+    DmxTakeScheduler scheduler;
+    scheduler.attach(&output, &host);
+    require(scheduler.load_take_file(stream_config.target_path, 48000.0, error),
+            error);
+    require(scheduler.arm(error), error);
+    require(scheduler.play(
+                error, DmxClipClockSource::monotonic_realtime), error);
+    require(wait_until([&]() { return output.override_enabled(); }),
+            "manual scheduler PLAY did not establish authority");
+
+    const auto packets_before_suspension = output.stats().sent_packets;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    const auto suspended = scheduler.status();
+    const auto packets_during_suspension =
+        output.stats().sent_packets - packets_before_suspension;
+    if(!suspended.monotonic_clock || suspended.host_heartbeat_ok ||
+       !suspended.armed || !suspended.playing ||
+       suspended.current_frame < 35U || suspended.current_frame > 60U ||
+       !output.override_enabled() || packets_during_suspension < 30U) {
+      std::cerr << "Suspended REAPER diagnostics: monotonic="
+                << suspended.monotonic_clock
+                << " heartbeat=" << suspended.host_heartbeat_ok
+                << " armed=" << suspended.armed
+                << " playing=" << suspended.playing
+                << " frame=" << suspended.current_frame
+                << " override=" << output.override_enabled()
+                << " packets=" << packets_during_suspension
+                << " error=" << suspended.error << '\n';
+    }
+    require(suspended.monotonic_clock && !suspended.host_heartbeat_ok &&
+                suspended.armed && suspended.playing &&
+                suspended.current_frame >= 35U &&
+                suspended.current_frame <= 60U &&
+                output.override_enabled() &&
+                packets_during_suspension >= 30U,
+            "REAPER audio-device suspension cut manual Art-Net playback");
+    require(wait_until([&]() {
+      DmxUniverse received{};
+      return receiver.latest_frame(received) && received[0] != 0U;
+    }), "Capture-compatible receiver lost Art-Net during host suspension");
+    scheduler.disarm();
+  }
+
+  output.stop();
+  receiver.stop();
+
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(directory, cleanup_error);
+
+  std::cout << "AEYLA DMX clip engine PASS: host + manual clocks / stable Art-Net\n";
+  return EXIT_SUCCESS;
+}

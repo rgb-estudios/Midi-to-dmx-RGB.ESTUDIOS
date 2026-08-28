@@ -117,7 +117,7 @@ Vendor lack of support for an OS/device combination must be documented as an exp
 For Windows standalone, macOS standalone, Windows Ableton and macOS Ableton:
 
 - Two-hour continuous runtime.
-- 40 Hz output timing distribution.
+- 44 Hz output timing distribution.
 - CPU/GPU at full Ableton + video load for host paths.
 - Media underrun count.
 - MIDI-to-DMX latency.

@@ -63,6 +63,8 @@ int main() {
   check(!model.snapshot().backend_ready, "null backend must not report ready");
   check(!model.snapshot().output_armed, "output must start disarmed");
   check(model.snapshot().blackout, "blackout must start enabled");
+  check(model.snapshot().global_blackout,
+        "global operator blackout must start enabled");
   check(all_zero(model.snapshot().dmx), "startup blackout must compile a zero DMX frame");
   check(active_fixture_count(model.snapshot()) == 10,
         "default rig must preserve 14 positions with exactly 10 active fixtures");
@@ -106,9 +108,23 @@ int main() {
         "replacing show semantics must force a safe output state");
 
   model.set_blackout(false);
+  check(!model.snapshot().global_blackout,
+        "clearing blackout must release the global operator latch");
   check(model.request_arm(),
         "arming should succeed only after project, show and backend validation");
   check(model.snapshot().output_armed, "snapshot must expose authoritative armed state");
+
+  // Product fail-closed recovery keeps the configured socket/NIC readiness
+  // while revoking every authority. Otherwise APAGÓN OFF -> ARMAR could never
+  // be the explicit recovery boundary promised to the operator.
+  model.disarm(aeyla::runtime::RuntimeSafetyReason::backend_unavailable);
+  model.set_blackout(true);
+  check(model.snapshot().backend_ready && !model.snapshot().output_armed &&
+            model.snapshot().blackout,
+        "fail-closed disarm must preserve backend preflight but revoke authority");
+  model.set_blackout(false);
+  check(model.request_arm(),
+        "explicit blackout release plus ARM must recover a preflighted backend");
 
   HostEvent note_on{};
   note_on.type = HostEventType::note_on;
@@ -130,6 +146,16 @@ int main() {
         "first reference fixture shutter must be open");
   check(model.snapshot().dmx[3] > 0,
         "solid executor must produce red emitter output");
+
+  // Regression for the R07 REAPER report: a Song with no resolved Cue (or a
+  // host position outside its bounds) produces an artistic black frame, but
+  // must not silently re-latch the global APAGÓN control used by Take output.
+  model.seek_active_song_tick(development_show.songs.front().length_ticks);
+  check(model.snapshot().blackout,
+        "an out-of-range Song position must keep the Show renderer black");
+  check(!model.snapshot().global_blackout,
+        "artistic Show black must not re-latch global APAGÓN or block a Take");
+  model.seek_active_song_tick(0U);
 
   const auto golden = model.snapshot().dmx;
   ApplicationModel second_model;
@@ -295,6 +321,10 @@ int main() {
         "NEW SONG must create one editable Song without requiring MIDI data");
   check(!authored_model.snapshot().performance_ready,
         "empty editable Song must remain below performance preflight");
+  authored_model.set_blackout(false);
+  check(authored_model.snapshot().blackout &&
+            !authored_model.snapshot().global_blackout,
+        "an empty Song may render black but must not re-latch global APAGÓN");
   const std::uint64_t authored_tick = 20U * 960U;
   const auto stored_cue = authored_model.store_cue_at_tick(authored_tick);
   check(stored_cue.succeeded && authored_model.snapshot().performance_ready,

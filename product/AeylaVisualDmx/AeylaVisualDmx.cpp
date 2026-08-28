@@ -1,8 +1,9 @@
 #include "AeylaVisualDmx.h"
-#include "AeylaExecutorRuntimeControl.h"
 #include "AeylaMainControl.h"
 #include "AeylaRuntimeStatusControl.h"
+#include "AeylaTakeLibrarySession.h"
 #include "IPlug_include_in_plug_src.h"
+#include "network/ipv4_configuration.h"
 #include "runtime/host_song_binding.h"
 
 #include <algorithm>
@@ -110,16 +111,16 @@ std::uint32_t DecodeLittleEndian32(
 AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
 : Plugin(info, MakeConfig(kNumParams, kNumPresets))
 {
-  GetParam(kParamBlackout)->InitBool("Blackout", true);
-  GetParam(kParamGrandMaster)->InitPercentage("Grand Master", 100.0);
-  GetParam(kParamRigMode)->InitEnum("Rig Mode", 0, 2, "", IParam::kFlagsNone,
-                                     "", "10 fixtures", "14 fixtures");
-  GetParam(kParamSource)->InitEnum("Visual Source", 1, 5, "", IParam::kFlagsNone,
-                                    "", "Solid", "Gradient", "Wave", "Noise", "Chase");
-  GetParam(kParamSpeed)->InitPercentage("Animation Speed", 35.0);
-  GetParam(kParamWhiteExtract)->InitPercentage("White Extraction", 20.0);
-  GetParam(kParamAmberExtract)->InitPercentage("Amber Extraction", 15.0);
-  GetParam(kParamUV)->InitPercentage("UV Manual", 0.0);
+  GetParam(kParamBlackout)->InitBool("Apagón", true);
+  GetParam(kParamGrandMaster)->InitPercentage("Master general", 100.0);
+  GetParam(kParamRigMode)->InitEnum("Modo de rig", 0, 2, "", IParam::kFlagsNone,
+                                     "", "10 luminarias", "14 luminarias");
+  GetParam(kParamSource)->InitEnum("Fuente visual", 1, 5, "", IParam::kFlagsNone,
+                                    "", "Color plano", "Degradado", "Onda", "Ruido", "Secuencia");
+  GetParam(kParamSpeed)->InitPercentage("Velocidad de animación", 35.0);
+  GetParam(kParamWhiteExtract)->InitPercentage("Extracción de blanco", 20.0);
+  GetParam(kParamAmberExtract)->InitPercentage("Extracción de ámbar", 15.0);
+  GetParam(kParamUV)->InitPercentage("UV manual", 0.0);
 
   // The application model starts with a valid development document but a
   // disconnected diagnostic backend. Preview is available; real output cannot
@@ -127,6 +128,9 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   CaptureAllParameterValuesFromHost();
   SyncSnapshotToAtomicsLocked();
   RefreshHostStateCacheLocked();
+  mShowMidiMappingPacked.store(aeyla::runtime::pack_show_midi_mapping(
+                                   mHostStateCache.show_midi),
+                               std::memory_order_release);
 
 #if IPLUG_EDITOR
   mMakeGraphicsFunc = [&]() {
@@ -139,7 +143,6 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
 
   mLayoutFunc = [&](IGraphics* pGraphics) {
     const IRECT bounds = pGraphics->GetBounds();
-    const IRECT executorBounds = AeylaExecutorRuntimeControl::BoundsFor(bounds);
 
     if(pGraphics->NControls())
     {
@@ -147,8 +150,6 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
         background->SetRECT(bounds);
       if(auto* main = pGraphics->GetControlWithTag(kCtrlTagMain))
         main->SetRECT(bounds);
-      if(auto* executors = pGraphics->GetControlWithTag(kCtrlTagExecutorRuntime))
-        executors->SetRECT(executorBounds);
       if(auto* status = pGraphics->GetControlWithTag(kCtrlTagRuntimeStatus))
         status->SetRECT(bounds);
       return;
@@ -163,8 +164,6 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
       pGraphics->LoadFont("AeylaUI", "Times New Roman", ETextStyle::Normal);
 
     pGraphics->AttachControl(new AeylaMainControl(bounds, *this), kCtrlTagMain);
-    pGraphics->AttachControl(new AeylaExecutorRuntimeControl(executorBounds, *this),
-                             kCtrlTagExecutorRuntime);
     pGraphics->AttachControl(new AeylaRuntimeStatusControl(bounds, *this),
                              kCtrlTagRuntimeStatus);
   };
@@ -177,7 +176,9 @@ AeylaVisualDmx::~AeylaVisualDmx()
 {
   mArtNetOutput.set_enabled(false);
   StopRuntimeWorker();
+  mNetworkConfiguration.Shutdown();
   mArtNetOutput.stop();
+  aeyla::take_library_session::clear(this);
 }
 
 #if IPLUG_DSP
@@ -185,14 +186,36 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
 {
   (void) inputs;
 
-  // Publish only the newest absolute host transport snapshot. This is bounded,
-  // lock-free and contains no file/network/UI work. Lighting runtime can later
-  // reconstruct Stop/Seek/Loop from host truth without replaying audio blocks.
-  mHostTransport.publish(GetTransportIsRunning(),
-                         GetRenderingOffline(),
+  // Publish the newest host snapshot for liveness/safety, then advance the
+  // artistic Take clock by the exact amount of audio processed. Both calls are
+  // bounded and lock-free; no file, network or UI work occurs here. Absolute
+  // Arrangement position is deliberately NOT used as the Take clock: Stop,
+  // Seek and Loop must never relocate or duplicate a relative DMX clip.
+  const bool renderingOffline = GetRenderingOffline();
+  const bool transportRunning = GetTransportIsRunning();
+  mHostTransport.publish(transportRunning,
+                         renderingOffline,
                          GetSamplePos(),
                          GetPPQPos(),
                          GetTempo());
+  if(nFrames > 0)
+  {
+    mAudioAdvanceSequence.fetch_add(1U, std::memory_order_acq_rel);
+    if(transportRunning)
+    {
+      if(!mShowTransportMutation.load(std::memory_order_acquire))
+        mTakeScheduler.advance_samples(static_cast<std::uint32_t>(nFrames),
+                                       renderingOffline);
+      // This counter advances even when a transport mutation temporarily
+      // suppresses the scheduler increment: the runtime catches that exact
+      // interval up after the atomic command boundary.
+      mProcessedTransportSamples.fetch_add(
+          static_cast<std::uint64_t>(nFrames), std::memory_order_release);
+    }
+    mProcessedAudioSamples.fetch_add(static_cast<std::uint64_t>(nFrames),
+                                     std::memory_order_release);
+    mAudioAdvanceSequence.fetch_add(1U, std::memory_order_release);
+  }
 
   // Silent MIDI-controlled lighting runtime: the host callback only clears the
   // advertised bus. It performs no project, graphics, DMX, network or file work.
@@ -214,15 +237,59 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
     mMidiEventCount.fetch_add(1, std::memory_order_relaxed);
     mLastMidiNote.store(note, std::memory_order_relaxed);
 
+    const auto channel = static_cast<std::uint8_t>(
+        std::clamp(msg.Channel() + 1, 1, 16));
+    const auto midiNote = static_cast<std::uint8_t>(std::clamp(note, 0, 127));
+    const bool positiveNoteOn = status == IMidiMsg::kNoteOn && velocity > 0;
+
+    if(positiveNoteOn)
+    {
+      const auto learnTarget = mShowMidiLearnTarget.exchange(
+          aeyla::runtime::ShowMidiLearnTarget::none,
+          std::memory_order_acq_rel);
+      if(learnTarget != aeyla::runtime::ShowMidiLearnTarget::none)
+      {
+        const std::uint32_t packed =
+            static_cast<std::uint32_t>(learnTarget) |
+            (static_cast<std::uint32_t>(channel) << 8U) |
+            (static_cast<std::uint32_t>(midiNote) << 16U) |
+            (1U << 24U);
+        mPendingMidiLearnPacked.store(packed, std::memory_order_release);
+        return;
+      }
+    }
+
+    aeyla::runtime::ShowMidiMatch showMatch{};
+    const auto showMapping = aeyla::runtime::unpack_show_midi_mapping(
+        mShowMidiMappingPacked.load(std::memory_order_acquire));
+    const bool mappedShowNote = aeyla::runtime::match_show_midi_note(
+        showMapping, channel, midiNote, 127U, showMatch);
+    if(mappedShowNote)
+    {
+      if(positiveNoteOn)
+      {
+        const auto completed = mProcessedAudioSamples.load(
+            std::memory_order_acquire);
+        const auto transportCompleted = mProcessedTransportSamples.load(
+            std::memory_order_acquire);
+        const auto offset = static_cast<std::uint32_t>(
+            std::max(msg.mOffset, 0));
+        const auto showEvent = aeyla::runtime::make_show_midi_event(
+            showMatch.command, showMatch.song_index, channel, midiNote,
+            completed, transportCompleted, offset);
+        (void)mShowMidiIngress.try_submit(showEvent);
+      }
+      return;
+    }
+
     aeyla::runtime::HostEvent event{};
     event.type = status == IMidiMsg::kNoteOn && velocity > 0
                      ? aeyla::runtime::HostEventType::note_on
                      : aeyla::runtime::HostEventType::note_off;
     // iPlug reports channels as 0..15. AEYLA's authored show contract uses
     // conventional MIDI channels 1..16, so normalize at the wrapper boundary.
-    event.channel = static_cast<std::uint8_t>(
-        std::clamp(msg.Channel() + 1, 1, 16));
-    event.note = static_cast<std::uint8_t>(std::clamp(note, 0, 127));
+    event.channel = channel;
+    event.note = midiNote;
     event.value = static_cast<float>(std::clamp(velocity, 0, 127)) / 127.0F;
     event.sample_offset = msg.mOffset;
 
@@ -373,8 +440,6 @@ void AeylaVisualDmx::OnIdle()
   {
     if(auto* main = ui->GetControlWithTag(kCtrlTagMain))
       main->SetDirty(false);
-    if(auto* executors = ui->GetControlWithTag(kCtrlTagExecutorRuntime))
-      executors->SetDirty(false);
     if(auto* status = ui->GetControlWithTag(kCtrlTagRuntimeStatus))
       status->SetDirty(false);
   }
@@ -396,6 +461,7 @@ void AeylaVisualDmx::StartRuntimeWorker()
     mRuntimeFaulted.store(true, std::memory_order_release);
     mParamBlackout.store(true, std::memory_order_release);
     mOutputArmed.store(false, std::memory_order_release);
+    mGlobalBlackout.store(true, std::memory_order_release);
     mEffectiveBlackout.store(true, std::memory_order_release);
     mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
     try
@@ -413,12 +479,14 @@ void AeylaVisualDmx::StartRuntimeWorker()
 
 void AeylaVisualDmx::StopRuntimeWorker() noexcept
 {
+  mTakeScheduler.disarm();
   mRuntimeStopRequested.store(true, std::memory_order_release);
   if(mRuntimeThread.joinable())
     mRuntimeThread.join();
 
   mParamBlackout.store(true, std::memory_order_release);
   mOutputArmed.store(false, std::memory_order_release);
+  mGlobalBlackout.store(true, std::memory_order_release);
   mEffectiveBlackout.store(true, std::memory_order_release);
   mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
   try
@@ -456,9 +524,17 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 {
   try
   {
+    ReconcileNetworkConfiguration();
+    const auto host = mHostTransport.latest();
+    if(mArtNetCapture.streamed_recording_active())
+    {
+      const auto capture = mArtNetCapture.stats();
+      (void) mCaptureSyncAnchor.observe(host, capture.recorded_frames);
+    }
     const std::scoped_lock lock(mModelMutex);
     if(mRuntimeFaulted.load(std::memory_order_acquire))
     {
+      mTakeScheduler.disarm();
       mModel.release_transients();
       mModel.disarm(aeyla::runtime::RuntimeSafetyReason::runtime_fault);
       mModel.set_blackout(true);
@@ -470,6 +546,10 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 
     if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
     {
+      ClearShowMidiCommandsLocked();
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
+      mTakeScheduler.disarm();
       mModel.release_transients();
       mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
       mModel.set_blackout(true);
@@ -478,17 +558,26 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 
     ApplyPendingParameterStateLocked();
 
-    const auto host = mHostTransport.latest();
     const bool wasOffline = mRenderingOffline.exchange(
         host.rendering_offline, std::memory_order_acq_rel);
     if(host.rendering_offline)
     {
+      if(!wasOffline)
+      {
+        ClearShowMidiCommandsLocked();
+        if(ShowMidiMapping().enabled)
+          mMidiPreflightCursor.store(0, std::memory_order_release);
+      }
+      mTakeScheduler.disarm();
       if(!wasOffline)
         mModel.release_transients();
       mModel.disarm(aeyla::runtime::RuntimeSafetyReason::offline_render);
       mModel.set_blackout(true);
       mParamBlackout.store(true, std::memory_order_release);
     }
+
+    if(!host.rendering_offline)
+      DrainShowMidiCommandsLocked(host);
 
     const auto& snapshotBeforeTransport = mModel.snapshot();
     const auto& show = mModel.show_program();
@@ -600,8 +689,11 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     mRuntimeFaulted.store(true, std::memory_order_release);
     mParamBlackout.store(true, std::memory_order_release);
     mOutputArmed.store(false, std::memory_order_release);
+    mGlobalBlackout.store(true, std::memory_order_release);
     mEffectiveBlackout.store(true, std::memory_order_release);
     mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+    mTakeScheduler.disarm();
     try
     {
       const std::scoped_lock lock(mModelMutex);
@@ -616,10 +708,146 @@ void AeylaVisualDmx::RuntimeTick() noexcept
   }
 }
 
+void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
+{
+  try
+  {
+    const auto operation = mNetworkConfiguration.Snapshot();
+    if(operation.revision == 0U ||
+       operation.revision == mLastNetworkConfigurationRevision.load(
+           std::memory_order_acquire))
+      return;
+    if(operation.busy() ||
+       operation.state == AeylaNetworkConfigurationState::idle)
+    {
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
+      return;
+    }
+
+    if(operation.state != AeylaNetworkConfigurationState::committed)
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkConfigurationMessage = operation.state ==
+              AeylaNetworkConfigurationState::rolled_back
+          ? "CAMBIO REVERTIDO · " + operation.message
+          : "CAMBIO RECHAZADO · " + operation.message;
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
+      return;
+    }
+
+    std::string networkError;
+    const auto network = aeyla::network::make_ipv4_network(
+        operation.ipv4, operation.prefix_length, networkError);
+    if(!network.has_value())
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkConfigurationMessage =
+          "CAMBIO NO APLICADO AL RUNTIME · " + networkError;
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
+      return;
+    }
+
+    const auto discovered = aeyla::network::enumerate_ipv4_interfaces();
+    std::string pendingTxId;
+    std::string previousRxId;
+    std::string previousRxAddress;
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      pendingTxId = mPendingTxAdapterId;
+      if(mRxInterfaceIndex < mNetworkInterfaces.size())
+      {
+        previousRxId = mNetworkInterfaces[mRxInterfaceIndex].id;
+        previousRxAddress = mNetworkInterfaces[mRxInterfaceIndex].ipv4;
+      }
+    }
+
+    const auto tx = std::find_if(
+        discovered.begin(), discovered.end(),
+        [&](const aeyla::network::NetworkInterface& item) {
+          return item.id == pendingTxId && item.ipv4 == operation.ipv4 &&
+                 item.prefix_length == operation.prefix_length;
+        });
+    if(tx == discovered.end())
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkConfigurationMessage =
+          "CAMBIO SIN CONFIRMAR · Windows no devolvió la IPv4 en el adaptador TX";
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
+      return;
+    }
+
+    std::size_t nextRx = 0U;
+    const auto rx = std::find_if(
+        discovered.begin(), discovered.end(),
+        [&](const aeyla::network::NetworkInterface& item) {
+          return item.id == previousRxId &&
+                 (previousRxAddress.empty() || item.ipv4 == previousRxAddress);
+        });
+    if(rx != discovered.end())
+      nextRx = static_cast<std::size_t>(std::distance(discovered.begin(), rx));
+    const auto nextTx =
+        static_cast<std::size_t>(std::distance(discovered.begin(), tx));
+
+    {
+      const std::scoped_lock lock(mNetworkMutex);
+      mNetworkInterfaces = discovered;
+      mRxInterfaceIndex = nextRx;
+      mTxInterfaceIndex = nextTx;
+      mNetworkConfigurationMessage = operation.message;
+    }
+
+    mTakeScheduler.disarm();
+    mArtNetOutput.set_preferred_source_ipv4(network->address);
+    {
+      const std::scoped_lock lock(mModelMutex);
+      const auto configured = mModel.configure_artnet_output(
+          network->directed_broadcast, 0U);
+      if(!configured.succeeded)
+      {
+        const std::scoped_lock networkLock(mNetworkMutex);
+        mNetworkConfigurationMessage =
+            "IPv4 APLICADA / SALIDA BLOQUEADA · " + configured.message;
+        SyncSnapshotToAtomicsLocked();
+        mLastNetworkConfigurationRevision.store(operation.revision,
+                                                std::memory_order_release);
+        return;
+      }
+      RefreshOutputBackendFromProjectLocked();
+      mParamBlackout.store(true, std::memory_order_release);
+      SyncSnapshotToAtomicsLocked();
+      const bool ready = mModel.snapshot().backend_ready;
+      const std::scoped_lock networkLock(mNetworkMutex);
+      mNetworkConfigurationMessage = ready
+          ? "RED LISTA · " + network->address + "/" +
+                std::to_string(network->prefix_length) + " → " +
+                network->directed_broadcast + " · U1 · SALIDA DESARMADA"
+          : "IPv4 APLICADA / MOTOR ART-NET BLOQUEADO · " + mOutputBackendError;
+    }
+    RestartCaptureInputFromRouting();
+    mLastNetworkConfigurationRevision.store(operation.revision,
+                                            std::memory_order_release);
+  }
+  catch(...)
+  {
+    const std::scoped_lock lock(mNetworkMutex);
+    mNetworkConfigurationMessage =
+        "FALLA AL CONFIRMAR LA RED · salida física permanece desarmada";
+    mLastNetworkConfigurationRevision.store(
+        mNetworkConfiguration.Snapshot().revision,
+        std::memory_order_release);
+  }
+}
+
 void AeylaVisualDmx::ApplyPendingHostStateLocked()
 {
   if(mHostStateRestoreRejected.exchange(false, std::memory_order_acq_rel))
   {
+    ClearShowMidiCommandsLocked();
+    mTakeScheduler.disarm();
     mModel.release_transients();
     mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
     mModel.set_blackout(true);
@@ -636,6 +864,8 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   if(!pending.has_value())
     return;
 
+  ClearShowMidiCommandsLocked();
+  mTakeScheduler.disarm();
   mModel.release_transients();
   mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
 
@@ -659,6 +889,16 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
     previousCache = mHostStateCache;
     mHostStateCache = *pending;
   }
+  mShowMidiMappingPacked.store(
+      aeyla::runtime::pack_show_midi_mapping(pending->show_midi),
+      std::memory_order_release);
+  mMidiPreflightCursor.store(pending->show_midi.enabled ? 0 : -1,
+                             std::memory_order_release);
+  SetShowMidiMessage(pending->show_midi.enabled
+      ? "MIDI SHOW RESTAURADO · canal " +
+            std::to_string(pending->show_midi.channel) +
+            " · salida física permanece desarmada"
+      : "MIDI SHOW DESACTIVADO · mapa restaurado");
   const bool checksumMismatch = !IsZero(pending->project_checksum) &&
                                 pending->project_checksum != previousCache.project_checksum;
 
@@ -751,7 +991,9 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   mHostStateCache.project_schema_minor =
       mModel.project_document().schema_version.minor;
   mHostStateCache.grand_master = snapshot.grand_master;
-  mHostStateCache.blackout = snapshot.blackout;
+  // Persist the global operator/safety latch, never a transient artistic
+  // blackout caused by a missing/out-of-range Cue.
+  mHostStateCache.blackout = snapshot.global_blackout;
 }
 
 void AeylaVisualDmx::CaptureParameterValueFromHost(int paramIdx) noexcept
@@ -893,8 +1135,15 @@ bool AeylaVisualDmx::SetActiveSongStartFromPlayheadFromUI()
 
 bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
 {
-  if(direction == 0)
+  if(direction == 0 || TakeRecording())
     return false;
+  const bool preserveTakeAuthority = TakeOutputArmed();
+  if(!preserveTakeAuthority)
+  {
+    mTakeScheduler.stop_reset();
+    mTakeScheduler.disarm();
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+  }
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   if(snapshot.song_count == 0U)
@@ -920,7 +1169,12 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
         });
   }
   mActiveSongBound.store(bound, std::memory_order_release);
-  mParamBlackout.store(true, std::memory_order_release);
+  mMidiPreloadSongRequest.store(static_cast<int>(target),
+                                std::memory_order_release);
+  SetShowMidiMessage("PREPARADA · " + mModel.snapshot().active_song_name +
+                     " · la canción al aire continúa");
+  if(!preserveTakeAuthority)
+    mParamBlackout.store(true, std::memory_order_release);
   mLastProjectedSongId.clear();
   mLastProjectedTick = 0U;
   SyncSnapshotToAtomicsLocked();
@@ -932,8 +1186,8 @@ std::string AeylaVisualDmx::ActiveSongStatus() const
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   if(snapshot.song_count == 0U)
-    return "NO SONG";
-  return "SONG " + std::to_string(snapshot.active_song_index + 1U) + "/" +
+    return "SIN CANCIÓN";
+  return "CANCIÓN " + std::to_string(snapshot.active_song_index + 1U) + "/" +
          std::to_string(snapshot.song_count) + " · " + snapshot.active_song_name;
 }
 
@@ -988,7 +1242,7 @@ std::string AeylaVisualDmx::ActiveLookStatus() const
         return look.look_id == document.visual.active_look_id;
       });
   if(current == document.looks.end())
-    return "NO LOOK";
+    return "SIN LOOK";
   const auto index = static_cast<std::size_t>(
       std::distance(document.looks.begin(), current));
   return "LOOK " + std::to_string(index + 1U) + "/" +
@@ -1009,6 +1263,12 @@ aeyla::product::AuthoringResult AeylaVisualDmx::StoreLookFromUI()
 
 aeyla::product::AuthoringResult AeylaVisualDmx::CreateSongFromUI()
 {
+  if(TakeRecording())
+    return {false, {}, "Detén y guarda la toma antes de crear otra canción"};
+  mTakeScheduler.stop_reset();
+  mTakeScheduler.disarm();
+  mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+  mActiveTakeSongIndex.store(-1, std::memory_order_release);
   const std::scoped_lock lock(mModelMutex);
   auto result = mModel.create_song();
   if(result.succeeded)
@@ -1017,6 +1277,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::CreateSongFromUI()
     mActiveSongBound.store(false, std::memory_order_release);
     mLastProjectedSongId.clear();
     mLastProjectedTick = 0U;
+    if(ShowMidiMapping().enabled)
+      mMidiPreflightCursor.store(0, std::memory_order_release);
   }
   SyncSnapshotToAtomicsLocked();
   return result;
@@ -1027,13 +1289,13 @@ aeyla::product::AuthoringResult AeylaVisualDmx::StoreCueAtPlayheadFromUI()
   const auto host = mHostTransport.latest();
   if(host.revision == 0U || !host.ppq_position_valid ||
      !std::isfinite(host.ppq_position))
-    return {false, {}, "DAW playhead position is unavailable"};
+    return {false, {}, "La posición del cursor del DAW no está disponible"};
 
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   const auto& show = mModel.show_program();
   if(snapshot.active_song_index >= show.songs.size())
-    return {false, {}, "Create a Song before storing a Cue"};
+    return {false, {}, "Crea una canción antes de guardar un cue"};
   const auto& song = show.songs[snapshot.active_song_index];
 
   std::optional<double> hostStartPpq;
@@ -1049,14 +1311,14 @@ aeyla::product::AuthoringResult AeylaVisualDmx::StoreCueAtPlayheadFromUI()
       hostStartPpq = binding->host_start_ppq;
   }
   if(!hostStartPpq.has_value())
-    return {false, {}, "Set the active Song start from the DAW playhead first"};
+    return {false, {}, "Primero fija el inicio de la canción desde el cursor del DAW"};
 
   const aeyla::runtime::HostSongBinding binding{song.song_id, *hostStartPpq};
   const auto authoringTick =
       aeyla::runtime::project_host_transport_to_authoring_tick(
           host, binding, song);
   if(!authoringTick.has_value())
-    return {false, {}, "DAW playhead is before the active Song start or unavailable"};
+    return {false, {}, "El cursor del DAW está antes del inicio de la canción o no está disponible"};
 
   auto result = mModel.store_cue_at_tick(*authoringTick);
   if(result.succeeded)
@@ -1138,7 +1400,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConfigureArtNetFromUI(
   const std::size_t separator = normalized.rfind('@');
   if(separator == std::string::npos || separator == 0U ||
      separator + 1U >= normalized.size())
-    return {false, {}, "Use numeric IPv4@universe, for example 2.0.0.20@0, or OFF"};
+    return {false, {}, "Usa IPv4@universo numérico, por ejemplo 2.0.0.20@0, o DESACTIVADO"};
 
   const std::string target = TrimAscii(
       std::string_view(normalized).substr(0U, separator));
@@ -1150,12 +1412,12 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConfigureArtNetFromUI(
   if(parsed.ec != std::errc{} ||
      parsed.ptr != universeText.data() + universeText.size() ||
      universe > 0x7FFFU)
-    return {false, {}, "Art-Net universe must be a number from 0 to 32767"};
+    return {false, {}, "El universo Art-Net debe ser un número entre 0 y 32767"};
 
   aeyla::output::ArtNetOutputConfig preflight;
   preflight.target_ipv4 = target;
   preflight.port_address = static_cast<std::uint16_t>(universe);
-  preflight.frames_per_second = 40U;
+  preflight.frames_per_second = aeyla::output::kAeylaArtNetFramesPerSecond;
   std::string error;
   if(!aeyla::output::validate_artnet_output_config(preflight, error))
     return {false, {}, error};
@@ -1169,9 +1431,9 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConfigureArtNetFromUI(
   SyncSnapshotToAtomicsLocked();
   if(!mModel.snapshot().backend_ready)
     return {false, target, mOutputBackendError.empty()
-                                ? "Art-Net backend preflight failed"
+                                ? "Falló la comprobación previa del backend Art-Net"
                                 : mOutputBackendError};
-  return {true, target, "Art-Net ready at " + target + "@" + universeText};
+  return {true, target, "Art-Net listo en " + target + "@" + universeText};
 }
 
 std::string AeylaVisualDmx::OutputBackendStatus() const
@@ -1179,8 +1441,9 @@ std::string AeylaVisualDmx::OutputBackendStatus() const
   const std::scoped_lock lock(mModelMutex);
   const auto& output = mModel.project_document().output;
   if(output.backend != "artnet" || output.target.empty())
-    return "OUTPUT OFF";
-  return "ARTNET " + output.target + "@" + std::to_string(output.universe);
+    return "SALIDA DESACTIVADA";
+  return "ART-NET " + output.target + " · U" +
+         std::to_string(static_cast<unsigned>(output.universe) + 1U);
 }
 
 std::string AeylaVisualDmx::OutputBackendError() const
@@ -1194,6 +1457,7 @@ void AeylaVisualDmx::RefreshOutputBackendFromProjectLocked()
   mArtNetOutput.set_enabled(false);
   mArtNetOutput.stop();
   mLastArtNetSendErrors = 0U;
+  mLastHandledArtNetFailClosedEvents = 0U;
   mOutputBackendError.clear();
 
   const auto& output = mModel.project_document().output;
@@ -1201,14 +1465,14 @@ void AeylaVisualDmx::RefreshOutputBackendFromProjectLocked()
   {
     mModel.set_backend_ready(false);
     if(output.backend != "none")
-      mOutputBackendError = "Configured output backend is not implemented";
+      mOutputBackendError = "El backend de salida configurado no está implementado";
     return;
   }
 
   aeyla::output::ArtNetOutputConfig config;
   config.target_ipv4 = output.target;
   config.port_address = output.universe;
-  config.frames_per_second = 40U;
+  config.frames_per_second = aeyla::output::kAeylaArtNetFramesPerSecond;
   if(!mArtNetOutput.start(config, mOutputBackendError))
   {
     mModel.set_backend_ready(false);
@@ -1230,14 +1494,42 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
   mArtNetOutput.set_enabled(snapshot.output_armed && !renderingOffline);
 
   const auto stats = mArtNetOutput.stats();
-  if(stats.send_errors <= mLastArtNetSendErrors)
+  if(!stats.fail_closed)
+  {
+    if(stats.send_errors > mLastArtNetSendErrors)
+    {
+      mLastArtNetSendErrors = stats.send_errors;
+      mOutputBackendError =
+          "Art-Net registró un error transitorio; la salida continúa vigilada";
+    }
+    else if(stats.consecutive_send_errors == 0U &&
+            (mOutputBackendError.rfind(
+                 "Art-Net registró un error transitorio", 0U) == 0U ||
+             mOutputBackendError.rfind(
+                 "Art-Net acumuló tres errores consecutivos", 0U) == 0U))
+    {
+      mOutputBackendError.clear();
+    }
     return;
+  }
+
+  // Handle each fail-closed transition once. Reapplying APAGÓN on every
+  // runtime tick made explicit recovery impossible: the worker could re-latch
+  // blackout between the operator's APAGÓN OFF and ARMAR clicks. The worker
+  // itself remains latched until ARMAR calls prepare_explicit_rearm().
+  if(stats.fail_closed_events <= mLastHandledArtNetFailClosedEvents)
+  {
+    mArtNetOutput.set_enabled(false);
+    return;
+  }
+  mLastHandledArtNetFailClosedEvents = stats.fail_closed_events;
 
   mLastArtNetSendErrors = stats.send_errors;
-  mOutputBackendError = "Art-Net send failed; output was disarmed";
+  mOutputBackendError =
+      "Art-Net acumuló tres errores consecutivos; desactiva APAGÓN y vuelve a ARMAR manualmente";
+  mTakeScheduler.disarm();
   mArtNetOutput.set_enabled(false);
   mModel.release_transients();
-  mModel.set_backend_ready(false);
   mModel.disarm(aeyla::runtime::RuntimeSafetyReason::backend_unavailable);
   mModel.set_blackout(true);
   mParamBlackout.store(true, std::memory_order_release);
@@ -1249,7 +1541,10 @@ void AeylaVisualDmx::SetOutputArmed(bool armed)
   const std::scoped_lock lock(mModelMutex);
   if(armed && RuntimeHealthy() &&
      !mRenderingOffline.load(std::memory_order_acquire))
-    (void) mModel.request_arm();
+  {
+    if(mModel.request_arm())
+      mArtNetOutput.prepare_explicit_rearm();
+  }
   else if(armed)
     mModel.disarm(mRenderingOffline.load(std::memory_order_acquire)
                       ? aeyla::runtime::RuntimeSafetyReason::offline_render
@@ -1266,6 +1561,7 @@ void AeylaVisualDmx::SyncSnapshotToAtomicsLocked() noexcept
 {
   const auto& snapshot = mModel.snapshot();
   mOutputArmed.store(snapshot.output_armed, std::memory_order_release);
+  mGlobalBlackout.store(snapshot.global_blackout, std::memory_order_release);
   mEffectiveBlackout.store(snapshot.blackout, std::memory_order_release);
   mBackendReady.store(snapshot.backend_ready, std::memory_order_release);
   mProjectValid.store(snapshot.project_valid, std::memory_order_release);

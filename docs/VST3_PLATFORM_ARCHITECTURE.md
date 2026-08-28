@@ -191,7 +191,7 @@ Recommended initial frequencies, subject to measurement:
 
 - host callback: host-defined;
 - runtime visual/state tick: 120 Hz maximum;
-- DMX/Art-Net output: 40 Hz;
+- DMX/Art-Net output: 44 Hz;
 - UI refresh: 30–60 Hz;
 - media decoding: independent buffered worker(s).
 

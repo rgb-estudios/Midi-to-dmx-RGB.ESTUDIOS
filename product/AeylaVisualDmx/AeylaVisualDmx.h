@@ -3,8 +3,12 @@
 #include "IPlug_include_in_plug_hdr.h"
 #include "IControls.h"
 #include "capture/artnet_capture_worker.h"
+#include "capture/dmx_capture_sync_anchor.h"
+#include "capture/dmx_take_activity.h"
+#include "capture/dmx_take_file_store.h"
 #include "capture/dmx_take_scheduler.h"
 #include "network/network_interfaces.h"
+#include "AeylaNetworkConfiguration.h"
 #include "product/application_model.h"
 #include "product/project_file_controller.h"
 #include "product/project_identity.h"
@@ -12,6 +16,7 @@
 #include "runtime/host_event_ingress.h"
 #include "runtime/host_transport_mailbox.h"
 #include "runtime/plugin_state.h"
+#include "runtime/show_midi_control.h"
 
 #include <algorithm>
 #include <array>
@@ -19,7 +24,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
-#include <map>
+#include <memory>
 #include <thread>
 #include <mutex>
 #include <optional>
@@ -45,13 +50,32 @@ enum EParams
 enum EControlTags
 {
   kCtrlTagMain = 100,
-  kCtrlTagExecutorRuntime,
   kCtrlTagRuntimeStatus,
   kNumCtrlTags
 };
 
 using namespace iplug;
 using namespace igraphics;
+
+struct AeylaTakeEditorSnapshot
+{
+  bool available{false};
+  bool raw_source{true};
+  std::filesystem::path path;
+  std::string take_name;
+  std::size_t version_index{0U};
+  std::size_t version_count{0U};
+  std::uint64_t frame_count{0U};
+  std::uint64_t start_frame{0U};
+  std::uint64_t end_frame_exclusive{0U};
+  std::uint64_t current_frame{0U};
+  std::uint16_t frames_per_second{0U};
+  std::array<std::uint8_t, aeyla::capture::kMaximumTakeActivityBuckets>
+      activity_level{};
+  std::array<std::uint8_t, aeyla::capture::kMaximumTakeActivityBuckets>
+      activity_motion{};
+  std::size_t activity_count{0U};
+};
 
 class AeylaVisualDmx final : public Plugin
 {
@@ -111,7 +135,13 @@ public:
   [[nodiscard]] bool CycleTxInterfaceFromUI(int direction);
   [[nodiscard]] std::string RxInterfaceStatus() const;
   [[nodiscard]] std::string TxInterfaceStatus() const;
+  [[nodiscard]] std::optional<aeyla::network::NetworkInterface>
+  SelectedTxInterface() const;
   [[nodiscard]] std::size_t NetworkInterfaceCount() const;
+  [[nodiscard]] aeyla::product::AuthoringResult
+  ApplyTxNetworkFromUI(std::string ipv4, std::string mask);
+  [[nodiscard]] std::string NetworkConfigurationStatus() const;
+  [[nodiscard]] bool NetworkConfigurationBusy() const;
 
   [[nodiscard]] aeyla::product::AuthoringResult ToggleTakeCaptureFromUI();
   [[nodiscard]] aeyla::product::AuthoringResult ToggleActiveTakePlaybackFromUI();
@@ -120,10 +150,30 @@ public:
   [[nodiscard]] bool TakeRecording() const noexcept;
   [[nodiscard]] bool TakePlaying() const noexcept;
   [[nodiscard]] bool TakeOutputArmed() const noexcept;
-  [[nodiscard]] bool HasActiveTake() const;
+  [[nodiscard]] bool TakeOutputLive() const noexcept
+  {
+    return TakeOutputArmed() && mArtNetOutput.override_enabled();
+  }
   [[nodiscard]] std::string ActiveTakeStatus() const;
   [[nodiscard]] std::string CaptureInputStatus() const;
   [[nodiscard]] double ActiveTakePlaybackProgress() const;
+
+  [[nodiscard]] aeyla::runtime::ShowMidiMapping ShowMidiMapping() const noexcept;
+  [[nodiscard]] aeyla::product::AuthoringResult ToggleShowMidiFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult CycleShowMidiChannelFromUI(
+      int direction);
+  [[nodiscard]] aeyla::product::AuthoringResult BeginShowMidiLearnFromUI(
+      aeyla::runtime::ShowMidiLearnTarget target);
+  [[nodiscard]] aeyla::runtime::ShowMidiLearnTarget ShowMidiLearnTarget() const noexcept;
+  [[nodiscard]] std::string ShowMidiStatus() const;
+  [[nodiscard]] bool ShowMidiPreflightBusy() const noexcept
+  {
+    return mMidiPreflightCursor.load(std::memory_order_acquire) >= 0;
+  }
+  [[nodiscard]] int ActiveTakeSongIndex() const noexcept
+  {
+    return mActiveTakeSongIndex.load(std::memory_order_acquire);
+  }
 
   // Non-destructive Take editor. Delta is expressed in seconds. The source
   // recording remains untouched; playback starts/ends at the edited frame
@@ -134,27 +184,39 @@ public:
   [[nodiscard]] aeyla::product::AuthoringResult AdjustActiveTakeOutFromUI(
       double deltaSeconds);
   [[nodiscard]] aeyla::product::AuthoringResult ResetActiveTakeTrimFromUI();
-  [[nodiscard]] double ActiveTakeInSeconds() const;
-  [[nodiscard]] double ActiveTakeOutSeconds() const;
-  [[nodiscard]] double ActiveTakeOriginalDurationSeconds() const;
-  [[nodiscard]] double ActiveTakeEffectiveDurationSeconds() const;
+  [[nodiscard]] aeyla::product::AuthoringResult ConsolidateActiveTakeFromUI();
+  [[nodiscard]] aeyla::product::AuthoringResult SetActiveTakeInFrameFromUI(
+      std::uint64_t frameIndex);
+  [[nodiscard]] aeyla::product::AuthoringResult SetActiveTakeOutFrameFromUI(
+      std::uint64_t frameIndexExclusive);
+  [[nodiscard]] aeyla::product::AuthoringResult SeekActiveTakeFrameFromUI(
+      std::uint64_t frameIndex);
+  [[nodiscard]] aeyla::product::AuthoringResult CycleActiveTakeVersionFromUI(
+      int direction);
+  [[nodiscard]] aeyla::product::AuthoringResult ReturnToRawTakeFromUI();
+  [[nodiscard]] AeylaTakeEditorSnapshot ActiveTakeEditorSnapshot() const;
 
-  [[nodiscard]] std::uint64_t CaptureAcceptedPackets() const noexcept;
-  [[nodiscard]] std::uint64_t CaptureSequenceGaps() const noexcept;
-
-  [[nodiscard]] std::uint64_t ArtNetSentPackets() const noexcept
+  [[nodiscard]] aeyla::output::ArtNetOutputStats ArtNetOutputStatus() const noexcept
   {
-    return mArtNetOutput.stats().sent_packets;
+    return mArtNetOutput.stats();
   }
-  [[nodiscard]] std::uint64_t ArtNetSendErrors() const noexcept
+  [[nodiscard]] aeyla::capture::ArtNetCaptureStats ArtNetCaptureStatus() const noexcept
   {
-    return mArtNetOutput.stats().send_errors;
+    return mArtNetCapture.stats();
   }
 
   aeyla::product::ProjectFileStatus NewProjectFromUI()
   {
+    if(TakeRecording())
+      return {aeyla::product::ProjectFileOperation::new_project,
+              false,
+              mProjectFiles.current_path(),
+              "Detén y guarda la toma antes de crear otro proyecto",
+              {"Cambiar de proyecto durante GRABAR podría separar el archivo de su canción."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
+    mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.new_project(
         aeyla::product::generate_project_uuid(),
@@ -163,6 +225,8 @@ public:
     {
       SyncParametersFromProject();
       RefreshOutputBackendFromProjectLocked();
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
     }
     SyncSnapshotToAtomicsLocked();
     return status;
@@ -171,14 +235,24 @@ public:
   aeyla::product::ProjectFileStatus OpenProjectFromUI(
       const std::filesystem::path& path)
   {
+    if(TakeRecording())
+      return {aeyla::product::ProjectFileOperation::open,
+              false,
+              mProjectFiles.current_path(),
+              "Detén y guarda la toma antes de abrir otro proyecto",
+              {"La grabación activa conserva la identidad de la canción actual."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
+    mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
     const std::scoped_lock lock(mModelMutex);
     const auto status = mProjectFiles.open(path);
     if(status.succeeded)
     {
       SyncParametersFromProject();
       RefreshOutputBackendFromProjectLocked();
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
     }
     SyncSnapshotToAtomicsLocked();
     return status;
@@ -237,6 +311,14 @@ public:
   [[nodiscard]] bool EffectiveBlackout() const noexcept
   {
     return mEffectiveBlackout.load(std::memory_order_acquire);
+  }
+
+  // The red header control owns the global operator/safety latch. It must not
+  // mirror the Show renderer's effective black state because an unresolved
+  // Cue is allowed to be black while an independent recorded Take is armed.
+  [[nodiscard]] bool GlobalBlackout() const noexcept
+  {
+    return mGlobalBlackout.load(std::memory_order_acquire);
   }
 
   [[nodiscard]] bool BackendReady() const noexcept
@@ -310,9 +392,25 @@ private:
   void StopRuntimeWorker() noexcept;
   void RuntimeLoop() noexcept;
   void RuntimeTick() noexcept;
+  void ReconcileNetworkConfiguration() noexcept;
   void ApplyPendingHostStateLocked();
   void ApplyPendingParameterStateLocked();
   void DrainHostEventsLocked();
+  void DrainShowMidiCommandsLocked(
+      const aeyla::runtime::HostTransportSnapshot& host);
+  void ClearShowMidiCommandsLocked() noexcept;
+  [[nodiscard]] bool StartPreparedTakeFromMidiLocked(
+      std::size_t song_index, std::uint64_t trigger_sample,
+      std::string& error_message);
+  [[nodiscard]] bool PreloadPreparedTakeForMidiLocked(
+      std::size_t song_index, std::string& error_message);
+  void SetShowMidiMessage(std::string message);
+  void SyncShowMidiMappingToState(
+      const aeyla::runtime::ShowMidiMapping& mapping);
+  [[nodiscard]] std::uint64_t BeginShowTransportMutation() noexcept;
+  void EndShowTransportMutation() noexcept;
+  void SynchronizeShowTransportCursor(std::uint64_t trigger_sample,
+                                      std::uint64_t base_cursor = 0U) noexcept;
   void RefreshHostStateCacheLocked();
   void SyncSnapshotToAtomicsLocked() noexcept;
   void CaptureParameterValueFromHost(int paramIdx) noexcept;
@@ -324,6 +422,10 @@ private:
   [[nodiscard]] std::string SelectedRxIpv4() const;
   [[nodiscard]] std::string SelectedTxIpv4() const;
   [[nodiscard]] std::string ActiveSongIdLocked() const;
+  [[nodiscard]] bool ApplyCapturedTakeAutoIn(
+      const aeyla::capture::TakeFileIndexEntry& entry,
+      std::uint64_t anchorFrame,
+      std::string& error);
 
   void PrepareProjectForSave()
   {
@@ -384,6 +486,7 @@ private:
   }
 
   aeyla::runtime::HostEventIngress<1024> mHostIngress{};
+  aeyla::runtime::ShowMidiIngress<256> mShowMidiIngress{};
   aeyla::runtime::HostTransportMailbox mHostTransport{};
   mutable std::mutex mModelMutex;
   aeyla::product::ApplicationModel mModel{};
@@ -392,16 +495,23 @@ private:
   aeyla::capture::ArtNetCaptureWorker mArtNetCapture{};
   std::string mOutputBackendError;
   std::uint64_t mLastArtNetSendErrors{0U};
+  std::uint64_t mLastHandledArtNetFailClosedEvents{0U};
 
   mutable std::mutex mNetworkMutex;
   std::vector<aeyla::network::NetworkInterface> mNetworkInterfaces;
   std::size_t mRxInterfaceIndex{0U};
   std::size_t mTxInterfaceIndex{0U};
   std::string mCaptureInputError;
+  AeylaNetworkConfiguration mNetworkConfiguration{};
+  std::atomic<std::uint64_t> mLastNetworkConfigurationRevision{0U};
+  std::string mPendingTxAdapterId;
+  std::string mNetworkConfigurationMessage;
 
-  mutable std::mutex mTakeMutex;
-  std::map<std::string, std::vector<aeyla::capture::DmxTake>> mTakesBySong;
   aeyla::capture::DmxTakeScheduler mTakeScheduler{};
+  aeyla::capture::DmxCaptureSyncAnchor mCaptureSyncAnchor{};
+  // UI-owned identity of the streamed file currently being recorded. The
+  // stop path indexes this exact target instead of guessing from timestamps.
+  std::filesystem::path mActiveCaptureTarget;
 
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};
@@ -411,18 +521,43 @@ private:
   mutable std::mutex mHostStateMutex;
   aeyla::runtime::PluginComponentState mHostStateCache{};
   std::optional<aeyla::runtime::PluginComponentState> mPendingHostState;
+  std::optional<aeyla::runtime::ShowMidiEvent> mPendingShowMidiEvent;
+  std::array<std::unique_ptr<aeyla::capture::DmxTakeFileReader>,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakeReaders{};
+  std::array<std::filesystem::path,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakePaths{};
+  std::array<std::uint64_t,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakeStarts{};
+  std::array<std::uint64_t,
+             aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakeEnds{};
+
+  mutable std::mutex mShowMidiMutex;
+  std::string mShowMidiMessage{"MIDI SHOW DESACTIVADO · configura y habilita cuando el show esté listo"};
 
   std::atomic<bool> mParameterUpdatePending{true};
   std::atomic<bool> mLookParameterUiSyncPending{false};
   std::atomic<bool> mHostDeactivationPending{false};
   std::atomic<bool> mHostStateRestoreRejected{false};
   std::atomic<bool> mOutputArmed{false};
+  std::atomic<bool> mGlobalBlackout{true};
   std::atomic<bool> mEffectiveBlackout{true};
   std::atomic<bool> mBackendReady{false};
   std::atomic<bool> mProjectValid{false};
   std::atomic<int> mLastMidiNote{-1};
   std::atomic<int> mActiveExecutor{-1};
   std::atomic<std::uint64_t> mMidiEventCount{0};
+  std::atomic<std::uint64_t> mProcessedAudioSamples{0U};
+  std::atomic<std::uint64_t> mProcessedTransportSamples{0U};
+  std::atomic<std::uint64_t> mAudioAdvanceSequence{0U};
+  std::atomic<bool> mShowTransportMutation{false};
+  std::atomic<std::uint64_t> mShowMidiMappingPacked{0U};
+  std::atomic<std::uint32_t> mPendingMidiLearnPacked{0U};
+  std::atomic<aeyla::runtime::ShowMidiLearnTarget> mShowMidiLearnTarget{
+      aeyla::runtime::ShowMidiLearnTarget::none};
+  std::atomic<int> mLoadedTakeSongIndex{-1};
+  std::atomic<int> mActiveTakeSongIndex{-1};
+  std::atomic<int> mMidiPreloadSongRequest{-1};
+  std::atomic<int> mMidiPreflightCursor{-1};
   std::atomic<std::uint64_t> mHostStateRestoreErrors{0};
   std::atomic<std::uint64_t> mDmxGeneration{0};
   std::atomic<int> mDmxNonZeroChannels{0};

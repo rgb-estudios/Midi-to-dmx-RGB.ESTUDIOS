@@ -2,6 +2,7 @@
 
 #include "AeylaVisualDmx.h"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -33,61 +34,62 @@ public:
     g.DrawLine(line, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
     static constexpr const char* labels[] = {
-        "NEW", "OPEN", "SAVE", "SAVE AS"};
+        "NUEVO", "ABRIR", "GUARDAR", "GUARDAR COMO"};
+    const bool projectChangeBlocked = mPlug.TakeRecording();
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
-      g.FillRoundRect(raised, mButtons[index], 5.0F);
-      g.DrawRoundRect(line, mButtons[index], 5.0F, nullptr, 1.0F);
-      g.DrawText(IText(9.0F, text,
+      const bool blocked = projectChangeBlocked && index < 2U;
+      g.FillRoundRect(blocked ? IColor(255, 35, 31, 25) : raised,
+                      mButtons[index], 5.0F);
+      g.DrawRoundRect(blocked ? warning : line,
+                      mButtons[index], 5.0F, nullptr, 1.0F);
+      g.DrawText(IText(12.0F, blocked ? warning : text,
                        "AeylaUI", EAlign::Center, EVAlign::Middle),
                  labels[index], mButtons[index]);
     }
 
-    std::string projectLabel = mPlug.ProjectDirty() ? "UNSAVED  ·  " : "SAVED  ·  ";
-    projectLabel += mPlug.ProjectName();
-    if(!mPlug.CurrentProjectPath().empty())
-      projectLabel += "  ·  " + mPlug.CurrentProjectPath().filename().string();
-    g.DrawText(IText(8.5F, mPlug.ProjectDirty() ? warning : valid,
+    std::string projectLabel = mPlug.ProjectDirty() ? "SIN GUARDAR  ·  " : "GUARDADO  ·  ";
+    projectLabel += mPlug.CurrentProjectPath().empty()
+        ? mPlug.ProjectName()
+        : mPlug.CurrentProjectPath().filename().string();
+    g.DrawText(IText(12.0F, mPlug.ProjectDirty() ? warning : valid,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
-               projectLabel.c_str(),
-               IRECT(footer.L + 270.0F, footer.T,
-                     footer.L + 610.0F, footer.B));
+               projectLabel.c_str(), mProjectStatus);
 
     // Output configuration has exactly one operator authority: the ART-NET
     // NETWORK panel in AeylaMainControl. The footer is status-only and can no
     // longer open the legacy IPv4@universe editor that previously overrode the
     // simplified TX route.
     const std::string backend = mPlug.OutputBackendStatus();
-    g.DrawText(IText(8.5F, mPlug.BackendReady() ? valid : warning,
+    g.DrawText(IText(12.0F, mPlug.BackendReady() ? valid : warning,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
-               backend.c_str(),
-               IRECT(footer.L + 610.0F, footer.T,
-                     footer.L + 875.0F, footer.B));
+               backend.c_str(), mBackendStatus);
 
     std::string state;
-    if(mPlug.TakeOutputArmed())
-      state = "TAKE ON AIR";
+    if(mPlug.TakeOutputLive())
+      state = "TOMA AL AIRE";
+    else if(mPlug.TakeOutputArmed())
+      state = "TOMA ARMADA · ESPERA REPRODUCIR";
     else if(mPlug.TakeRecording())
-      state = "CAPTURING AVOLITES";
+      state = "CAPTURANDO AVOLITES";
     else if(mPlug.TakePlaying())
-      state = "TAKE PLAY / PREVIEW";
+      state = "REPRODUCCIÓN / PREVIA";
     else
-      state = "READY / DISARMED";
+      state = "LISTO / DESARMADO";
 
     if(mPlug.RenderingOffline())
-      state = "OFFLINE RENDER · OUTPUT INHIBITED";
+      state = "RENDERIZADO SIN CONEXIÓN · SALIDA INHIBIDA";
     else if(!mPlug.RuntimeHealthy())
-      state = "RUNTIME FAULT";
+      state = "FALLA DEL MOTOR";
 
     IColor stateColor = valid;
-    if(mPlug.TakeOutputArmed()) stateColor = danger;
+    if(mPlug.TakeOutputLive()) stateColor = danger;
+    else if(mPlug.TakeOutputArmed()) stateColor = warning;
     else if(mPlug.TakeRecording()) stateColor = warning;
     else if(mPlug.RenderingOffline() || !mPlug.RuntimeHealthy()) stateColor = danger;
 
-    g.DrawText(IText(8.5F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
-               state.c_str(),
-               IRECT(footer.L + 875.0F, footer.T,
-                     footer.R - 14.0F, footer.B));
+    g.DrawText(IText(12.0F, stateColor, "AeylaUI", EAlign::Far, EVAlign::Middle),
+               state.c_str(), mOutputStatus);
   }
 
   bool IsHit(float x, float y) const override
@@ -102,6 +104,11 @@ public:
 
     if(Contains(mButtons[0], x, y))
     {
+      if(mPlug.TakeRecording())
+      {
+        ReportFileStatus(mPlug.NewProjectFromUI());
+        return;
+      }
       ConfirmDiscardThen([this]() {
         ReportFileStatus(mPlug.NewProjectFromUI());
         SetDirty(false);
@@ -110,6 +117,11 @@ public:
     }
     if(Contains(mButtons[1], x, y))
     {
+      if(mPlug.TakeRecording())
+      {
+        ReportFileStatus(mPlug.OpenProjectFromUI(std::filesystem::path{}));
+        return;
+      }
       ConfirmDiscardThen([this]() { PromptOpen(); });
       return;
     }
@@ -130,7 +142,7 @@ public:
 private:
   [[nodiscard]] IRECT Footer() const noexcept
   {
-    return IRECT(mRECT.L, mRECT.B - 42.0F, mRECT.R, mRECT.B);
+    return IRECT(mRECT.L, mRECT.B - 50.0F, mRECT.R, mRECT.B);
   }
 
   static bool Contains(const IRECT& rectangle, float x, float y) noexcept
@@ -159,7 +171,7 @@ private:
     constexpr float left = 12.0F;
     constexpr float topPad = 8.0F;
     constexpr float gap = 6.0F;
-    constexpr float widths[] = {52.0F, 56.0F, 54.0F, 68.0F};
+    constexpr float widths[] = {58.0F, 58.0F, 68.0F, 98.0F};
     float cursor = footer.L + left;
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
@@ -167,6 +179,15 @@ private:
                               cursor + widths[index], footer.B - topPad);
       cursor += widths[index] + gap;
     }
+
+    const float statusLeft = mButtons.back().R + 14.0F;
+    const float statusRight = footer.R - 14.0F;
+    const float available = std::max(0.0F, statusRight - statusLeft);
+    const float projectRight = statusLeft + available * 0.40F;
+    const float backendRight = projectRight + available * 0.28F;
+    mProjectStatus = IRECT(statusLeft, footer.T, projectRight, footer.B);
+    mBackendStatus = IRECT(projectRight, footer.T, backendRight, footer.B);
+    mOutputStatus = IRECT(backendRight, footer.T, statusRight, footer.B);
   }
 
   void ReportFileStatus(const aeyla::product::ProjectFileStatus& status)
@@ -175,7 +196,7 @@ private:
     std::string message = status.message;
     if(!status.diagnostics.empty())
       message += "\n\n" + status.diagnostics.front();
-    GetUI()->ShowMessageBox(message.c_str(), "AEYLA project error", kMB_OK);
+    GetUI()->ShowMessageBox(message.c_str(), "AEYLA · ERROR DE PROYECTO", kMB_OK);
   }
 
   void ConfirmDiscardThen(std::function<void()> action)
@@ -187,8 +208,8 @@ private:
     }
 
     GetUI()->ShowMessageBox(
-        "The current AEYLA project has unsaved changes. Continue and discard them?",
-        "Unsaved AEYLA project", kMB_YESNO,
+        "El proyecto AEYLA tiene cambios sin guardar. ¿Continuar y descartarlos?",
+        "AEYLA · CAMBIOS SIN GUARDAR", kMB_YESNO,
         [action = std::move(action)](EMsgBoxResult result) {
           if(result == kYES) action();
         });
@@ -231,6 +252,9 @@ private:
 
   AeylaVisualDmx& mPlug;
   std::array<IRECT, 4> mButtons{};
+  IRECT mProjectStatus{};
+  IRECT mBackendStatus{};
+  IRECT mOutputStatus{};
   WDL_String mDialogFileName;
   WDL_String mDialogPath;
 };

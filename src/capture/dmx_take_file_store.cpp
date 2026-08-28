@@ -709,4 +709,17 @@ TakeLibraryScanResult scan_take_directory(
   return result;
 }
 
+std::optional<TakeFileIndexEntry> find_take_entry_by_path(
+    const TakeLibraryScanResult& scan,
+    const std::filesystem::path& expected_path) {
+  if(!scan.ok() || expected_path.empty()) return std::nullopt;
+  const auto found = std::find_if(
+      scan.entries.begin(), scan.entries.end(),
+      [&](const TakeFileIndexEntry& entry) {
+        return entry.path == expected_path;
+      });
+  if(found == scan.entries.end()) return std::nullopt;
+  return *found;
+}
+
 }  // namespace aeyla::capture

@@ -43,3 +43,17 @@ Per-executor options:
 ## Note map stability
 
 The editor validates duplicate note/channel assignments. Export can include a printable note map and Standard MIDI File reference, but the show package remains the source of truth.
+
+## Recorded-Take Show transport
+
+The recorded-Take transport is a separate command namespace from creative
+executors. It defaults to disabled on channel 16 and exposes configurable
+Previous, Next, Play/Retrigger, Pause/Resume, Stop/Reset and a consecutive
+15-note direct-Song range. A mapped transport Note On is consumed before the
+executor layer; its corresponding Note Off is also consumed.
+
+Transport events carry their exact in-block sample offset across the realtime
+queue. The runtime compensates its own scheduling delay, so the relative DMX
+cursor resolves from the MIDI sample rather than from worker wake-up time.
+MIDI cannot enable physical output or clear Blackout. Queue overflow is a
+fail-safe boundary that disarms output and latches Blackout.

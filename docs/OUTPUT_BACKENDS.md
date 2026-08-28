@@ -24,7 +24,7 @@ The runtime submits immutable frames; backend-specific code cannot alter semanti
   the product UI.
 - Configurable 15-bit port address shown as simplified universe `0..32767`.
 - Sequence number.
-- Fixed 40 Hz refresh in Alpha v1.
+- Fixed 44 Hz refresh in R07, shared with capture and clip playback.
 - One universe.
 - Optional ArtPoll discovery later; not required for first hardware test.
 
