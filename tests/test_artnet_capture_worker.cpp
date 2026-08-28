@@ -131,13 +131,30 @@ int main() {
   require(stored->take.frames.back() == expected,
           "streamed capture final DMX frame differs from source");
 
+  // A host unload/receptor shutdown must preserve an already-running streamed
+  // Take instead of silently deleting its temporary file. The normal product
+  // STOP path still owns indexing and automatic transport/MTC alignment.
+  auto unload_config = stream_config;
+  unload_config.target_path = directory / "Host_Unload_Stream.aeylatake";
+  unload_config.take_name = "Host Unload Recovery";
+  require(capture.begin_streamed_recording(unload_config, error), error.c_str());
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  capture.stop();
+  auto recovered = aeyla::capture::load_take_file(
+      unload_config.target_path, error);
+  require(recovered.has_value(),
+          "capture shutdown did not preserve a recoverable streamed Take");
+  require(recovered->take.frames.size() >= 5U,
+          "recovered shutdown Take contains too few frames");
+  require(recovered->take.frames.back() == expected,
+          "recovered shutdown Take lost the final DMX state");
+
   const auto stats = capture.stats();
   require(stats.invalid_packets == 0U, "valid loopback stream produced invalid packets");
   require(stats.sequence_gaps == 0U, "continuous loopback stream produced sequence gaps");
 
   output.set_enabled(false);
   output.stop();
-  capture.stop();
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);

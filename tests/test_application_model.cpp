@@ -114,6 +114,18 @@ int main() {
         "arming should succeed only after project, show and backend validation");
   check(model.snapshot().output_armed, "snapshot must expose authoritative armed state");
 
+  // Product fail-closed recovery keeps the configured socket/NIC readiness
+  // while revoking every authority. Otherwise APAGÓN OFF -> ARMAR could never
+  // be the explicit recovery boundary promised to the operator.
+  model.disarm(aeyla::runtime::RuntimeSafetyReason::backend_unavailable);
+  model.set_blackout(true);
+  check(model.snapshot().backend_ready && !model.snapshot().output_armed &&
+            model.snapshot().blackout,
+        "fail-closed disarm must preserve backend preflight but revoke authority");
+  model.set_blackout(false);
+  check(model.request_arm(),
+        "explicit blackout release plus ARM must recover a preflighted backend");
+
   HostEvent note_on{};
   note_on.type = HostEventType::note_on;
   note_on.channel = 1U;

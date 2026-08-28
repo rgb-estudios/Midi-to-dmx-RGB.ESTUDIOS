@@ -1,30 +1,30 @@
 # AEYLA — matriz funcional de UI
 
-Checkpoint: `R07 PRETEST / P0 network-output repair`
+Checkpoint: `R07 PRETEST / auditoría integral pendiente de CI`
 Regla: visible = funcional, bloqueado con causa o no presente.
 
 | Superficie | Evento → handler → efecto | Persistencia | Estado actual |
 |---|---|---:|---|
-| NUEVO | clic → `NewProjectFromUI` → bundle nuevo seguro | sí | **Implemented**; host por revalidar |
-| ABRIR | clic → diálogo → carga transaccional | sí | **Implemented**; host por revalidar |
-| GUARDAR / GUARDAR COMO | clic → ZIP atómico + read-back + `.bak` | sí | **Implemented**; host por revalidar |
-| APAGÓN | clic → alterna el enclavamiento global; ON desarma modelo+toma → DMX cero | host/show | **Implemented**; separado del negro artístico de Cue |
-| ARMAR SALIDA DE TOMA | clic → gates globales → arma aunque el Song no tenga Cue, o explica causa exacta | ARM nunca persiste | **Implemented / Simulated**; nodo pendiente |
-| TOMA / EDICIÓN | clic → workspace de captura/editor | sesión UI | **Implemented** |
-| RED / SALIDA | clic → workspace de red/telemetría | sesión UI | **Implemented** |
-| Lista de canciones | clic selecciona; doble clic renombra; nueva hasta 15 | sí | **Implemented** |
-| GRABAR NUEVA TOMA | clic → captura Art-Net U1 a disco; segundo clic finaliza RAW | sí, archivo | **Implemented / Simulated** |
-| REPRODUCIR / DETENER | clic → cursor relativo por muestras / pausa HOLD | runtime | **Implemented / Simulated** |
-| Timeline y cabezal | clic/arrastre → scrub libre si está desarmado | edit state | **Implemented** |
-| Handles / marcar IN-OUT | arrastre, timecode o ±1f → rango no destructivo | edit state | **Implemented** |
-| Zoom / pan | rueda, `-/+`, `Shift+arrastre` | sesión UI | **Implemented** |
-| Versiones / volver a RAW | flechas/acción → selecciona archivo y rango reales | sesión | **Implemented** |
-| CONSOLIDAR CLIP | clic → nuevo `.aeylatake`, RAW byte-identical | sí, archivo | **Implemented** |
-| Adaptador RX/TX | flechas → selecciona NIC; cambiar TX desarma | sesión | **Implemented** |
-| IPv4 AEYLA / MÁSCARA | texto → parser estricto → helper UAC → alias/validación/rollback | sistema Windows | **Implemented / Simulated**; UAC físico pendiente |
-| Telemetría TX | worker → paquetes/errores/autoridad visible | no | **Implemented** |
+| NUEVO | clic → `NewProjectFromUI` → bundle nuevo seguro | sí | **Simulated** backend; host por revalidar |
+| ABRIR | clic → diálogo → carga transaccional | sí | **Simulated** backend; diálogo host pendiente |
+| GUARDAR / GUARDAR COMO | clic → ZIP atómico + read-back + `.bak` | sí | **Simulated** backend; diálogo host pendiente |
+| APAGÓN | clic → alterna el enclavamiento global; ON desarma modelo+toma → DMX cero | host/show | **Simulated**; separado del negro artístico de Cue |
+| ARMAR SALIDA DE TOMA | clic → gates globales → arma aunque el Song no tenga Cue, o explica causa exacta | ARM nunca persiste | **Simulated**; nodo pendiente |
+| TOMA / EDICIÓN | clic → workspace de captura/editor | sesión UI | **Scaffolded**; interacción host pendiente |
+| RED / SALIDA | clic → workspace de red/telemetría | sesión UI | **Scaffolded**; interacción host pendiente |
+| Lista de canciones | clic selecciona; doble clic renombra; nueva hasta 15 | sí | **Scaffolded**; interacción host pendiente |
+| GRABAR NUEVA TOMA | clic → captura Art-Net U1 a disco; segundo clic finaliza TOMA BRUTA | sí, archivo | **Simulated** con Art-Net loopback |
+| REPRODUCIR / DETENER | clic → cursor relativo por muestras / pausa HOLD | runtime | **Simulated** con reloj host/monotónico |
+| Timeline y cabezal | clic/arrastre → scrub libre si está desarmado | edit state | **Scaffolded**; interacción host pendiente |
+| Handles / marcar ENTRADA-SALIDA | arrastre, timecode o ±1f → rango no destructivo | edit state | **Scaffolded**; interacción host pendiente |
+| Zoom / pan | rueda, `-/+`, `Shift+arrastre` | sesión UI | **Scaffolded**; interacción host pendiente |
+| Versiones / volver a TOMA BRUTA | flechas/acción → selecciona archivo y rango reales | sesión | **Simulated** backend; interacción pendiente |
+| CONSOLIDAR MUESTRA DMX | clic → nuevo `.aeylatake`, toma bruta byte-identical | sí, archivo | **Simulated** backend |
+| Adaptador RX/TX | flechas → selecciona NIC; cambiar TX desarma | sesión | **Scaffolded**; NIC host pendiente |
+| IPv4 AEYLA / MÁSCARA | texto → parser estricto → helper UAC → alias/validación/rollback | sistema Windows | **Simulated** protocolo; UAC físico pendiente |
+| Telemetría RX/TX/AUTORIDAD | workers → señal/edad/paquetes/saltos/errores/retrasos/fail-closed | no | **Scaffolded**; render host pendiente |
 | Runtime con editor cerrado | audio publica muestras/heartbeat; workers de clip y UDP continúan sin `OnIdle` | no | **Simulated**; REAPER real pendiente |
-| Offline render | hard disarm + blackout | no | **Implemented / Simulated**; host pendiente |
+| Offline render | hard disarm + blackout | no | **Simulated**; host pendiente |
 | SHOW MODE | no presente | UI state | **Specified** |
 
 ## Límites visibles de esta entrega

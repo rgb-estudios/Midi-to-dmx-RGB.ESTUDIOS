@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <iterator>
 #include <optional>
 #include <sstream>
+#include <vector>
 
 namespace {
 
@@ -36,7 +38,23 @@ long long DeltaFrames(double deltaSeconds, std::uint16_t fps)
 
 bool IsRawTakeName(std::string_view name)
 {
-  return !name.starts_with("Clip consolidado ");
+  return !name.starts_with("Clip consolidado ") &&
+         !name.starts_with("Muestra DMX consolidada ");
+}
+
+void ApplyVersionMetadata(
+    aeyla::take_library_session::TakeEditState& state,
+    const std::vector<aeyla::capture::TakeFileIndexEntry>& newestFirst)
+{
+  state.version_count = newestFirst.size();
+  state.version_index = 0U;
+  for(auto entry = newestFirst.rbegin(); entry != newestFirst.rend(); ++entry)
+  {
+    if(entry->path != state.path) continue;
+    state.version_index = static_cast<std::size_t>(
+        std::distance(newestFirst.rbegin(), entry));
+    return;
+  }
 }
 
 std::optional<aeyla::take_library_session::TakeEditState> MakeEditState(
@@ -82,17 +100,34 @@ std::optional<aeyla::take_library_session::TakeEditState> LatestEditState(
     error = "Selecciona primero una biblioteca de tomas";
     return std::nullopt;
   }
+  auto current = aeyla::take_library_session::edit_state(owner, songId);
+  if(current.has_value() && current->frame_count > 0U &&
+     current->frames_per_second > 0U && current->activity_count > 0U &&
+     current->version_count > 0U &&
+     current->start_frame < current->end_frame_exclusive &&
+     current->end_frame_exclusive <= current->frame_count)
+    return current;
+
+  if(const auto unavailable =
+         aeyla::take_library_session::unavailable_reason(owner, songId)) {
+    error = *unavailable;
+    return std::nullopt;
+  }
+
   const auto scan = aeyla::capture::scan_take_directory(library, songId);
   if(!scan.ok()) {
     error = scan.error;
+    aeyla::take_library_session::set_unavailable_reason(
+        owner, songId, error);
     return std::nullopt;
   }
   if(scan.entries.empty()) {
     error = "No existe una toma DMX para editar";
+    aeyla::take_library_session::set_unavailable_reason(
+        owner, songId, error);
     return std::nullopt;
   }
 
-  auto current = aeyla::take_library_session::edit_state(owner, songId);
   if(current.has_value()) {
     const auto match = std::find_if(
         scan.entries.begin(), scan.entries.end(),
@@ -101,8 +136,11 @@ std::optional<aeyla::take_library_session::TakeEditState> LatestEditState(
                  entry.frame_count == current->frame_count &&
                  entry.frames_per_second == current->frames_per_second;
         });
-    if(match != scan.entries.end() && current->activity_count > 0U)
+    if(match != scan.entries.end() && current->activity_count > 0U) {
+      ApplyVersionMetadata(*current, scan.entries);
+      aeyla::take_library_session::set_edit_state(owner, songId, *current);
       return current;
+    }
     if(match != scan.entries.end()) {
       auto refreshed = MakeEditState(*match, error);
       if(!refreshed.has_value()) return std::nullopt;
@@ -111,6 +149,7 @@ std::optional<aeyla::take_library_session::TakeEditState> LatestEditState(
       refreshed->end_frame_exclusive = std::clamp(
           current->end_frame_exclusive, refreshed->start_frame + 1U,
           refreshed->frame_count);
+      ApplyVersionMetadata(*refreshed, scan.entries);
       aeyla::take_library_session::set_edit_state(owner, songId, *refreshed);
       return refreshed;
     }
@@ -118,6 +157,7 @@ std::optional<aeyla::take_library_session::TakeEditState> LatestEditState(
 
   auto state = MakeEditState(scan.entries.front(), error);
   if(!state.has_value()) return std::nullopt;
+  ApplyVersionMetadata(*state, scan.entries);
   aeyla::take_library_session::set_edit_state(owner, songId, *state);
   return state;
 }
@@ -134,7 +174,7 @@ bool AeylaVisualDmx::ApplyCapturedTakeAutoIn(
     return false;
   if(state->frame_count < 2U || state->frames_per_second == 0U)
   {
-    error = "La toma es demasiado corta para aplicar IN automático";
+    error = "La toma es demasiado corta para aplicar ENTRADA automática";
     return false;
   }
 
@@ -151,7 +191,7 @@ bool AeylaVisualDmx::ApplyCapturedTakeAutoIn(
   }
   if(songId.empty())
   {
-    error = "No hay una canción activa para asociar el IN automático";
+    error = "No hay una canción activa para asociar la ENTRADA automática";
     return false;
   }
 
@@ -198,7 +238,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::AdjustActiveTakeInFromUI(
       current + DeltaFrames(deltaSeconds, state->frames_per_second),
       0LL, std::max(0LL, maximum));
   state->start_frame = static_cast<std::uint64_t>(next);
-  aeyla::take_library_session::set_edit_state(this, songId, *state);
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error))
@@ -207,6 +246,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::AdjustActiveTakeInFromUI(
          static_cast<std::size_t>(state->start_frame),
          static_cast<std::size_t>(state->end_frame_exclusive), error))
     return {false, {}, error};
+  aeyla::take_library_session::set_edit_state(this, songId, *state);
   aeyla::take_library_session::set_loaded_path(this, songId, state->path);
 
   const double inSeconds = static_cast<double>(state->start_frame) /
@@ -254,7 +294,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::AdjustActiveTakeOutFromUI(
       current + DeltaFrames(deltaSeconds, state->frames_per_second),
       minimum, maximum);
   state->end_frame_exclusive = static_cast<std::uint64_t>(next);
-  aeyla::take_library_session::set_edit_state(this, songId, *state);
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error))
@@ -263,6 +302,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::AdjustActiveTakeOutFromUI(
          static_cast<std::size_t>(state->start_frame),
          static_cast<std::size_t>(state->end_frame_exclusive), error))
     return {false, {}, error};
+  aeyla::take_library_session::set_edit_state(this, songId, *state);
   aeyla::take_library_session::set_loaded_path(this, songId, state->path);
 
   const double inSeconds = static_cast<double>(state->start_frame) /
@@ -297,7 +337,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ResetActiveTakeTrimFromUI()
     return {false, {}, error};
   state->start_frame = 0U;
   state->end_frame_exclusive = state->frame_count;
-  aeyla::take_library_session::set_edit_state(this, songId, *state);
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error))
@@ -305,6 +344,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ResetActiveTakeTrimFromUI()
   if(!mTakeScheduler.set_play_range(0U,
          static_cast<std::size_t>(state->frame_count), error))
     return {false, {}, error};
+  aeyla::take_library_session::set_edit_state(this, songId, *state);
+  aeyla::take_library_session::set_loaded_path(this, songId, state->path);
   return {true, {}, "ENTRADA / SALIDA restauradas a la grabación completa"};
 }
 
@@ -344,7 +385,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConsolidateActiveTakeFromUI()
     return {false, {}, "No se pudo revisar la biblioteca de tomas · " + scan.error};
 
   const std::string clipName =
-      "Clip consolidado " + std::to_string(scan.entries.size() + 1U);
+      "Muestra DMX consolidada " + std::to_string(scan.entries.size() + 1U);
   const auto target = aeyla::capture::make_take_file_path(
       library, songName.empty() ? songId : songName, clipName);
 
@@ -367,22 +408,25 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ConsolidateActiveTakeFromUI()
   auto consolidatedState = MakeEditState(consolidatedEntry, error);
   if(!consolidatedState.has_value())
     return {false, clipName,
-            "El clip se guardó, pero su actividad no pudo indexarse · " + error};
+            "La muestra se guardó, pero su actividad no pudo indexarse · " + error};
+  consolidatedState->version_count = scan.entries.size() + 1U;
+  consolidatedState->version_index = scan.entries.size();
   aeyla::take_library_session::set_edit_state(this, songId,
                                                *consolidatedState);
   aeyla::take_library_session::set_loaded_path(this, songId,
                                                consolidated.target_path);
   aeyla::take_library_session::set_storage_message(
-      this, "CLIP CONSOLIDADO · " + consolidated.target_path.filename().string());
+      this, "MUESTRA DMX CONSOLIDADA · " +
+                consolidated.target_path.filename().string());
 
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   if(!mTakeScheduler.load_take_file(consolidated.target_path,
                                     GetSampleRate(), error))
     return {false, clipName,
-            "El clip se guardó, pero no pudo prepararse para reproducción · " + error};
+            "La muestra se guardó, pero no pudo prepararse para reproducción · " + error};
 
   return {true, clipName,
-          "CLIP CONSOLIDADO · 00:00 = ENTRADA · " +
+          "MUESTRA DMX CONSOLIDADA · 00:00 = ENTRADA · " +
               FormatTime(consolidated.duration_seconds) + " · 44 Hz"};
 }
 
@@ -536,6 +580,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::CycleActiveTakeVersionFromUI(
   std::string error;
   auto state = MakeEditState(scan.entries[static_cast<std::size_t>(next)], error);
   if(!state.has_value()) return {false, {}, error};
+  state->version_index = static_cast<std::size_t>(next);
+  state->version_count = scan.entries.size();
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error) ||
      !mTakeScheduler.set_play_range(0U,
@@ -567,16 +613,17 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ReturnToRawTakeFromUI()
   const auto raw = std::find_if(scan.entries.begin(), scan.entries.end(),
       [](const auto& entry) { return IsRawTakeName(entry.take_name); });
   if(raw == scan.entries.end())
-    return {false, {}, "No se encontró una toma RAW para esta canción"};
+    return {false, {}, "No se encontró una TOMA BRUTA para esta canción"};
   std::string error;
   auto state = MakeEditState(*raw, error);
   if(!state.has_value()) return {false, {}, error};
+  ApplyVersionMetadata(*state, scan.entries);
   mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
   if(!mTakeScheduler.load_take_file(state->path, GetSampleRate(), error))
     return {false, {}, error};
   aeyla::take_library_session::set_edit_state(this, songId, *state);
   aeyla::take_library_session::set_loaded_path(this, songId, state->path);
-  return {true, state->take_name, "TOMA ORIGINAL · " + state->take_name};
+  return {true, state->take_name, "TOMA BRUTA · " + state->take_name};
 }
 
 AeylaTakeEditorSnapshot AeylaVisualDmx::ActiveTakeEditorSnapshot() const
@@ -601,6 +648,8 @@ AeylaTakeEditorSnapshot AeylaVisualDmx::ActiveTakeEditorSnapshot() const
   result.raw_source = state->raw_source;
   result.path = state->path;
   result.take_name = state->take_name;
+  result.version_index = state->version_index;
+  result.version_count = state->version_count;
   result.frame_count = state->frame_count;
   result.start_frame = state->start_frame;
   result.end_frame_exclusive = state->end_frame_exclusive;
@@ -616,91 +665,5 @@ AeylaTakeEditorSnapshot AeylaVisualDmx::ActiveTakeEditorSnapshot() const
                                 state->frame_count - 1U)
       : state->start_frame;
 
-  auto scan = aeyla::capture::scan_take_directory(library, songId);
-  if(scan.ok()) {
-    std::reverse(scan.entries.begin(), scan.entries.end());
-    result.version_count = scan.entries.size();
-    const auto found = std::find_if(scan.entries.begin(), scan.entries.end(),
-        [&](const auto& entry) { return entry.path == state->path; });
-    if(found != scan.entries.end())
-      result.version_index = static_cast<std::size_t>(found - scan.entries.begin());
-  }
   return result;
-}
-
-double AeylaVisualDmx::ActiveTakeInSeconds() const
-{
-  std::string projectId;
-  std::string songId;
-  {
-    const std::scoped_lock modelLock(mModelMutex);
-    const auto snapshot = mModel.snapshot();
-    projectId = snapshot.project_id;
-    songId = snapshot.active_song_id;
-  }
-  aeyla::take_library_session::ensure_scope(this, projectId);
-  const auto library = aeyla::take_library_session::directory(this);
-  std::string error;
-  const auto state = LatestEditState(this, library, songId, error);
-  if(!state.has_value() || state->frames_per_second == 0U) return 0.0;
-  return static_cast<double>(state->start_frame) /
-         static_cast<double>(state->frames_per_second);
-}
-
-double AeylaVisualDmx::ActiveTakeOutSeconds() const
-{
-  std::string projectId;
-  std::string songId;
-  {
-    const std::scoped_lock modelLock(mModelMutex);
-    const auto snapshot = mModel.snapshot();
-    projectId = snapshot.project_id;
-    songId = snapshot.active_song_id;
-  }
-  aeyla::take_library_session::ensure_scope(this, projectId);
-  const auto library = aeyla::take_library_session::directory(this);
-  std::string error;
-  const auto state = LatestEditState(this, library, songId, error);
-  if(!state.has_value() || state->frames_per_second == 0U) return 0.0;
-  return static_cast<double>(state->end_frame_exclusive) /
-         static_cast<double>(state->frames_per_second);
-}
-
-double AeylaVisualDmx::ActiveTakeOriginalDurationSeconds() const
-{
-  std::string projectId;
-  std::string songId;
-  {
-    const std::scoped_lock modelLock(mModelMutex);
-    const auto snapshot = mModel.snapshot();
-    projectId = snapshot.project_id;
-    songId = snapshot.active_song_id;
-  }
-  aeyla::take_library_session::ensure_scope(this, projectId);
-  const auto library = aeyla::take_library_session::directory(this);
-  std::string error;
-  const auto state = LatestEditState(this, library, songId, error);
-  if(!state.has_value() || state->frames_per_second == 0U) return 0.0;
-  return static_cast<double>(state->frame_count) /
-         static_cast<double>(state->frames_per_second);
-}
-
-double AeylaVisualDmx::ActiveTakeEffectiveDurationSeconds() const
-{
-  std::string projectId;
-  std::string songId;
-  {
-    const std::scoped_lock modelLock(mModelMutex);
-    const auto snapshot = mModel.snapshot();
-    projectId = snapshot.project_id;
-    songId = snapshot.active_song_id;
-  }
-  aeyla::take_library_session::ensure_scope(this, projectId);
-  const auto library = aeyla::take_library_session::directory(this);
-  std::string error;
-  const auto state = LatestEditState(this, library, songId, error);
-  if(!state.has_value() || state->frames_per_second == 0U ||
-     state->end_frame_exclusive <= state->start_frame) return 0.0;
-  return static_cast<double>(state->end_frame_exclusive - state->start_frame) /
-         static_cast<double>(state->frames_per_second);
 }

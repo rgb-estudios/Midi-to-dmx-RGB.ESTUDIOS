@@ -35,19 +35,23 @@ public:
 
     static constexpr const char* labels[] = {
         "NUEVO", "ABRIR", "GUARDAR", "GUARDAR COMO"};
+    const bool projectChangeBlocked = mPlug.TakeRecording();
     for(std::size_t index = 0; index < mButtons.size(); ++index)
     {
-      g.FillRoundRect(raised, mButtons[index], 5.0F);
-      g.DrawRoundRect(line, mButtons[index], 5.0F, nullptr, 1.0F);
-      g.DrawText(IText(12.0F, text,
+      const bool blocked = projectChangeBlocked && index < 2U;
+      g.FillRoundRect(blocked ? IColor(255, 35, 31, 25) : raised,
+                      mButtons[index], 5.0F);
+      g.DrawRoundRect(blocked ? warning : line,
+                      mButtons[index], 5.0F, nullptr, 1.0F);
+      g.DrawText(IText(12.0F, blocked ? warning : text,
                        "AeylaUI", EAlign::Center, EVAlign::Middle),
                  labels[index], mButtons[index]);
     }
 
     std::string projectLabel = mPlug.ProjectDirty() ? "SIN GUARDAR  ·  " : "GUARDADO  ·  ";
-    projectLabel += mPlug.ProjectName();
-    if(!mPlug.CurrentProjectPath().empty())
-      projectLabel += "  ·  " + mPlug.CurrentProjectPath().filename().string();
+    projectLabel += mPlug.CurrentProjectPath().empty()
+        ? mPlug.ProjectName()
+        : mPlug.CurrentProjectPath().filename().string();
     g.DrawText(IText(12.0F, mPlug.ProjectDirty() ? warning : valid,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
                projectLabel.c_str(), mProjectStatus);
@@ -100,6 +104,11 @@ public:
 
     if(Contains(mButtons[0], x, y))
     {
+      if(mPlug.TakeRecording())
+      {
+        ReportFileStatus(mPlug.NewProjectFromUI());
+        return;
+      }
       ConfirmDiscardThen([this]() {
         ReportFileStatus(mPlug.NewProjectFromUI());
         SetDirty(false);
@@ -108,6 +117,11 @@ public:
     }
     if(Contains(mButtons[1], x, y))
     {
+      if(mPlug.TakeRecording())
+      {
+        ReportFileStatus(mPlug.OpenProjectFromUI(std::filesystem::path{}));
+        return;
+      }
       ConfirmDiscardThen([this]() { PromptOpen(); });
       return;
     }

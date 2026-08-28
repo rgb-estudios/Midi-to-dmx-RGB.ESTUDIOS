@@ -1,5 +1,10 @@
 # AEYLA · HANDOFF R07 PRETEST · CONTINUIDAD ENTRE CHATS
 
+> **DOCUMENTO HISTÓRICO / SUPERADO.** No usar como manual operativo ni como
+> estado actual de gates. La autoridad vigente es
+> `AEYLA_OPERATOR_WORKFLOW_ES.md`, `AEYLA_VALIDATION_MATRIX.md` y
+> `AEYLA_GATES_R07_ESTADO_ES.md`.
+
 Fecha: 25/26 agosto 2026
 Rama activa: `agent/aeyla-r05-dmx-clip-runtime`
 PR de trabajo: #21 (borrador / no show-ready)
@@ -23,7 +28,7 @@ La oportunidad de prueba de campo será limitada: aproximadamente 2 horas efecti
 
 ## 2. Arquitectura congelada
 
-Avolites → Art-Net U1 → AEYLA CAPTURA → TOMA ORIGINAL `.aeylatake` → EDITOR DMX → CONSOLIDAR CLIP → comandos MIDI del DAW → reproductor relativo AEYLA → Art-Net 44 Hz → NIC física → nodo → DMX.
+Avolites → Art-Net U1 → AEYLA CAPTURA → TOMA BRUTA `.aeylatake` → EDITOR DMX → CONSOLIDAR MUESTRA DMX → reproductor relativo AEYLA → Art-Net 44 Hz → NIC física → nodo → DMX.
 
 Reglas:
 
@@ -89,18 +94,18 @@ Aun así, antes de la prueba se debe verificar:
 
 Implementado en código e interfaz:
 
-- TOMA ORIGINAL preservada e inmutable.
+- TOMA BRUTA preservada e inmutable.
 - captura directa a disco con RAM acotada.
 - lector/reproductor file-backed con caché fija.
 - ENTRADA/SALIDA no destructivos.
 - reproducción relativa por muestras.
-- backend `CONSOLIDAR CLIP`: genera un nuevo `.aeylatake` usando sólo ENTRADA→SALIDA.
+- backend `CONSOLIDAR MUESTRA DMX`: genera un nuevo `.aeylatake` usando sólo ENTRADA→SALIDA.
 - el primer cuadro de ENTRADA pasa a ser 00:00 del consolidado.
 - consolidación file-backed sin materializar toda la canción en RAM.
 - reapertura/validación del consolidado mediante metadatos/checksum/cantidad de cuadros.
-- botón visible `CONSOLIDAR CLIP` conectado al rango ENTRADA/SALIDA;
+- botón visible `CONSOLIDAR MUESTRA DMX` conectado al rango ENTRADA/SALIDA;
 - el clip consolidado queda seleccionado y preparado como fuente de reproducción;
-- el test automatizado comprueba que la TOMA ORIGINAL permanece idéntica byte por byte.
+- el test automatizado comprueba que la TOMA BRUTA permanece idéntica byte por byte.
 
 Pendiente para completar el editor avanzado:
 
@@ -108,7 +113,7 @@ Pendiente para completar el editor avanzado:
 - handles ENTRADA/SALIDA arrastrables;
 - playhead + scrub/preview;
 - zoom horizontal;
-- navegación TOMA ORIGINAL / tomas / clip consolidado activo;
+- navegación TOMA BRUTA / tomas / muestra consolidada activa;
 - revertir a RAW claramente;
 - prueba de cerrar/abrir editor sin afectar runtime.
 

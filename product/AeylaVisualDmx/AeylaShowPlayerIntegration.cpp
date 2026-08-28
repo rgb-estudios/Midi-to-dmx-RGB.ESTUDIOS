@@ -17,11 +17,14 @@ std::string FormatDuration(double seconds)
 {
   if(!std::isfinite(seconds) || seconds < 0.0)
     seconds = 0.0;
-  const auto total = static_cast<std::uint64_t>(std::llround(seconds));
-  const auto minutes = total / 60U;
-  const auto remainder = total % 60U;
+  const auto totalMs = static_cast<std::uint64_t>(
+      std::llround(seconds * 1000.0));
+  const auto minutes = totalMs / 60000U;
+  const auto secondsPart = (totalMs / 1000U) % 60U;
+  const auto milliseconds = totalMs % 1000U;
   std::ostringstream stream;
-  stream << minutes << ':' << std::setw(2) << std::setfill('0') << remainder;
+  stream << minutes << ':' << std::setw(2) << std::setfill('0')
+         << secondsPart << '.' << std::setw(3) << milliseconds;
   return stream.str();
 }
 
@@ -57,28 +60,6 @@ std::optional<std::filesystem::path> PromptTakeLibraryDirectory(IGraphics* ui)
   return std::filesystem::u8path(text);
 }
 
-std::optional<aeyla::capture::TakeFileIndexEntry> NewestTake(
-    const std::filesystem::path& library,
-    std::string_view songId,
-    std::string& error)
-{
-  error.clear();
-  if(library.empty()) {
-    error = "No hay una biblioteca de tomas seleccionada";
-    return std::nullopt;
-  }
-  auto scan = aeyla::capture::scan_take_directory(library, songId);
-  if(!scan.ok()) {
-    error = scan.error;
-    return std::nullopt;
-  }
-  if(scan.entries.empty()) {
-    error = "No hay tomas DMX guardadas para esta canción";
-    return std::nullopt;
-  }
-  return scan.entries.front();
-}
-
 const aeyla::capture::TakeFileIndexEntry& SelectedTake(
     const void* owner,
     std::string_view songId,
@@ -89,7 +70,14 @@ const aeyla::capture::TakeFileIndexEntry& SelectedTake(
     const auto found = std::find_if(
         scan.entries.begin(), scan.entries.end(),
         [&](const auto& entry) { return entry.path == edited->path; });
-    if(found != scan.entries.end()) return *found;
+    if(found != scan.entries.end() &&
+       found->frame_count == edited->frame_count &&
+       found->frames_per_second == edited->frames_per_second)
+      return *found;
+
+    // An external delete/replace cannot leave the editor pointing at a file
+    // that the validated library index no longer contains.
+    aeyla::take_library_session::clear_edit_state(owner, songId);
   }
   return scan.entries.front();
 }
@@ -124,6 +112,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::RenameSongFromUI(
     return {false, {}, "Detén la grabación antes de renombrar una canción"};
   if(TakePlaying())
     return {false, {}, "Detén la reproducción antes de renombrar una canción"};
+  if(TakeOutputArmed())
+    return {false, {}, "Desarma la salida antes de renombrar una canción"};
 
   const std::string normalized = TrimOperatorText(name);
   if(normalized.empty())
@@ -206,6 +196,9 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
 
 bool AeylaVisualDmx::RefreshNetworkInterfacesFromUI()
 {
+  if(NetworkConfigurationBusy() || TakeRecording() ||
+     TakeOutputArmed() || OutputArmed())
+    return false;
   const auto discovered = aeyla::network::enumerate_ipv4_interfaces();
   std::string previousRxId;
   std::string previousTxId;
@@ -278,7 +271,7 @@ std::size_t AeylaVisualDmx::NetworkInterfaceCount() const
 
 bool AeylaVisualDmx::CycleRxInterfaceFromUI(int direction)
 {
-  if(direction == 0 || TakeRecording())
+  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording())
     return false;
   {
     const std::scoped_lock lock(mNetworkMutex);
@@ -293,7 +286,7 @@ bool AeylaVisualDmx::CycleRxInterfaceFromUI(int direction)
 
 bool AeylaVisualDmx::CycleTxInterfaceFromUI(int direction)
 {
-  if(direction == 0 || mNetworkConfiguration.Snapshot().busy())
+  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording())
     return false;
 
   mTakeScheduler.disarm();
@@ -353,6 +346,15 @@ std::string AeylaVisualDmx::TxInterfaceStatus() const
               : item.ipv4 + "/" + std::to_string(item.prefix_length));
 }
 
+std::optional<aeyla::network::NetworkInterface>
+AeylaVisualDmx::SelectedTxInterface() const
+{
+  const std::scoped_lock lock(mNetworkMutex);
+  if(mTxInterfaceIndex >= mNetworkInterfaces.size())
+    return std::nullopt;
+  return mNetworkInterfaces[mTxInterfaceIndex];
+}
+
 aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
     std::string ipv4,
     std::string mask)
@@ -363,7 +365,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
     return {false, {}, std::move(error)};
   if(TakeRecording())
     return {false, {}, "Detén GRABAR antes de cambiar la red TX"};
-  if(mNetworkConfiguration.Snapshot().busy())
+  if(NetworkConfigurationBusy())
     return {false, {}, "Espera a que termine el cambio de red actual"};
 
   aeyla::network::NetworkInterface adapter;
@@ -430,7 +432,10 @@ std::string AeylaVisualDmx::NetworkConfigurationStatus() const
 
 bool AeylaVisualDmx::NetworkConfigurationBusy() const
 {
-  return mNetworkConfiguration.Snapshot().busy();
+  const auto operation = mNetworkConfiguration.Snapshot();
+  return operation.busy() ||
+         operation.revision != mLastNetworkConfigurationRevision.load(
+             std::memory_order_acquire);
 }
 
 void AeylaVisualDmx::RestartCaptureInputFromRouting()
@@ -488,24 +493,34 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
   // reconstruimos la toma completa en RAM.
   if(mArtNetCapture.streamed_recording_active())
   {
+    const auto expectedTarget = mActiveCaptureTarget;
     std::string error;
     if(!mArtNetCapture.end_streamed_recording(error))
     {
+      mActiveCaptureTarget.clear();
       mCaptureSyncAnchor.reset();
       aeyla::take_library_session::set_storage_message(
           this, "ERROR DE GRABACIÓN · " + error);
       return {false, {}, "No fue posible cerrar la toma DMX · " + error};
     }
+    mActiveCaptureTarget.clear();
 
     const auto library = aeyla::take_library_session::directory(this);
     auto scan = aeyla::capture::scan_take_directory(library, songId);
-    if(!scan.ok() || scan.entries.empty())
+    const auto captured = aeyla::capture::find_take_entry_by_path(
+        scan, expectedTarget);
+    if(!scan.ok() || !captured.has_value())
     {
       mCaptureSyncAnchor.reset();
-      return {false, {}, "La grabación terminó, pero no se pudo indexar el archivo final"};
+      const std::string detail = scan.ok()
+          ? "el archivo exacto no apareció en el índice"
+          : scan.error;
+      return {false, {},
+              "La grabación terminó, pero no se pudo verificar su archivo final · " +
+                  detail};
     }
 
-    const auto& newest = scan.entries.front();
+    const auto& newest = *captured;
     const auto automaticIn = mCaptureSyncAnchor.resolved_anchor(
         newest.frame_count);
     std::string syncMessage;
@@ -517,21 +532,21 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
             ? 0.0
             : static_cast<double>(*automaticIn) /
                   static_cast<double>(newest.frames_per_second);
-        syncMessage = " · IN AUTO " + FormatDuration(inSeconds) +
-                      " · PLAY/MTC";
+        syncMessage = " · ENTRADA AUTO " + FormatDuration(inSeconds) +
+                      " · REPRODUCIR / MTC";
       }
       else
       {
         aeyla::take_library_session::clear_edit_state(this, songId);
         aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
-        syncMessage = " · IN AUTO NO DISPONIBLE · " + error;
+        syncMessage = " · ENTRADA AUTO NO DISPONIBLE · " + error;
       }
     }
     else
     {
       aeyla::take_library_session::clear_edit_state(this, songId);
       aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
-      syncMessage = " · SIN ANCLA PLAY/MTC · AJUSTA IN MANUALMENTE";
+      syncMessage = " · SIN ANCLA REPRODUCIR / MTC · AJUSTA ENTRADA MANUALMENTE";
     }
     mCaptureSyncAnchor.reset();
     aeyla::take_library_session::set_storage_message(
@@ -549,6 +564,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
   if(mArtNetCapture.stats().recording)
   {
     mArtNetCapture.discard_recording();
+    mActiveCaptureTarget.clear();
     mCaptureSyncAnchor.reset();
     return {false, {}, "Se descartó una captura heredada no compatible con R07"};
   }
@@ -615,14 +631,16 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
   std::string error;
   if(!mArtNetCapture.begin_streamed_recording(stream, error))
   {
+    mActiveCaptureTarget.clear();
     mCaptureSyncAnchor.reset();
     return {false, {}, "No fue posible iniciar la grabación directa a disco · " + error};
   }
+  mActiveCaptureTarget = target;
 
   const auto sync = mCaptureSyncAnchor.status();
   const std::string syncMessage =
       sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport
-          ? " · ESPERANDO PLAY/MTC"
+          ? " · ESPERANDO REPRODUCIR / MTC"
           : " · SIN ANCLA AUTOMÁTICA · INICIA GRABACIÓN CON REAPER DETENIDO";
 
   aeyla::take_library_session::set_storage_message(
@@ -634,7 +652,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
 
 bool AeylaVisualDmx::TakeRecording() const noexcept
 {
-  return mArtNetCapture.stats().recording;
+  const auto stats = mArtNetCapture.stats();
+  return stats.recording || stats.streaming_to_disk;
 }
 
 bool AeylaVisualDmx::TakePlaying() const noexcept
@@ -645,24 +664,6 @@ bool AeylaVisualDmx::TakePlaying() const noexcept
 bool AeylaVisualDmx::TakeOutputArmed() const noexcept
 {
   return mTakeScheduler.status().armed;
-}
-
-bool AeylaVisualDmx::HasActiveTake() const
-{
-  std::string projectId;
-  std::string songId;
-  {
-    const std::scoped_lock modelLock(mModelMutex);
-    const auto snapshot = mModel.snapshot();
-    projectId = snapshot.project_id;
-    songId = snapshot.active_song_id;
-  }
-  if(songId.empty()) return false;
-  aeyla::take_library_session::ensure_scope(this, projectId);
-  const auto library = aeyla::take_library_session::directory(this);
-  if(library.empty()) return false;
-  const auto scan = aeyla::capture::scan_take_directory(library, songId);
-  return scan.ok() && !scan.entries.empty();
 }
 
 aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
@@ -723,8 +724,18 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
 
   std::string error;
   const auto loaded = aeyla::take_library_session::loaded_path(this, songId);
+  const auto edited = aeyla::take_library_session::edit_state(this, songId);
+  const auto scheduler = mTakeScheduler.status();
+  const std::uint64_t expectedStart =
+      edited.has_value() && edited->path == selected.path
+          ? edited->start_frame : 0U;
+  const std::uint64_t expectedEnd =
+      edited.has_value() && edited->path == selected.path
+          ? edited->end_frame_exclusive : selected.frame_count;
   const bool sameValidatedClip =
-      loaded == selected.path && mTakeScheduler.status().file_backed;
+      loaded == selected.path && scheduler.file_backed &&
+      scheduler.range_start_frame == expectedStart &&
+      scheduler.range_end_frame_exclusive == expectedEnd;
   if(!sameValidatedClip)
   {
     // Loading is intentionally destructive to output authority, so it is done
@@ -733,7 +744,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
     mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
     if(!mTakeScheduler.load_take_file(selected.path, GetSampleRate(), error))
       return {false, {}, "La toma no superó la validación · " + error};
-    const auto edited = aeyla::take_library_session::edit_state(this, songId);
     if(edited.has_value() && edited->path == selected.path &&
        !mTakeScheduler.set_play_range(
            static_cast<std::size_t>(edited->start_frame),
@@ -751,7 +761,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleActiveTakePlaybackFromUI()
          error, aeyla::capture::DmxClipClockSource::monotonic_realtime))
     return {false, {}, error};
 
-  const auto edited = aeyla::take_library_session::edit_state(this, songId);
   const std::uint64_t selectedFrames = edited.has_value() &&
           edited->path == selected.path
       ? edited->end_frame_exclusive - edited->start_frame
@@ -824,13 +833,24 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
     return {false, {}, "El universo de la toma no coincide con la salida del proyecto"};
 
   const auto loaded = aeyla::take_library_session::loaded_path(this, songId);
-  if(loaded != selected.path || !mTakeScheduler.status().file_backed)
+  const auto edited = aeyla::take_library_session::edit_state(this, songId);
+  const auto scheduler = mTakeScheduler.status();
+  const std::uint64_t expectedStart =
+      edited.has_value() && edited->path == selected.path
+          ? edited->start_frame : 0U;
+  const std::uint64_t expectedEnd =
+      edited.has_value() && edited->path == selected.path
+          ? edited->end_frame_exclusive : selected.frame_count;
+  const bool sameValidatedClip =
+      loaded == selected.path && scheduler.file_backed &&
+      scheduler.range_start_frame == expectedStart &&
+      scheduler.range_end_frame_exclusive == expectedEnd;
+  if(!sameValidatedClip)
   {
     std::string loadError;
     mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
     if(!mTakeScheduler.load_take_file(selected.path, GetSampleRate(), loadError))
       return {false, {}, "No fue posible preparar la toma desde disco · " + loadError};
-    const auto edited = aeyla::take_library_session::edit_state(this, songId);
     if(edited.has_value() && edited->path == selected.path &&
        !mTakeScheduler.set_play_range(
            static_cast<std::size_t>(edited->start_frame),
@@ -849,9 +869,12 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
 std::string AeylaVisualDmx::ActiveTakeStatus() const
 {
   const auto captureStats = mArtNetCapture.stats();
-  if(captureStats.recording)
+  if(captureStats.recording || captureStats.streaming_to_disk)
   {
-    std::string result = "GRABANDO · " +
+    std::string result = captureStats.recording
+        ? "GRABANDO · "
+        : "CAPTURA DETENIDA POR ERROR · ";
+    result +=
         std::to_string(captureStats.recorded_frames) + " CUADROS";
     if(captureStats.streaming_to_disk)
       result += " · DISCO";
@@ -859,9 +882,9 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
       result += " · ERROR DE ALMACENAMIENTO";
     const auto sync = mCaptureSyncAnchor.status();
     if(sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport)
-      result += " · ESPERANDO PLAY/MTC";
+      result += " · ESPERANDO REPRODUCIR / MTC";
     else if(sync.state == aeyla::capture::DmxCaptureSyncState::anchored)
-      result += " · SINCRONÍA FIJADA · IN AUTO " +
+      result += " · SINCRONÍA FIJADA · ENTRADA AUTO " +
           FormatDuration(static_cast<double>(sync.anchor_frame) / 44.0);
     else if(sync.state == aeyla::capture::DmxCaptureSyncState::unavailable)
       result += " · SIN ANCLA DAW";
@@ -881,11 +904,8 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
   const auto library = aeyla::take_library_session::directory(this);
   if(library.empty()) return "SIN BIBLIOTECA DE TOMAS";
 
-  const auto scan = aeyla::capture::scan_take_directory(library, songId);
-  if(!scan.ok()) return "ERROR DE BIBLIOTECA · " + scan.error;
-  if(scan.entries.empty()) return "SIN TOMA · GRABA UNA TOMA DMX";
-
-  const auto& take = SelectedTake(this, songId, scan);
+  const auto take = ActiveTakeEditorSnapshot();
+  if(!take.available) return "SIN TOMA · GRABA UNA TOMA DMX";
   const double duration = take.frames_per_second == 0U
       ? 0.0
       : static_cast<double>(take.frame_count) /
@@ -918,22 +938,13 @@ std::string AeylaVisualDmx::CaptureInputStatus() const
     return "ERROR DE ALMACENAMIENTO · " + stats.storage_error;
   if(stats.signal_present)
     return "RX ACTIVO · " + stats.source_ipv4 + " · U" +
-           std::to_string(stats.port_address) + " · " +
+           std::to_string(static_cast<unsigned>(stats.port_address) + 1U) + " · " +
            std::to_string(stats.packets_accepted) + " PAQUETES";
-  return "RX LISTO · ESPERANDO ART-NET · U" + std::to_string(stats.port_address);
+  return "RX LISTO · ESPERANDO ART-NET · U" +
+         std::to_string(static_cast<unsigned>(stats.port_address) + 1U);
 }
 
 double AeylaVisualDmx::ActiveTakePlaybackProgress() const
 {
   return mTakeScheduler.status().progress;
-}
-
-std::uint64_t AeylaVisualDmx::CaptureAcceptedPackets() const noexcept
-{
-  return mArtNetCapture.stats().packets_accepted;
-}
-
-std::uint64_t AeylaVisualDmx::CaptureSequenceGaps() const noexcept
-{
-  return mArtNetCapture.stats().sequence_gaps;
 }

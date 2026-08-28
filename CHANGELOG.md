@@ -16,6 +16,49 @@
 
 ## Unreleased
 
+### Fixed — R07 auditoría integral de operación
+
+- La finalización de una captura ya resuelve el archivo exacto que abrió el
+  escritor; nunca sustituye la toma por el primer resultado del directorio.
+- Crear/abrir proyecto, crear/renombrar/cambiar canción y actualizar RX/TX
+  quedan bloqueados o desarman de forma explícita cuando GRABAR o una autoridad
+  física siguen activos.
+- La transacción IPv4/UAC permanece bloqueante hasta que el runtime confirma el
+  resultado final; otro cambio de adaptador no puede adelantarse a esa
+  reconciliación.
+- Un fail-closed Art-Net se procesa una sola vez: conserva la prevalidación de
+  red, impone APAGÓN y exige `APAGÓN OFF → ARMAR`, sin volver a enclavar el
+  apagón entre ambos clics.
+- Desactivar el host, entrar en render offline, rechazar estado, fallar el
+  runtime o descargar el plugin desarma también la autoridad file-backed de la
+  toma, no sólo el modelo semántico.
+- Un cierre inesperado del receptor/host finaliza una captura streamed
+  recuperable cuando ya existen cuadros válidos, en lugar de borrar siempre su
+  archivo temporal.
+
+### Changed — R07 limpieza y redistribución de interfaz
+
+- Eliminada la superposición de runtime/editor que no tenía autoridad real y
+  liberado su estado global al destruir cada instancia.
+- La vista de edición ya no enumera y analiza todos los archivos en cada
+  repintado; conserva actividad, versión y búsquedas vacías por canción.
+- La timeline utiliza el espacio vertical disponible, los controles visibles
+  quedan en español y ENTRADA/SALIDA poseen agarres y etiquetas completas.
+- `RED / SALIDA` muestra por separado RECEPCIÓN, TRANSMISIÓN y AUTORIDAD con
+  paquetes, saltos, errores, retrasos y fail-closed, sin depender sólo del
+  color.
+- El campo IPv4/máscara consume el adaptador estructurado seleccionado; ya no
+  reconstruye datos de red analizando una cadena destinada a pantalla.
+
+### Validation boundary — R07 auditoría integral
+
+- La suite nativa pasa a 28 targets e incluye aislamiento por instancia,
+  selección exacta de archivo y recuperación de captura al descargar el host.
+- El flujo portable se simula con Art-Net loopback, captura y TX a 44 Hz,
+  `ARMAR → REPRODUCIR`, reloj sin UI y escritura file-backed. La compilación
+  gráfica/VST3 Windows/macOS, interacción en host, UAC físico, nodo y soak
+  continúan siendo gates separados.
+
 ### Fixed — R07 global blackout / Take authority split
 
 - Separated the global operator/safety blackout latch from the Show renderer's

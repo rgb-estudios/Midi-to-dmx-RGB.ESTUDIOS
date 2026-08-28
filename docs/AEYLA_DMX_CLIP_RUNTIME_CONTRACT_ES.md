@@ -77,10 +77,10 @@ El reloj monotónico queda restringido a la reproducción manual de operador. Lo
 ## 3. Captura
 
 Cuando la consola se programa mediante MTC generado por el mismo DAW anfitrión,
-la captura puede armarse antes de PLAY. AEYLA conserva todo ese pre-roll en el
-RAW, observa el primer inicio de transporte y registra el contador de cuadro
-DMX correspondiente como ancla no destructiva. Al detener la captura, esa ancla
-se propone automáticamente como ENTRADA; CONSOLIDAR CLIP vuelve a escribirla
+la captura puede armarse antes de REPRODUCIR. AEYLA conserva todo ese pre-roll
+en la TOMA BRUTA, observa el primer inicio de transporte y registra el contador
+de cuadro DMX correspondiente como ancla no destructiva. Al detener la captura, esa ancla
+se propone automáticamente como ENTRADA; CONSOLIDAR MUESTRA DMX vuelve a escribirla
 como `00:00` sin modificar ni reemplazar la toma original.
 
 El adaptador VST3 no depende de recibir MIDI Time Code Quarter Frame `0xF1`.

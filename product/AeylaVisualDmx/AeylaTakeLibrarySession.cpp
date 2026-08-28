@@ -13,6 +13,7 @@ struct SessionState {
   std::filesystem::path directory;
   std::map<std::string, std::filesystem::path> loaded_paths;
   std::map<std::string, TakeEditState> edit_states;
+  std::map<std::string, std::string> unavailable_reasons;
   std::string storage_message;
 };
 
@@ -26,8 +27,13 @@ SessionState& state_for(const void* owner) {
 }  // namespace
 
 void clear(const void* owner) noexcept {
-  const std::scoped_lock lock(gMutex);
-  gSessions.erase(owner);
+  try {
+    const std::scoped_lock lock(gMutex);
+    gSessions.erase(owner);
+  } catch(...) {
+    // Destruction must remain fail-safe even if the platform mutex reports an
+    // exceptional condition while the host is unloading the plug-in.
+  }
 }
 
 void ensure_scope(const void* owner, std::string_view project_id) {
@@ -45,6 +51,7 @@ void set_directory(const void* owner, std::filesystem::path directory) {
   state.directory = std::move(directory);
   state.loaded_paths.clear();
   state.edit_states.clear();
+  state.unavailable_reasons.clear();
   state.storage_message.clear();
 }
 
@@ -57,7 +64,10 @@ std::filesystem::path directory(const void* owner) {
 void set_loaded_path(const void* owner, std::string_view song_id,
                      std::filesystem::path path) {
   const std::scoped_lock lock(gMutex);
-  state_for(owner).loaded_paths[std::string(song_id)] = std::move(path);
+  auto& state = state_for(owner);
+  const std::string key(song_id);
+  state.loaded_paths[key] = std::move(path);
+  state.unavailable_reasons.erase(key);
 }
 
 std::filesystem::path loaded_path(const void* owner,
@@ -74,7 +84,10 @@ std::filesystem::path loaded_path(const void* owner,
 void set_edit_state(const void* owner, std::string_view song_id,
                     TakeEditState state) {
   const std::scoped_lock lock(gMutex);
-  state_for(owner).edit_states[std::string(song_id)] = std::move(state);
+  auto& session = state_for(owner);
+  const std::string key(song_id);
+  session.edit_states[key] = std::move(state);
+  session.unavailable_reasons.erase(key);
 }
 
 std::optional<TakeEditState> edit_state(const void* owner,
@@ -88,10 +101,31 @@ std::optional<TakeEditState> edit_state(const void* owner,
 }
 
 void clear_edit_state(const void* owner, std::string_view song_id) noexcept {
+  try {
+    const std::scoped_lock lock(gMutex);
+    const auto session = gSessions.find(owner);
+    if(session == gSessions.end()) return;
+    session->second.edit_states.erase(std::string(song_id));
+  } catch(...) {
+  }
+}
+
+void set_unavailable_reason(const void* owner, std::string_view song_id,
+                            std::string reason) {
+  const std::scoped_lock lock(gMutex);
+  state_for(owner).unavailable_reasons[std::string(song_id)] =
+      std::move(reason);
+}
+
+std::optional<std::string> unavailable_reason(
+    const void* owner, std::string_view song_id) {
   const std::scoped_lock lock(gMutex);
   const auto session = gSessions.find(owner);
-  if(session == gSessions.end()) return;
-  session->second.edit_states.erase(std::string(song_id));
+  if(session == gSessions.end()) return std::nullopt;
+  const auto found = session->second.unavailable_reasons.find(
+      std::string(song_id));
+  if(found == session->second.unavailable_reasons.end()) return std::nullopt;
+  return found->second;
 }
 
 void set_storage_message(const void* owner, std::string message) {

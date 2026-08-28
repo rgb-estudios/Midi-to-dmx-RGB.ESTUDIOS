@@ -48,7 +48,6 @@ enum EParams
 enum EControlTags
 {
   kCtrlTagMain = 100,
-  kCtrlTagExecutorRuntime,
   kCtrlTagRuntimeStatus,
   kNumCtrlTags
 };
@@ -134,6 +133,8 @@ public:
   [[nodiscard]] bool CycleTxInterfaceFromUI(int direction);
   [[nodiscard]] std::string RxInterfaceStatus() const;
   [[nodiscard]] std::string TxInterfaceStatus() const;
+  [[nodiscard]] std::optional<aeyla::network::NetworkInterface>
+  SelectedTxInterface() const;
   [[nodiscard]] std::size_t NetworkInterfaceCount() const;
   [[nodiscard]] aeyla::product::AuthoringResult
   ApplyTxNetworkFromUI(std::string ipv4, std::string mask);
@@ -151,7 +152,6 @@ public:
   {
     return TakeOutputArmed() && mArtNetOutput.override_enabled();
   }
-  [[nodiscard]] bool HasActiveTake() const;
   [[nodiscard]] std::string ActiveTakeStatus() const;
   [[nodiscard]] std::string CaptureInputStatus() const;
   [[nodiscard]] double ActiveTakePlaybackProgress() const;
@@ -176,25 +176,24 @@ public:
       int direction);
   [[nodiscard]] aeyla::product::AuthoringResult ReturnToRawTakeFromUI();
   [[nodiscard]] AeylaTakeEditorSnapshot ActiveTakeEditorSnapshot() const;
-  [[nodiscard]] double ActiveTakeInSeconds() const;
-  [[nodiscard]] double ActiveTakeOutSeconds() const;
-  [[nodiscard]] double ActiveTakeOriginalDurationSeconds() const;
-  [[nodiscard]] double ActiveTakeEffectiveDurationSeconds() const;
 
-  [[nodiscard]] std::uint64_t CaptureAcceptedPackets() const noexcept;
-  [[nodiscard]] std::uint64_t CaptureSequenceGaps() const noexcept;
-
-  [[nodiscard]] std::uint64_t ArtNetSentPackets() const noexcept
+  [[nodiscard]] aeyla::output::ArtNetOutputStats ArtNetOutputStatus() const noexcept
   {
-    return mArtNetOutput.stats().sent_packets;
+    return mArtNetOutput.stats();
   }
-  [[nodiscard]] std::uint64_t ArtNetSendErrors() const noexcept
+  [[nodiscard]] aeyla::capture::ArtNetCaptureStats ArtNetCaptureStatus() const noexcept
   {
-    return mArtNetOutput.stats().send_errors;
+    return mArtNetCapture.stats();
   }
 
   aeyla::product::ProjectFileStatus NewProjectFromUI()
   {
+    if(TakeRecording())
+      return {aeyla::product::ProjectFileOperation::new_project,
+              false,
+              mProjectFiles.current_path(),
+              "Detén y guarda la toma antes de crear otro proyecto",
+              {"Cambiar de proyecto durante GRABAR podría separar el archivo de su canción."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
     const std::scoped_lock lock(mModelMutex);
@@ -213,6 +212,12 @@ public:
   aeyla::product::ProjectFileStatus OpenProjectFromUI(
       const std::filesystem::path& path)
   {
+    if(TakeRecording())
+      return {aeyla::product::ProjectFileOperation::open,
+              false,
+              mProjectFiles.current_path(),
+              "Detén y guarda la toma antes de abrir otro proyecto",
+              {"La grabación activa conserva la identidad de la canción actual."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
     const std::scoped_lock lock(mModelMutex);
@@ -447,6 +452,7 @@ private:
   aeyla::capture::ArtNetCaptureWorker mArtNetCapture{};
   std::string mOutputBackendError;
   std::uint64_t mLastArtNetSendErrors{0U};
+  std::uint64_t mLastHandledArtNetFailClosedEvents{0U};
 
   mutable std::mutex mNetworkMutex;
   std::vector<aeyla::network::NetworkInterface> mNetworkInterfaces;
@@ -454,12 +460,15 @@ private:
   std::size_t mTxInterfaceIndex{0U};
   std::string mCaptureInputError;
   AeylaNetworkConfiguration mNetworkConfiguration{};
-  std::uint64_t mLastNetworkConfigurationRevision{0U};
+  std::atomic<std::uint64_t> mLastNetworkConfigurationRevision{0U};
   std::string mPendingTxAdapterId;
   std::string mNetworkConfigurationMessage;
 
   aeyla::capture::DmxTakeScheduler mTakeScheduler{};
   aeyla::capture::DmxCaptureSyncAnchor mCaptureSyncAnchor{};
+  // UI-owned identity of the streamed file currently being recorded. The
+  // stop path indexes this exact target instead of guessing from timestamps.
+  std::filesystem::path mActiveCaptureTarget;
 
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};

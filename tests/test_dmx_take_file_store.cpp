@@ -88,6 +88,28 @@ int main() {
           "library index must expose Take name");
   }
 
+  // Regression: capture finalization must resolve the configured target, not
+  // whichever entry happens to sort first by timestamp/filename.
+  TakeLibraryScanResult ambiguous;
+  TakeFileIndexEntry unrelated;
+  unrelated.path = directory / "newer-but-unrelated.aeylatake";
+  unrelated.take_name = "Unrelated";
+  TakeFileIndexEntry expected;
+  expected.path = target;
+  expected.take_name = take.name;
+  ambiguous.entries.push_back(unrelated);
+  ambiguous.entries.push_back(expected);
+  const auto exact = find_take_entry_by_path(ambiguous, target);
+  check(exact.has_value() && exact->path == target &&
+            exact->take_name == take.name,
+        "capture indexing must select the exact configured target");
+  check(!find_take_entry_by_path(ambiguous,
+                                 directory / "missing.aeylatake").has_value(),
+        "capture indexing must fail closed when its exact target is absent");
+  ambiguous.error = "incomplete directory scan";
+  check(!find_take_entry_by_path(ambiguous, target).has_value(),
+        "capture indexing must reject entries from an invalid scan");
+
   // Corrupt one payload byte. Full load must reject it even though the header
   // and file length remain structurally plausible.
   {

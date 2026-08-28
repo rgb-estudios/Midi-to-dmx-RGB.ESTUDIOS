@@ -159,6 +159,23 @@ aeyla_add_strict_test(aeyla_dmx_take_file_reader_tests tests/test_dmx_take_file_
 aeyla_add_strict_test(aeyla_dmx_take_transport_tests tests/test_dmx_take_transport.cpp)
 aeyla_add_strict_test(aeyla_dmx_take_stream_writer_tests tests/test_dmx_take_stream_writer.cpp)
 
+add_executable(aeyla_take_library_session_tests
+  tests/test_take_library_session.cpp
+  product/AeylaVisualDmx/AeylaTakeLibrarySession.cpp
+)
+target_include_directories(aeyla_take_library_session_tests PRIVATE
+  product/AeylaVisualDmx
+)
+target_link_libraries(aeyla_take_library_session_tests PRIVATE aeyla_runtime)
+if(MSVC)
+  target_compile_options(aeyla_take_library_session_tests PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(aeyla_take_library_session_tests PRIVATE
+    -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME aeyla_take_library_session_tests
+         COMMAND aeyla_take_library_session_tests)
+
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)
   add_executable(AeylaVisualDmxStandalone apps/standalone/main.cpp)

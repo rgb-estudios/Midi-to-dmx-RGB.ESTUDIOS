@@ -4,7 +4,7 @@ Fecha de consolidación: 28 agosto 2026
 
 ## Arquitectura congelada
 
-Avolites → Art-Net U1 → AEYLA CAPTURA → TOMA ORIGINAL `.aeylatake` → EDITOR DMX → CONSOLIDAR CLIP → comandos MIDI del DAW → reproductor relativo AEYLA → Art-Net 44 Hz → NIC física → nodo → DMX.
+Avolites → Art-Net U1 → AEYLA CAPTURA → TOMA BRUTA `.aeylatake` → EDITOR DMX → CONSOLIDAR MUESTRA DMX → reproductor relativo AEYLA → Art-Net 44 Hz → NIC física → nodo → DMX.
 
 La posición absoluta del Arrangement de Ableton Live/REAPER no gobierna el clip. El DAW entrega bloques de audio y comandos MIDI; AEYLA conserva un cursor relativo propio.
 
@@ -52,23 +52,29 @@ Toda superficie visible para operador debe quedar en español, salvo nombres té
 
 ### Implementado en código
 
-- [x] TOMA ORIGINAL preservada como archivo independiente.
+- [x] TOMA BRUTA preservada como archivo independiente.
 - [x] Captura directa a disco con RAM acotada.
+- [x] STOP asocia metadatos/ENTRADA al archivo exacto abierto por el escritor,
+      no al primero del directorio.
+- [x] Descarga/cierre inesperado finaliza una toma streamed recuperable cuando
+      ya existen cuadros válidos.
 - [x] Reproductor file-backed con caché fija.
 - [x] ENTRADA/SALIDA no destructivos.
 - [x] Reproducción relativa por muestras, independiente de la posición absoluta del DAW.
-- [x] Backend `CONSOLIDAR CLIP`: copia sólo el rango ENTRADA→SALIDA a un nuevo `.aeylatake`.
+- [x] Backend `CONSOLIDAR MUESTRA DMX`: copia sólo el rango ENTRADA→SALIDA a un nuevo `.aeylatake`.
 - [x] El primer cuadro de ENTRADA pasa a ser 00:00 del consolidado.
 - [x] Consolidación file-backed con regulación del buffer; no materializa la canción completa en RAM.
 - [x] Reapertura y validación del archivo consolidado: checksum, metadatos, cantidad de cuadros y extremos.
 - [x] Test automatizado: preservación byte por byte del RAW, 44 Hz, identidad de Song y exactitud de IN/OUT.
-- [x] Botón/acción visible `CONSOLIDAR CLIP` conectado al backend real.
+- [x] Botón/acción visible `CONSOLIDAR MUESTRA DMX` conectado al backend real.
 - [x] El consolidado pasa a ser el clip activo y queda preparado para reproducción.
 - [x] Timeline de actividad real de los 512 canales con picos de nivel/movimiento.
 - [x] Handles ENTRADA/SALIDA arrastrables y hit-area visible.
 - [x] Playhead, scrub seguro, timecode editable y precisión ±1 cuadro.
 - [x] Zoom horizontal y paneo.
-- [x] Navegación de versiones y retorno explícito a RAW.
+- [x] Navegación de versiones y retorno explícito a TOMA BRUTA.
+- [x] Estado de actividad/versión cacheado por instancia y canción; la UI no
+      vuelve a recorrer la biblioteca en cada repintado.
 
 ### Pendiente antes de cerrar Gate B
 

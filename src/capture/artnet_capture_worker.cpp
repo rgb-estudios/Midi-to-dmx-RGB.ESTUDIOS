@@ -200,10 +200,21 @@ class ArtNetCaptureWorker::Impl final {
 
   void shutdown() noexcept {
     recording_.store(false, std::memory_order_release);
-    streamed_mode_.store(false, std::memory_order_release);
+    const bool preserve_streamed_take =
+        streamed_mode_.exchange(false, std::memory_order_acq_rel);
     stop_requested_.store(true, std::memory_order_release);
     if(worker_.joinable()) worker_.join();
-    stream_writer_.abort();
+    if(preserve_streamed_take) {
+      try {
+        std::string ignored_error;
+        if(!stream_writer_.finalize(ignored_error))
+          stream_writer_.abort();
+      } catch(...) {
+        stream_writer_.abort();
+      }
+    } else {
+      stream_writer_.abort();
+    }
     running_.store(false, std::memory_order_release);
     close_socket(socket_);
     socket_ = kInvalidSocket;

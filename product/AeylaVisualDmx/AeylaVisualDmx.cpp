@@ -1,7 +1,7 @@
 #include "AeylaVisualDmx.h"
-#include "AeylaExecutorRuntimeControl.h"
 #include "AeylaMainControl.h"
 #include "AeylaRuntimeStatusControl.h"
+#include "AeylaTakeLibrarySession.h"
 #include "IPlug_include_in_plug_src.h"
 #include "network/ipv4_configuration.h"
 #include "runtime/host_song_binding.h"
@@ -140,7 +140,6 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
 
   mLayoutFunc = [&](IGraphics* pGraphics) {
     const IRECT bounds = pGraphics->GetBounds();
-    const IRECT executorBounds = AeylaExecutorRuntimeControl::BoundsFor(bounds);
 
     if(pGraphics->NControls())
     {
@@ -148,8 +147,6 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
         background->SetRECT(bounds);
       if(auto* main = pGraphics->GetControlWithTag(kCtrlTagMain))
         main->SetRECT(bounds);
-      if(auto* executors = pGraphics->GetControlWithTag(kCtrlTagExecutorRuntime))
-        executors->SetRECT(executorBounds);
       if(auto* status = pGraphics->GetControlWithTag(kCtrlTagRuntimeStatus))
         status->SetRECT(bounds);
       return;
@@ -164,8 +161,6 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
       pGraphics->LoadFont("AeylaUI", "Times New Roman", ETextStyle::Normal);
 
     pGraphics->AttachControl(new AeylaMainControl(bounds, *this), kCtrlTagMain);
-    pGraphics->AttachControl(new AeylaExecutorRuntimeControl(executorBounds, *this),
-                             kCtrlTagExecutorRuntime);
     pGraphics->AttachControl(new AeylaRuntimeStatusControl(bounds, *this),
                              kCtrlTagRuntimeStatus);
   };
@@ -180,6 +175,7 @@ AeylaVisualDmx::~AeylaVisualDmx()
   StopRuntimeWorker();
   mNetworkConfiguration.Shutdown();
   mArtNetOutput.stop();
+  aeyla::take_library_session::clear(this);
 }
 
 #if IPLUG_DSP
@@ -381,8 +377,6 @@ void AeylaVisualDmx::OnIdle()
   {
     if(auto* main = ui->GetControlWithTag(kCtrlTagMain))
       main->SetDirty(false);
-    if(auto* executors = ui->GetControlWithTag(kCtrlTagExecutorRuntime))
-      executors->SetDirty(false);
     if(auto* status = ui->GetControlWithTag(kCtrlTagRuntimeStatus))
       status->SetDirty(false);
   }
@@ -422,6 +416,7 @@ void AeylaVisualDmx::StartRuntimeWorker()
 
 void AeylaVisualDmx::StopRuntimeWorker() noexcept
 {
+  mTakeScheduler.disarm();
   mRuntimeStopRequested.store(true, std::memory_order_release);
   if(mRuntimeThread.joinable())
     mRuntimeThread.join();
@@ -476,6 +471,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     const std::scoped_lock lock(mModelMutex);
     if(mRuntimeFaulted.load(std::memory_order_acquire))
     {
+      mTakeScheduler.disarm();
       mModel.release_transients();
       mModel.disarm(aeyla::runtime::RuntimeSafetyReason::runtime_fault);
       mModel.set_blackout(true);
@@ -487,6 +483,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 
     if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
     {
+      mTakeScheduler.disarm();
       mModel.release_transients();
       mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
       mModel.set_blackout(true);
@@ -499,6 +496,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
         host.rendering_offline, std::memory_order_acq_rel);
     if(host.rendering_offline)
     {
+      mTakeScheduler.disarm();
       if(!wasOffline)
         mModel.release_transients();
       mModel.disarm(aeyla::runtime::RuntimeSafetyReason::offline_render);
@@ -619,6 +617,7 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     mGlobalBlackout.store(true, std::memory_order_release);
     mEffectiveBlackout.store(true, std::memory_order_release);
     mDmxNonZeroChannels.store(0, std::memory_order_relaxed);
+    mTakeScheduler.disarm();
     try
     {
       const std::scoped_lock lock(mModelMutex);
@@ -639,12 +638,16 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
   {
     const auto operation = mNetworkConfiguration.Snapshot();
     if(operation.revision == 0U ||
-       operation.revision == mLastNetworkConfigurationRevision)
+       operation.revision == mLastNetworkConfigurationRevision.load(
+           std::memory_order_acquire))
       return;
-    mLastNetworkConfigurationRevision = operation.revision;
     if(operation.busy() ||
        operation.state == AeylaNetworkConfigurationState::idle)
+    {
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
       return;
+    }
 
     if(operation.state != AeylaNetworkConfigurationState::committed)
     {
@@ -653,6 +656,8 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
               AeylaNetworkConfigurationState::rolled_back
           ? "CAMBIO REVERTIDO · " + operation.message
           : "CAMBIO RECHAZADO · " + operation.message;
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
       return;
     }
 
@@ -664,6 +669,8 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
       const std::scoped_lock lock(mNetworkMutex);
       mNetworkConfigurationMessage =
           "CAMBIO NO APLICADO AL RUNTIME · " + networkError;
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
       return;
     }
 
@@ -692,6 +699,8 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
       const std::scoped_lock lock(mNetworkMutex);
       mNetworkConfigurationMessage =
           "CAMBIO SIN CONFIRMAR · Windows no devolvió la IPv4 en el adaptador TX";
+      mLastNetworkConfigurationRevision.store(operation.revision,
+                                              std::memory_order_release);
       return;
     }
 
@@ -727,6 +736,8 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
         mNetworkConfigurationMessage =
             "IPv4 APLICADA / SALIDA BLOQUEADA · " + configured.message;
         SyncSnapshotToAtomicsLocked();
+        mLastNetworkConfigurationRevision.store(operation.revision,
+                                                std::memory_order_release);
         return;
       }
       RefreshOutputBackendFromProjectLocked();
@@ -738,15 +749,20 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
           ? "RED LISTA · " + network->address + "/" +
                 std::to_string(network->prefix_length) + " → " +
                 network->directed_broadcast + " · U1 · SALIDA DESARMADA"
-          : "IPv4 APLICADA / BACKEND BLOQUEADO · " + mOutputBackendError;
+          : "IPv4 APLICADA / MOTOR ART-NET BLOQUEADO · " + mOutputBackendError;
     }
     RestartCaptureInputFromRouting();
+    mLastNetworkConfigurationRevision.store(operation.revision,
+                                            std::memory_order_release);
   }
   catch(...)
   {
     const std::scoped_lock lock(mNetworkMutex);
     mNetworkConfigurationMessage =
         "FALLA AL CONFIRMAR LA RED · salida física permanece desarmada";
+    mLastNetworkConfigurationRevision.store(
+        mNetworkConfiguration.Snapshot().revision,
+        std::memory_order_release);
   }
 }
 
@@ -754,6 +770,7 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
 {
   if(mHostStateRestoreRejected.exchange(false, std::memory_order_acq_rel))
   {
+    mTakeScheduler.disarm();
     mModel.release_transients();
     mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
     mModel.set_blackout(true);
@@ -770,6 +787,7 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   if(!pending.has_value())
     return;
 
+  mTakeScheduler.disarm();
   mModel.release_transients();
   mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
 
@@ -1029,8 +1047,10 @@ bool AeylaVisualDmx::SetActiveSongStartFromPlayheadFromUI()
 
 bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
 {
-  if(direction == 0)
+  if(direction == 0 || TakeRecording())
     return false;
+  mTakeScheduler.stop_reset();
+  mTakeScheduler.disarm();
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   if(snapshot.song_count == 0U)
@@ -1145,6 +1165,10 @@ aeyla::product::AuthoringResult AeylaVisualDmx::StoreLookFromUI()
 
 aeyla::product::AuthoringResult AeylaVisualDmx::CreateSongFromUI()
 {
+  if(TakeRecording())
+    return {false, {}, "Detén y guarda la toma antes de crear otra canción"};
+  mTakeScheduler.stop_reset();
+  mTakeScheduler.disarm();
   const std::scoped_lock lock(mModelMutex);
   auto result = mModel.create_song();
   if(result.succeeded)
@@ -1316,7 +1340,8 @@ std::string AeylaVisualDmx::OutputBackendStatus() const
   const auto& output = mModel.project_document().output;
   if(output.backend != "artnet" || output.target.empty())
     return "SALIDA DESACTIVADA";
-  return "ARTNET " + output.target + "@" + std::to_string(output.universe);
+  return "ART-NET " + output.target + " · U" +
+         std::to_string(static_cast<unsigned>(output.universe) + 1U);
 }
 
 std::string AeylaVisualDmx::OutputBackendError() const
@@ -1330,6 +1355,7 @@ void AeylaVisualDmx::RefreshOutputBackendFromProjectLocked()
   mArtNetOutput.set_enabled(false);
   mArtNetOutput.stop();
   mLastArtNetSendErrors = 0U;
+  mLastHandledArtNetFailClosedEvents = 0U;
   mOutputBackendError.clear();
 
   const auto& output = mModel.project_document().output;
@@ -1375,21 +1401,33 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
           "Art-Net registró un error transitorio; la salida continúa vigilada";
     }
     else if(stats.consecutive_send_errors == 0U &&
-            mOutputBackendError.rfind(
-                "Art-Net registró un error transitorio", 0U) == 0U)
+            (mOutputBackendError.rfind(
+                 "Art-Net registró un error transitorio", 0U) == 0U ||
+             mOutputBackendError.rfind(
+                 "Art-Net acumuló tres errores consecutivos", 0U) == 0U))
     {
       mOutputBackendError.clear();
     }
     return;
   }
 
+  // Handle each fail-closed transition once. Reapplying APAGÓN on every
+  // runtime tick made explicit recovery impossible: the worker could re-latch
+  // blackout between the operator's APAGÓN OFF and ARMAR clicks. The worker
+  // itself remains latched until ARMAR calls prepare_explicit_rearm().
+  if(stats.fail_closed_events <= mLastHandledArtNetFailClosedEvents)
+  {
+    mArtNetOutput.set_enabled(false);
+    return;
+  }
+  mLastHandledArtNetFailClosedEvents = stats.fail_closed_events;
+
   mLastArtNetSendErrors = stats.send_errors;
   mOutputBackendError =
-      "Art-Net acumuló tres errores consecutivos; la toma y la salida fueron desarmadas";
+      "Art-Net acumuló tres errores consecutivos; desactiva APAGÓN y vuelve a ARMAR manualmente";
   mTakeScheduler.disarm();
   mArtNetOutput.set_enabled(false);
   mModel.release_transients();
-  mModel.set_backend_ready(false);
   mModel.disarm(aeyla::runtime::RuntimeSafetyReason::backend_unavailable);
   mModel.set_blackout(true);
   mParamBlackout.store(true, std::memory_order_release);

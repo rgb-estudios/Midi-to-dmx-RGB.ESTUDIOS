@@ -26,7 +26,6 @@ iplug_add_plugin(${PROJECT_NAME}
     AeylaNetworkConfiguration.h
     AeylaVisualDmx.h
     AeylaMainControl.h
-    AeylaExecutorRuntimeControl.h
     AeylaRuntimeStatusControl.h
     config.h
     resources/resource.h
