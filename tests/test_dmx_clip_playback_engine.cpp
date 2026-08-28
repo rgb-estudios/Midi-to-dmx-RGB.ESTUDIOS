@@ -227,6 +227,7 @@ int main() {
     // continúa publicando bloques, el scheduler avanza y el worker mantiene su
     // propia cadencia de red.
     const auto packets_before_headless_second = output.stats().sent_packets;
+    const auto headless_started = std::chrono::steady_clock::now();
     for(int block = 0; block < 100; ++block) {
       scheduler.advance_samples(480U, false);
       host.publish(false, false, 777.0, 0.0, 120.0);
@@ -244,8 +245,26 @@ int main() {
     const auto headless_stats = output.stats();
     const auto headless_packets =
         headless_stats.sent_packets - packets_before_headless_second;
+    const auto headless_elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - headless_started).count();
+    const auto headless_packets_per_second =
+        static_cast<double>(headless_packets) / headless_elapsed;
+    if(headless_stats.configured_fps != 44U ||
+       headless_elapsed < 0.9 || headless_packets < 20U ||
+       headless_packets_per_second < 30.0 ||
+       headless_packets_per_second > 58.0 ||
+       headless_stats.send_errors != 0U || headless_stats.fail_closed) {
+      std::cerr << "Headless Art-Net diagnostics: packets="
+                << headless_packets << " elapsed=" << headless_elapsed
+                << " rate=" << headless_packets_per_second
+                << " configured_fps=" << headless_stats.configured_fps
+                << " send_errors=" << headless_stats.send_errors
+                << " fail_closed=" << headless_stats.fail_closed << '\n';
+    }
     require(headless_stats.configured_fps == 44U &&
-                headless_packets >= 30U && headless_packets <= 60U &&
+                headless_elapsed >= 0.9 && headless_packets >= 20U &&
+                headless_packets_per_second >= 30.0 &&
+                headless_packets_per_second <= 58.0 &&
                 headless_stats.send_errors == 0U &&
                 !headless_stats.fail_closed,
             "headless/minimized path did not sustain healthy 44 Hz Art-Net");
