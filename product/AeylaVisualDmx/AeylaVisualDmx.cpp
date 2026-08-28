@@ -467,6 +467,12 @@ void AeylaVisualDmx::RuntimeTick() noexcept
   try
   {
     ReconcileNetworkConfiguration();
+    const auto host = mHostTransport.latest();
+    if(mArtNetCapture.streamed_recording_active())
+    {
+      const auto capture = mArtNetCapture.stats();
+      (void) mCaptureSyncAnchor.observe(host, capture.recorded_frames);
+    }
     const std::scoped_lock lock(mModelMutex);
     if(mRuntimeFaulted.load(std::memory_order_acquire))
     {
@@ -489,7 +495,6 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 
     ApplyPendingParameterStateLocked();
 
-    const auto host = mHostTransport.latest();
     const bool wasOffline = mRenderingOffline.exchange(
         host.rendering_offline, std::memory_order_acq_rel);
     if(host.rendering_offline)

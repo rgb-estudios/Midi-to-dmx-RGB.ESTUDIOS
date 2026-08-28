@@ -76,6 +76,19 @@ El reloj monotónico queda restringido a la reproducción manual de operador. Lo
 
 ## 3. Captura
 
+Cuando la consola se programa mediante MTC generado por el mismo DAW anfitrión,
+la captura puede armarse antes de PLAY. AEYLA conserva todo ese pre-roll en el
+RAW, observa el primer inicio de transporte y registra el contador de cuadro
+DMX correspondiente como ancla no destructiva. Al detener la captura, esa ancla
+se propone automáticamente como ENTRADA; CONSOLIDAR CLIP vuelve a escribirla
+como `00:00` sin modificar ni reemplazar la toma original.
+
+El adaptador VST3 no depende de recibir MIDI Time Code Quarter Frame `0xF1`.
+REAPER/Ableton entregan directamente transporte y conteo de muestras, que son
+la referencia más precisa cuando el propio host genera el MTC enviado a la
+consola. Si la grabación comienza con el transporte ya corriendo o sin snapshot
+válido, AEYLA conserva la toma pero exige ajustar ENTRADA manualmente.
+
 ### Entrada
 
 - Art-Net, un universo.

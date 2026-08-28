@@ -50,6 +50,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/network/ipv4_configuration.cpp
     ../../src/network/network_change_protocol.cpp
     ../../src/capture/artnet_capture_worker.cpp
+    ../../src/capture/dmx_capture_sync_anchor.cpp
     ../../src/capture/dmx_clip_playback_engine.cpp
     ../../src/capture/dmx_take_activity.cpp
     ../../src/capture/dmx_take_consolidator.cpp

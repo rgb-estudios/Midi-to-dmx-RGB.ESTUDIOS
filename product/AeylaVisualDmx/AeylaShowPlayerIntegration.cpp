@@ -491,6 +491,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
     std::string error;
     if(!mArtNetCapture.end_streamed_recording(error))
     {
+      mCaptureSyncAnchor.reset();
       aeyla::take_library_session::set_storage_message(
           this, "ERROR DE GRABACIÓN · " + error);
       return {false, {}, "No fue posible cerrar la toma DMX · " + error};
@@ -499,25 +500,56 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
     const auto library = aeyla::take_library_session::directory(this);
     auto scan = aeyla::capture::scan_take_directory(library, songId);
     if(!scan.ok() || scan.entries.empty())
+    {
+      mCaptureSyncAnchor.reset();
       return {false, {}, "La grabación terminó, pero no se pudo indexar el archivo final"};
+    }
 
     const auto& newest = scan.entries.front();
-    aeyla::take_library_session::clear_edit_state(this, songId);
-    aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
+    const auto automaticIn = mCaptureSyncAnchor.resolved_anchor(
+        newest.frame_count);
+    std::string syncMessage;
+    if(automaticIn.has_value())
+    {
+      if(ApplyCapturedTakeAutoIn(newest, *automaticIn, error))
+      {
+        const double inSeconds = newest.frames_per_second == 0U
+            ? 0.0
+            : static_cast<double>(*automaticIn) /
+                  static_cast<double>(newest.frames_per_second);
+        syncMessage = " · IN AUTO " + FormatDuration(inSeconds) +
+                      " · PLAY/MTC";
+      }
+      else
+      {
+        aeyla::take_library_session::clear_edit_state(this, songId);
+        aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
+        syncMessage = " · IN AUTO NO DISPONIBLE · " + error;
+      }
+    }
+    else
+    {
+      aeyla::take_library_session::clear_edit_state(this, songId);
+      aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
+      syncMessage = " · SIN ANCLA PLAY/MTC · AJUSTA IN MANUALMENTE";
+    }
+    mCaptureSyncAnchor.reset();
     aeyla::take_library_session::set_storage_message(
-        this, "GUARDADA EN DISCO · " + newest.path.filename().string());
+        this, "GUARDADA EN DISCO · " + newest.path.filename().string() +
+                  syncMessage);
     const double duration = newest.frames_per_second == 0U
         ? 0.0
         : static_cast<double>(newest.frame_count) /
               static_cast<double>(newest.frames_per_second);
     return {true, newest.take_name,
             newest.take_name + " guardada · " + FormatDuration(duration) +
-                " · 44 Hz · RAM acotada"};
+                " · 44 Hz · RAM acotada" + syncMessage};
   }
 
   if(mArtNetCapture.stats().recording)
   {
     mArtNetCapture.discard_recording();
+    mCaptureSyncAnchor.reset();
     return {false, {}, "Se descartó una captura heredada no compatible con R07"};
   }
 
@@ -576,14 +608,28 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
   stream.port_address = universe;
   stream.frames_per_second = 44U;
 
+  // Armar el detector antes que el escritor evita perder un PLAY que llegue
+  // exactamente mientras el operador pulsa GRABAR. RuntimeTick sólo observa
+  // el flanco cuando la grabación a disco ya figura activa.
+  mCaptureSyncAnchor.begin(mHostTransport.latest());
   std::string error;
   if(!mArtNetCapture.begin_streamed_recording(stream, error))
+  {
+    mCaptureSyncAnchor.reset();
     return {false, {}, "No fue posible iniciar la grabación directa a disco · " + error};
+  }
+
+  const auto sync = mCaptureSyncAnchor.status();
+  const std::string syncMessage =
+      sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport
+          ? " · ESPERANDO PLAY/MTC"
+          : " · SIN ANCLA AUTOMÁTICA · INICIA GRABACIÓN CON REAPER DETENIDO";
 
   aeyla::take_library_session::set_storage_message(
-      this, "GRABANDO EN DISCO · " + target.filename().string());
+      this, "GRABANDO EN DISCO · " + target.filename().string() + syncMessage);
   return {true, takeName,
-          "Grabando DMX desde " + stats.source_ipv4 + " · 44 Hz · RAM acotada"};
+          "Grabando DMX desde " + stats.source_ipv4 +
+              " · 44 Hz · RAM acotada" + syncMessage};
 }
 
 bool AeylaVisualDmx::TakeRecording() const noexcept
@@ -811,6 +857,14 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
       result += " · DISCO";
     if(captureStats.storage_failed)
       result += " · ERROR DE ALMACENAMIENTO";
+    const auto sync = mCaptureSyncAnchor.status();
+    if(sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport)
+      result += " · ESPERANDO PLAY/MTC";
+    else if(sync.state == aeyla::capture::DmxCaptureSyncState::anchored)
+      result += " · SINCRONÍA FIJADA · IN AUTO " +
+          FormatDuration(static_cast<double>(sync.anchor_frame) / 44.0);
+    else if(sync.state == aeyla::capture::DmxCaptureSyncState::unavailable)
+      result += " · SIN ANCLA DAW";
     return result;
   }
 

@@ -124,6 +124,44 @@ std::optional<aeyla::take_library_session::TakeEditState> LatestEditState(
 
 }  // namespace
 
+bool AeylaVisualDmx::ApplyCapturedTakeAutoIn(
+    const aeyla::capture::TakeFileIndexEntry& entry,
+    std::uint64_t anchorFrame,
+    std::string& error)
+{
+  auto state = MakeEditState(entry, error);
+  if(!state.has_value())
+    return false;
+  if(state->frame_count < 2U || state->frames_per_second == 0U)
+  {
+    error = "La toma es demasiado corta para aplicar IN automático";
+    return false;
+  }
+
+  state->start_frame = std::min(anchorFrame, state->frame_count - 2U);
+  state->end_frame_exclusive = state->frame_count;
+
+  std::string projectId;
+  std::string songId;
+  {
+    const std::scoped_lock modelLock(mModelMutex);
+    const auto snapshot = mModel.snapshot();
+    projectId = snapshot.project_id;
+    songId = snapshot.active_song_id;
+  }
+  if(songId.empty())
+  {
+    error = "No hay una canción activa para asociar el IN automático";
+    return false;
+  }
+
+  aeyla::take_library_session::ensure_scope(this, projectId);
+  aeyla::take_library_session::set_edit_state(this, songId, *state);
+  aeyla::take_library_session::set_loaded_path(this, songId, state->path);
+  error.clear();
+  return true;
+}
+
 aeyla::product::AuthoringResult AeylaVisualDmx::AdjustActiveTakeInFromUI(
     double deltaSeconds)
 {

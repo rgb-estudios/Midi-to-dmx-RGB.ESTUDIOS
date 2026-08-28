@@ -95,6 +95,7 @@ add_library(aeyla_runtime
   src/network/ipv4_configuration.cpp
   src/network/network_change_protocol.cpp
   src/capture/artnet_capture_worker.cpp
+  src/capture/dmx_capture_sync_anchor.cpp
   src/capture/dmx_clip_playback_engine.cpp
   src/capture/dmx_take_activity.cpp
   src/capture/dmx_take_consolidator.cpp
@@ -148,6 +149,7 @@ aeyla_add_strict_test(aeyla_programmer_tests tests/test_programmer.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_gate_r07_tests tests/test_artnet_output_gate_r07.cpp)
 aeyla_add_strict_test(aeyla_artnet_capture_worker_tests tests/test_artnet_capture_worker.cpp)
+aeyla_add_strict_test(aeyla_dmx_capture_sync_anchor_tests tests/test_dmx_capture_sync_anchor.cpp)
 aeyla_add_strict_test(aeyla_ipv4_configuration_tests tests/test_ipv4_configuration.cpp)
 aeyla_add_strict_test(aeyla_dmx_clip_playback_engine_tests tests/test_dmx_clip_playback_engine.cpp)
 aeyla_add_strict_test(aeyla_dmx_take_activity_tests tests/test_dmx_take_activity.cpp)

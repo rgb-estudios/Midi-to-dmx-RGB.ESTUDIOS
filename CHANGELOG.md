@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-28 — R07 ancla automática de captura DAW/MTC
+
+- GRABAR iniciado con el transporte detenido queda en `ESPERANDO PLAY/MTC`.
+- El primer inicio de transporte fija un ancla contra el contador real de cuadros DMX.
+- Al finalizar, el RAW permanece completo y el editor coloca `IN` automáticamente en el ancla; CONSOLIDAR sigue creando un clip nuevo con ese punto en `00:00`.
+- El VST3 usa el transporte/muestras del host que origina el MTC, sin depender de que mensajes Quarter Frame `0xF1` atraviesen el wrapper VST3.
+
 ## 2026-08-28 — R07 continuidad Art-Net con REAPER inactivo
 
 - La reproducción manual de una toma usa un reloj monotónico independiente del callback de audio.

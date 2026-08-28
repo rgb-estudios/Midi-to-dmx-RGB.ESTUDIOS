@@ -3,7 +3,9 @@
 #include "IPlug_include_in_plug_hdr.h"
 #include "IControls.h"
 #include "capture/artnet_capture_worker.h"
+#include "capture/dmx_capture_sync_anchor.h"
 #include "capture/dmx_take_activity.h"
+#include "capture/dmx_take_file_store.h"
 #include "capture/dmx_take_scheduler.h"
 #include "network/network_interfaces.h"
 #include "AeylaNetworkConfiguration.h"
@@ -373,6 +375,10 @@ private:
   [[nodiscard]] std::string SelectedRxIpv4() const;
   [[nodiscard]] std::string SelectedTxIpv4() const;
   [[nodiscard]] std::string ActiveSongIdLocked() const;
+  [[nodiscard]] bool ApplyCapturedTakeAutoIn(
+      const aeyla::capture::TakeFileIndexEntry& entry,
+      std::uint64_t anchorFrame,
+      std::string& error);
 
   void PrepareProjectForSave()
   {
@@ -453,6 +459,7 @@ private:
   std::string mNetworkConfigurationMessage;
 
   aeyla::capture::DmxTakeScheduler mTakeScheduler{};
+  aeyla::capture::DmxCaptureSyncAnchor mCaptureSyncAnchor{};
 
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};
