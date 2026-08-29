@@ -242,7 +242,6 @@ bool DmxClipPlaybackEngine::arm(std::string& error_message) {
       return false;
     }
     if(output_ != nullptr &&
-       heartbeat_ok_.load(std::memory_order_acquire) &&
        !rendering_offline_.load(std::memory_order_acquire))
       output_->set_override_enabled(true);
   }
@@ -392,8 +391,6 @@ void DmxClipPlaybackEngine::stop_and_reset(
 
     if(output_ != nullptr) {
       const bool can_authorize =
-          (uses_monotonic_clock() ||
-           heartbeat_ok_.load(std::memory_order_acquire)) &&
           !rendering_offline_.load(std::memory_order_acquire);
       output_->set_override_enabled(can_authorize);
     }
@@ -428,7 +425,13 @@ void DmxClipPlaybackEngine::synchronize_host_cursor(
 
 void DmxClipPlaybackEngine::set_host_heartbeat_ok(bool ok) noexcept {
   heartbeat_ok_.store(ok, std::memory_order_release);
-  if(!ok && !uses_monotonic_clock()) {
+  // Ableton can suspend DSP for a silent device while transport is stopped.
+  // READY/PAUSED/ENDED do not consume host samples, so a stale audio callback
+  // must not make an armed Art-Net endpoint disappear between Songs. PLAYING
+  // on the host-sample clock still fails closed immediately if its clock dies.
+  if(!ok && !uses_monotonic_clock() &&
+     transport_.load(std::memory_order_acquire) ==
+         DmxClipTransportState::playing) {
     const std::scoped_lock lock(mutex_);
     if(output_ != nullptr)
       output_->set_override_enabled(false);
@@ -567,15 +570,16 @@ void DmxClipPlaybackEngine::run() noexcept {
       continue;
     }
 
-    const bool host_required = !uses_monotonic_clock();
-    if((host_required && !heartbeat_ok_.load(std::memory_order_acquire)) ||
+    const auto state = transport_.load(std::memory_order_acquire);
+    const bool host_clock_required =
+        state == DmxClipTransportState::playing && !uses_monotonic_clock();
+    if((host_clock_required && !heartbeat_ok_.load(std::memory_order_acquire)) ||
        rendering_offline_.load(std::memory_order_acquire)) {
       output->set_override_enabled(false);
       std::this_thread::sleep_for(kWorkerSleep);
       continue;
     }
 
-    const auto state = transport_.load(std::memory_order_acquire);
     if(state == DmxClipTransportState::fault) {
       output->set_override_enabled(false);
       std::this_thread::sleep_for(kWorkerSleep);
@@ -583,7 +587,8 @@ void DmxClipPlaybackEngine::run() noexcept {
     }
 
     // READY is a stopped artistic transport, not a disconnected endpoint. A
-    // valid held frame stays authoritative while ARM remains active.
+    // valid held frame stays authoritative while ARM remains active. The same
+    // applies to PAUSED/ENDED: their cursor is frozen and needs no host clock.
     if(state == DmxClipTransportState::ready) {
       bool has_hold = false;
       {
@@ -610,11 +615,17 @@ void DmxClipPlaybackEngine::run() noexcept {
       output->set_override_enabled(false);
     } else {
       const auto after = transport_.load(std::memory_order_acquire);
-      const bool authoritative = after == DmxClipTransportState::ready ||
+      const bool state_authoritative =
+          after == DmxClipTransportState::ready ||
           after == DmxClipTransportState::playing ||
           after == DmxClipTransportState::paused ||
           after == DmxClipTransportState::ended;
-      output->set_override_enabled(authoritative);
+      const bool clock_authoritative =
+          after != DmxClipTransportState::playing || uses_monotonic_clock() ||
+          heartbeat_ok_.load(std::memory_order_acquire);
+      output->set_override_enabled(
+          state_authoritative && clock_authoritative &&
+          !rendering_offline_.load(std::memory_order_acquire));
     }
 
     std::this_thread::sleep_for(kWorkerSleep);
