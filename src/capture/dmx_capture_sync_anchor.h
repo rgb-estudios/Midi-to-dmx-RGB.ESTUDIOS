@@ -15,25 +15,40 @@ enum class DmxCaptureSyncState : std::uint8_t {
   unavailable,
 };
 
+enum class DmxCaptureSyncSource : std::uint8_t {
+  none = 0,
+  transport_start,
+  show_midi_marker,
+};
+
 struct DmxCaptureSyncStatus {
   DmxCaptureSyncState state{DmxCaptureSyncState::idle};
   std::uint64_t anchor_frame{0U};
+  DmxCaptureSyncSource source{DmxCaptureSyncSource::none};
 };
 
 // Non-realtime capture alignment state machine.
 //
-// The operator may start recording Art-Net before starting the DAW transport.
-// The first stopped -> running boundary then identifies the first DMX frame of
-// the song. The RAW Take remains untouched; the captured frame is only used as
-// a non-destructive editor IN marker after recording ends.
+// The operator may start recording Art-Net before the actual Song boundary.
+// A stopped -> running DAW transition remains a backwards-compatible fallback,
+// while an explicit MIDI SHOW marker may establish (or refine) the anchor even
+// when the DAW was already running in pre-roll. The RAW Take remains untouched;
+// the captured frame is only used as a non-destructive editor IN marker after
+// recording ends.
 class DmxCaptureSyncAnchor final {
  public:
   void begin(const runtime::HostTransportSnapshot& initial_host) noexcept;
 
-  // Returns true exactly once when a valid running transport fixes the anchor.
+  // Fallback path: returns true exactly once when a valid running transport
+  // fixes an initial anchor after recording began with the host stopped.
   [[nodiscard]] bool observe(
       const runtime::HostTransportSnapshot& host,
       std::uint64_t recorded_frames) noexcept;
+
+  // Preferred show path: the sample-accurate MIDI PLAY/launch marker identifies
+  // the actual Song boundary. It may replace a prior transport fallback anchor,
+  // but the first explicit marker wins so retriggers cannot move the edit point.
+  [[nodiscard]] bool anchor_explicit(std::uint64_t recorded_frames) noexcept;
 
   void reset() noexcept;
 
@@ -48,6 +63,7 @@ class DmxCaptureSyncAnchor final {
   mutable std::mutex mutex_;
   DmxCaptureSyncState state_{DmxCaptureSyncState::idle};
   std::uint64_t anchor_frame_{0U};
+  DmxCaptureSyncSource source_{DmxCaptureSyncSource::none};
 };
 
 }  // namespace aeyla::capture
