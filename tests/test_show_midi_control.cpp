@@ -141,9 +141,28 @@ int main() {
           "global command inside launch range must be rejected");
   }
 
-  // Queue overflow is a safety boundary: it is observable and requests one
-  // fail-safe stop. Consuming that request rearms the detector for a later
-  // independent overflow period.
+  // PANIC bypasses the artistic SPSC queue and sample-ready wait. The callback
+  // only raises an atomic request; the runtime consumes it independently.
+  {
+    ShowMidiIngress<4U> panic_ingress;
+    ShowMidiEvent panic_event;
+    panic_event.command = ShowMidiCommand::panic_blackout;
+    panic_event.trigger_sample = 999U;
+    panic_event.ready_sample = 1999U;
+    check(panic_ingress.try_submit(panic_event),
+          "PANIC request must be accepted without queue capacity dependency");
+    check(panic_ingress.consume_panic_request() &&
+              !panic_ingress.consume_panic_request(),
+          "PANIC request must be a one-shot atomic safety boundary");
+    ShowMidiEvent should_be_empty;
+    check(!panic_ingress.try_consume(should_be_empty) &&
+              panic_ingress.dropped_events() == 0U,
+          "PANIC must not occupy or overflow the artistic transport queue");
+  }
+
+  // Queue overflow is a separate safety boundary: it is observable and
+  // requests one fail-safe stop. Consuming that request rearms the detector for
+  // a later independent overflow period.
   ShowMidiIngress<4U> ingress;
   ShowMidiEvent event;
   event.trigger_sample = 1234U;
