@@ -1,0 +1,79 @@
+name: r08-promote-take-state-codec-once
+
+on:
+  push:
+    branches:
+      - aeyla/r08-capture-zero-midi-rec-20260829
+    paths:
+      - .github/workflows/r08-promote-take-state-codec-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  promote-validated-codec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact validated 1.2 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git hash-object src/runtime/plugin_state.cpp)" == "7fe7f24e6334b159117607742234af1abc859395" ]]
+          [[ "$(git hash-object src/runtime/plugin_state.h)" == "a6054c25fae289fe2be5aea8db9a373e2f1b351a" ]]
+          [[ "$(git hash-object tests/test_plugin_state.cpp)" == "cbd2b492b88e6c891ffdcbef1c7d92b08d0578e8" ]]
+          [[ "$(git hash-object tools/dev/r08_validate_take_state_codec.py)" == "24e858050d9eb5b738a84e5ce792eaa9013b26df" ]]
+          grep -F 'kPluginStateFormatMinor = 2' src/runtime/plugin_state.h
+          if grep -Fq 'SessionTakeBinding' src/runtime/plugin_state.h; then
+            echo 'State codec is no longer the validated 1.2 baseline.' >&2
+            exit 1
+          fi
+
+      - name: Recreate validated 1.3 candidate
+        run: python3 tools/dev/r08_validate_take_state_codec.py
+
+      - name: Verify exact candidate and scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          if [[ ${#changed[@]} -ne 3 ]]; then
+            printf 'Unexpected changed files: %s\n' "${changed[*]}" >&2
+            exit 1
+          fi
+          expected=(src/runtime/plugin_state.cpp src/runtime/plugin_state.h tests/test_plugin_state.cpp)
+          for i in 0 1 2; do
+            [[ "${changed[$i]}" == "${expected[$i]}" ]]
+          done
+          cpp_hash="$(git hash-object src/runtime/plugin_state.cpp)"
+          h_hash="$(git hash-object src/runtime/plugin_state.h)"
+          test_hash="$(git hash-object tests/test_plugin_state.cpp)"
+          [[ "$cpp_hash" == 3c8bd66* ]]
+          [[ "$h_hash" == 07b9803* ]]
+          [[ "$test_hash" == 9cdfd96* ]]
+          grep -F 'kPluginStateFormatMinor = 3' src/runtime/plugin_state.h
+          grep -F 'constexpr std::string_view suffix = ".aeylatake";' src/runtime/plugin_state.cpp
+          echo "candidate cpp=$cpp_hash h=$h_hash test=$test_hash"
+
+      - name: Re-run codec regression gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-r08-promote -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-r08-promote --target aeyla_plugin_state_tests -j2
+          ctest --test-dir build-r08-promote -R '^aeyla_plugin_state_tests$' --output-on-failure
+
+      - name: Commit only the validated codec
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "rgb-estudios-r08-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/runtime/plugin_state.cpp src/runtime/plugin_state.h tests/test_plugin_state.cpp
+          [[ "$(git diff --cached --name-only | wc -l)" -eq 3 ]]
+          git commit -m "R08 persist take library and trims in host state 1.3"
+          git push origin HEAD:aeyla/r08-capture-zero-midi-rec-20260829
