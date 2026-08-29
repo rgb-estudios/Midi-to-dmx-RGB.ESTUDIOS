@@ -9,6 +9,7 @@ endif()
 # source before the APP/VST3 targets compile it. On Windows this makes an
 # unavailable OpenGL/NanoVG editor fail cleanly instead of terminating the host.
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/AeylaIPlugWindowsGraphicsHardening.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/AeylaIPlugWindowsNanoVGPreflight.cmake)
 
 include(${IPLUG2_DIR}/iPlug2.cmake)
 find_package(iPlug2 REQUIRED)
