@@ -126,6 +126,13 @@ template <std::size_t StorageCapacity>
 class ShowMidiIngress final {
  public:
   [[nodiscard]] bool try_submit(const ShowMidiEvent& event) noexcept {
+    // PANIC is not an artistic transport event and must not wait for queue
+    // capacity or sample-ready scheduling. The audio callback only raises this
+    // lock-free flag; the non-realtime runtime worker performs the safety work.
+    if(event.command == ShowMidiCommand::panic_blackout) {
+      panic_requested_.store(true, std::memory_order_release);
+      return true;
+    }
     if(queue_.try_push(event))
       return true;
     dropped_events_.fetch_add(1U, std::memory_order_relaxed);
@@ -135,6 +142,10 @@ class ShowMidiIngress final {
 
   [[nodiscard]] bool try_consume(ShowMidiEvent& event) noexcept {
     return queue_.try_pop(event);
+  }
+
+  [[nodiscard]] bool consume_panic_request() noexcept {
+    return panic_requested_.exchange(false, std::memory_order_acq_rel);
   }
 
   [[nodiscard]] bool consume_safety_stop_request() noexcept {
@@ -148,6 +159,7 @@ class ShowMidiIngress final {
  private:
   SpscQueue<ShowMidiEvent, StorageCapacity> queue_{};
   std::atomic<std::uint64_t> dropped_events_{0U};
+  std::atomic<bool> panic_requested_{false};
   std::atomic<bool> safety_stop_requested_{false};
 };
 
