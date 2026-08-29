@@ -513,6 +513,16 @@ private:
   // stop path indexes this exact target instead of guessing from timestamps.
   std::filesystem::path mActiveCaptureTarget;
 
+  // Realtime capture synchronization bridge. ProcessBlock snapshots the 44 Hz
+  // recorder cursor exactly on the host STOP->PLAY boundary, then publishes a
+  // monotonically increasing marker revision. RuntimeTick commits the frame to
+  // the non-realtime sync state machine. No mutex/file/network work is added to
+  // the audio callback.
+  std::atomic<bool> mAudioTransportRunning{false};
+  std::atomic<std::uint64_t> mPendingCaptureTransportFrame{0U};
+  std::atomic<std::uint64_t> mCaptureTransportMarkerRevision{0U};
+  std::uint64_t mLastCaptureTransportMarkerRevision{0U};
+
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};
   std::atomic<bool> mRuntimeExited{true};
