@@ -53,6 +53,32 @@ int main() {
   check(sync.resolved_anchor(440U) == 64U,
         "pre-roll marker must resolve to the captured frame");
 
+  // Preferred REC -> PLAY path: the audio callback may snapshot the 44 Hz
+  // recorder cursor before the non-realtime worker observes the new RUNNING
+  // state. This marker must therefore be accepted without depending on worker
+  // scheduling latency, and the first explicit N38 may refine it exactly once.
+  sync.reset();
+  sync.begin(host(2U, false));
+  check(sync.anchor_transport_snapshot(101U),
+        "callback STOP-to-PLAY snapshot must establish the transport anchor");
+  status = sync.status();
+  check(status.state == DmxCaptureSyncState::anchored &&
+            status.anchor_frame == 101U &&
+            status.source == DmxCaptureSyncSource::transport_start,
+        "callback transport snapshot must retain exact capture frame and source");
+  check(!sync.anchor_transport_snapshot(105U),
+        "later transport snapshots must not move the first PLAY boundary");
+  check(sync.anchor_explicit(103U),
+        "N38 must be allowed to refine the automatic PLAY anchor");
+  status = sync.status();
+  check(status.anchor_frame == 103U &&
+            status.source == DmxCaptureSyncSource::show_midi_marker,
+        "explicit marker must replace callback transport fallback");
+  check(!sync.anchor_transport_snapshot(110U),
+        "transport must never override an explicit MIDI zero");
+
+  // Legacy worker-observed fallback remains for hosts/builds where the callback
+  // marker was unavailable. It is deliberately secondary to the path above.
   sync.reset();
   sync.begin(host(2U, false));
   check(sync.status().state == DmxCaptureSyncState::waiting_for_transport,
@@ -94,6 +120,8 @@ int main() {
         "reset must clear synchronization source between recordings");
   check(!sync.anchor_explicit(10U),
         "an explicit marker outside a recording session must be ignored");
+  check(!sync.anchor_transport_snapshot(10U),
+        "transport snapshot outside a recording session must be ignored");
 
   if(failures == 0) {
     std::cout << "All AEYLA capture-sync anchor tests passed.\n";
