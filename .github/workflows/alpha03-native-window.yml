@@ -113,10 +113,11 @@ jobs:
             }
 
             $dumps = @(Get-ChildItem -Path $evidenceDir -File -Filter "*.dmp" -ErrorAction SilentlyContinue)
+            $exitUnsigned = [uint32]([int64]$process.ExitCode -band 0xFFFFFFFFL)
             @(
               "RESULT: FAILED - standalone exited during headless startup smoke"
               "ExitCode: $($process.ExitCode)"
-              ("ExitCodeHex: 0x{0:X8}" -f ([uint32]$process.ExitCode))
+              ("ExitCodeHex: 0x{0:X8}" -f $exitUnsigned)
               "Commit: $env:GITHUB_SHA"
               "Executable: $($app.FullName)"
               "CrashDumps: $($dumps.Count)"
