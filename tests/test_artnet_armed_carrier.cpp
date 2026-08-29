@@ -118,13 +118,14 @@ int main() {
   require(armed_packets >= 8U,
           "ARM with stopped transport did not maintain a continuous Art-Net carrier");
 
-  // Move away from zero, then RESET while still armed. RESET is artistic
-  // transport; it must return to frame zero without making the endpoint vanish.
+  // Move away from zero, then operator RESET while still armed. This is an
+  // artistic transport command: it returns to frame zero without making the
+  // endpoint vanish. The direct engine reset remains destructive by default.
   require(engine.play_from_start(DmxClipClockSource::host_samples, error), error);
   engine.advance_samples(24000U, false);
   require(wait_until([&]() { return engine.status().current_frame == 22U; }),
           "playback fixture did not advance to frame 22");
-  engine.stop_and_reset();
+  engine.stop_and_reset(true);
   require(wait_until([&]() {
     const auto status = engine.status();
     return status.armed && status.transport == DmxClipTransportState::ready &&
