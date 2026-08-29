@@ -306,8 +306,19 @@ void DmxClipPlaybackEngine::stop_and_reset() noexcept {
   hold_valid_ = false;
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
-  if(output_ != nullptr)
+
+  // RESET changes artistic position only. If physical authority is still
+  // armed, immediately resolve/publish frame zero and keep the 44 Hz Art-Net
+  // carrier alive. Only DISARM/BLACKOUT is allowed to remove authority.
+  if(armed_.load(std::memory_order_acquire)) {
+    if(publish_cursor_frame_locked() && output_ != nullptr &&
+       (uses_monotonic_clock() || heartbeat_ok_.load(std::memory_order_acquire)) &&
+       !rendering_offline_.load(std::memory_order_acquire)) {
+      output_->set_override_enabled(true);
+    }
+  } else if(output_ != nullptr) {
     output_->set_override_enabled(false);
+  }
 }
 
 void DmxClipPlaybackEngine::advance_samples(std::uint32_t processed_samples,
@@ -478,10 +489,6 @@ void DmxClipPlaybackEngine::run() noexcept {
       continue;
     }
 
-    // READY normally means transport stopped. When ARM has already published a
-    // valid hold frame, READY remains authoritative so the Art-Net carrier does
-    // not disappear. stop_and_reset() clears hold_valid_ intentionally and
-    // therefore still removes physical authority until PLAY or ARM republishes.
     if(state == DmxClipTransportState::ready) {
       bool has_hold = false;
       {
