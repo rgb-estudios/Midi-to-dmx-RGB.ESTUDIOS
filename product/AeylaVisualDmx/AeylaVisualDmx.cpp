@@ -274,9 +274,14 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
             std::memory_order_acquire);
         const auto offset = static_cast<std::uint32_t>(
             std::max(msg.mOffset, 0));
+        // Capture the deterministic 44 Hz recorder cursor at MIDI ingress. The
+        // runtime thread intentionally consumes the command later, after the
+        // event's audio block has completed; reading the cursor there moved the
+        // auto-IN by one or more frames. This load is atomic and lock-free.
+        const auto captureFrame = mArtNetCapture.recorded_frames_fast();
         const auto showEvent = aeyla::runtime::make_show_midi_event(
             showMatch.command, showMatch.song_index, channel, midiNote,
-            completed, transportCompleted, offset);
+            completed, transportCompleted, offset, captureFrame);
         (void)mShowMidiIngress.try_submit(showEvent);
       }
       return;
