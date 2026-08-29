@@ -24,6 +24,13 @@ bool inside_launch_range(const ShowMidiMapping& mapping,
   return value >= first && value < first + kShowMidiSongCapacity;
 }
 
+bool range_contains_fixed_note(std::uint8_t first_note,
+                               std::uint8_t fixed_note) noexcept {
+  const auto first = static_cast<unsigned>(first_note);
+  const auto fixed = static_cast<unsigned>(fixed_note);
+  return fixed >= first && fixed < first + kShowMidiSongCapacity;
+}
+
 }  // namespace
 
 ShowMidiEvent make_show_midi_event(
@@ -78,11 +85,9 @@ ShowMidiMappingError validate_show_midi_mapping(
      }))
     return ShowMidiMappingError::invalid_note;
 
-  // Deliberately do not reject legacy PRETEST maps that already used N41.
-  // Persisted format 1.2 predates the PANIC reservation; rejecting such a map
-  // here would reject the whole restored VST3 component state. At runtime PANIC
-  // has first-match priority, while MIDI Learn below prevents creating any new
-  // collision with the reserved note.
+  // State format 1.2 predates fixed N41/N42 reservations. Legacy component
+  // state must remain decodable; fixed commands shadow collisions at runtime.
+  // MIDI Learn below prevents creating new collisions.
   for(std::size_t left = 0U; left < notes.size(); ++left) {
     if(inside_launch_range(mapping, notes[left]))
       return ShowMidiMappingError::duplicate_note;
@@ -103,9 +108,11 @@ bool match_show_midi_note(const ShowMidiMapping& mapping,
      validate_show_midi_mapping(mapping) != ShowMidiMappingError::none)
     return false;
 
-  // Safety command always wins over a legacy mapping collision.
+  // Fixed operational controls always win over a legacy mapping collision.
   if(note == kShowMidiPanicNote)
     match.command = ShowMidiCommand::panic_blackout;
+  else if(note == kShowMidiCaptureNote)
+    match.command = ShowMidiCommand::capture_toggle;
   else if(note == mapping.previous_note)
     match.command = ShowMidiCommand::previous_song;
   else if(note == mapping.next_note)
@@ -136,19 +143,18 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
     return false;
   }
 
-  // N41 is a fixed one-way safety control in R07. Existing persisted maps may
-  // still contain an old collision and remain readable, but no new Learn
-  // operation is allowed to create one.
   if(target == ShowMidiLearnTarget::launch_song_base) {
-    const auto first = static_cast<unsigned>(note);
-    const auto panic = static_cast<unsigned>(kShowMidiPanicNote);
-    if(panic >= first && panic < first + kShowMidiSongCapacity) {
-      error_message = "El rango de canciones no puede incluir la nota 41 reservada para PANIC";
+    if(range_contains_fixed_note(note, kShowMidiPanicNote) ||
+       range_contains_fixed_note(note, kShowMidiCaptureNote)) {
+      error_message =
+          "El rango de canciones no puede incluir N41 PANIC ni N42 GRABAR";
       return false;
     }
   }
-  else if(note == kShowMidiPanicNote) {
-    error_message = "La nota 41 está reservada para PANIC / APAGÓN";
+  else if(note == kShowMidiPanicNote || note == kShowMidiCaptureNote) {
+    error_message = note == kShowMidiPanicNote
+        ? "La nota 41 está reservada para PANIC / APAGÓN"
+        : "La nota 42 está reservada para GRABAR / DETENER CAPTURA";
     return false;
   }
 
