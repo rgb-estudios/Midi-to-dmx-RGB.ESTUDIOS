@@ -150,8 +150,25 @@ void DmxTakeScheduler::reset_play_range() noexcept {
 
 bool DmxTakeScheduler::play(std::string& error_message,
                             DmxClipClockSource clock_source) {
-  if(file_mode_.load(std::memory_order_acquire))
+  if(file_mode_.load(std::memory_order_acquire)) {
+    if(clock_source == DmxClipClockSource::host_samples) {
+      const runtime::HostTransportMailbox* host = nullptr;
+      {
+        const std::scoped_lock lock(mutex_);
+        host = host_;
+      }
+      const auto host_state = host == nullptr
+          ? runtime::HostTransportSnapshot{}
+          : host->latest();
+      if(host_state.revision == 0U || !host_state.running ||
+         host_state.rendering_offline) {
+        error_message =
+            "La reproducción sincronizada espera PLAY del DAW; usa REPRODUCIR manual sólo para previa independiente";
+        return false;
+      }
+    }
     return file_player_.play_from_start(clock_source, error_message);
+  }
 
   error_message.clear();
   ensure_thread();
@@ -274,6 +291,21 @@ bool DmxTakeScheduler::arm(std::string& error_message) {
     output->prepare_explicit_rearm();
     if(!file_player_.arm(error_message))
       return false;
+
+    // If the operator arms while the DAW is already running, join the current
+    // transport immediately. The normal show workflow remains ARM while STOP,
+    // then the scheduler starts automatically on the next PLAY edge.
+    if(host_state.running) {
+      std::string transport_error;
+      if(!file_player_.play_from_start(DmxClipClockSource::host_samples,
+                                       transport_error)) {
+        file_player_.disarm();
+        error_message = "No se pudo unir la toma al transporte del DAW · " +
+                        transport_error;
+        return false;
+      }
+    }
+
     armed_.store(true, std::memory_order_release);
     heartbeat_ok_.store(true, std::memory_order_release);
     {
@@ -409,6 +441,8 @@ void DmxTakeScheduler::run() noexcept {
   constexpr auto kHeartbeatTimeout = std::chrono::milliseconds(750);
   std::uint64_t lastRevision = 0U;
   auto lastHeartbeat = Clock::now();
+  bool hostTransportSeen = false;
+  bool lastHostRunning = false;
 
   while(!stop_requested_.load(std::memory_order_acquire)) {
     const auto now = Clock::now();
@@ -429,7 +463,7 @@ void DmxTakeScheduler::run() noexcept {
     if(file_mode_.load(std::memory_order_acquire)) {
       file_player_.set_host_heartbeat_ok(hostSafe);
 
-      const auto fileStatus = file_player_.status();
+      auto fileStatus = file_player_.status();
       const bool hostOffline = hostSnapshot.revision != 0U &&
                                hostSnapshot.rendering_offline;
       if((hostOffline || (!hostSafe && !file_player_.uses_monotonic_clock())) &&
@@ -440,6 +474,39 @@ void DmxTakeScheduler::run() noexcept {
         error_ = hostOffline
             ? "Salida DMX desarmada: el host inició renderizado sin conexión"
             : "Salida DMX desarmada automáticamente: se perdió el pulso del host";
+      } else if(fileStatus.armed && hostSafe &&
+                !file_player_.uses_monotonic_clock()) {
+        const bool risingPlay = hostSnapshot.running &&
+            (!hostTransportSeen || !lastHostRunning);
+        const bool fallingStop = !hostSnapshot.running &&
+            hostTransportSeen && lastHostRunning;
+
+        std::string transportError;
+        bool transportOk = true;
+        if(risingPlay) {
+          if(fileStatus.transport == DmxClipTransportState::ready ||
+             fileStatus.transport == DmxClipTransportState::ended) {
+            transportOk = file_player_.play_from_start(
+                DmxClipClockSource::host_samples, transportError);
+          } else if(fileStatus.transport == DmxClipTransportState::paused) {
+            transportOk = file_player_.resume(transportError);
+          }
+        } else if(fallingStop &&
+                  fileStatus.transport == DmxClipTransportState::playing) {
+          transportOk = file_player_.pause(transportError);
+        }
+
+        if(!transportOk) {
+          file_player_.disarm();
+          armed_.store(false, std::memory_order_release);
+          const std::scoped_lock lock(mutex_);
+          error_ = "Fallo al seguir PLAY/PAUSE del DAW · " + transportError;
+        }
+      }
+
+      if(hostSnapshot.revision != 0U) {
+        lastHostRunning = hostSnapshot.running;
+        hostTransportSeen = true;
       }
       std::this_thread::sleep_for(kLoopPeriod);
       continue;
