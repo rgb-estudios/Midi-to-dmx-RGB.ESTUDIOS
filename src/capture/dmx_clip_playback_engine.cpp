@@ -371,7 +371,8 @@ bool DmxClipPlaybackEngine::seek_frame(std::uint64_t frame_index,
   return true;
 }
 
-void DmxClipPlaybackEngine::stop_and_reset() noexcept {
+void DmxClipPlaybackEngine::stop_and_reset(
+    bool preserve_armed_authority) noexcept {
   transport_.store(DmxClipTransportState::ready, std::memory_order_release);
   const std::scoped_lock lock(mutex_);
   cursor_samples_.store(0U, std::memory_order_relaxed);
@@ -381,13 +382,25 @@ void DmxClipPlaybackEngine::stop_and_reset() noexcept {
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
 
-  if(armed_.load(std::memory_order_acquire)) {
-    if(publish_cursor_frame_locked() && output_ != nullptr &&
-       (uses_monotonic_clock() || heartbeat_ok_.load(std::memory_order_acquire)) &&
-       !rendering_offline_.load(std::memory_order_acquire))
-      output_->set_override_enabled(true);
+  if(preserve_armed_authority && armed_.load(std::memory_order_acquire)) {
+    if(!publish_cursor_frame_locked()) {
+      armed_.store(false, std::memory_order_release);
+      if(output_ != nullptr)
+        output_->set_override_enabled(false);
+      return;
+    }
+
+    if(output_ != nullptr) {
+      const bool can_authorize =
+          (uses_monotonic_clock() ||
+           heartbeat_ok_.load(std::memory_order_acquire)) &&
+          !rendering_offline_.load(std::memory_order_acquire);
+      output_->set_override_enabled(can_authorize);
+    }
+    return;
   }
-  else if(output_ != nullptr)
+
+  if(output_ != nullptr)
     output_->set_override_enabled(false);
 }
 
