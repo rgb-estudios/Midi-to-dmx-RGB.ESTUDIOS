@@ -116,6 +116,7 @@ jobs:
           ditto "$vst3" "$stage/VST3/AeylaVisualDmx.vst3"
           ditto "$au" "$stage/AUv2/AeylaVisualDmx.component"
           cp tools/maintenance/macos/AEYLA_PLUGIN_MAINTENANCE.sh "$stage/"
+          cp tools/packaging/macos/INSTALL_AEYLA_ABLETON.command "$stage/"
           cp tools/packaging/macos/INSTALL_AEYLA.command "$stage/"
           cp tools/packaging/macos/UNINSTALL_AEYLA.command "$stage/"
           cp tools/packaging/macos/AUDIT_AEYLA.command "$stage/"
