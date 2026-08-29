@@ -485,7 +485,7 @@ void DmxTakeScheduler::run() noexcept {
         const std::scoped_lock lock(mutex_);
         error_ = hostOffline
             ? "Salida DMX desarmada: el host inició renderizado sin conexión"
-            : "Salida DMX desarmada automáticamente: se perdió el reloj del host durante PLAY";
+            : "Salida DMX desarmada automáticamente: se perdió el pulso del host (reloj de muestras) durante PLAY";
       }
       std::this_thread::sleep_for(kLoopPeriod);
       continue;
