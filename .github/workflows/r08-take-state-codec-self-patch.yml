@@ -1,0 +1,61 @@
+name: r08-take-state-codec-self-patch
+
+on:
+  pull_request:
+    branches:
+      - aeyla/r08-macos-ableton-20260829
+    paths:
+      - .github/workflows/r08-take-state-codec-self-patch.yml
+      - tools/dev/r08_apply_take_state_codec.py
+
+permissions:
+  contents: write
+
+jobs:
+  apply-take-state-codec:
+    if: github.event.pull_request.head.ref == 'aeyla/r08-capture-zero-midi-rec-20260829'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: aeyla/r08-capture-zero-midi-rec-20260829
+          fetch-depth: 0
+
+      - name: Apply exact state codec patch
+        run: python3 tools/dev/r08_apply_take_state_codec.py
+
+      - name: Verify patch scope and whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          printf 'Changed files:\n%s\n' "${changed[*]}"
+          if [[ ${#changed[@]} -ne 3 ]]; then
+            echo "Expected exactly three codec/test files" >&2
+            exit 1
+          fi
+          for path in "${changed[@]}"; do
+            case "$path" in
+              src/runtime/plugin_state.h|src/runtime/plugin_state.cpp|tests/test_plugin_state.cpp) ;;
+              *) echo "Unexpected changed file: $path" >&2; exit 1 ;;
+            esac
+          done
+
+      - name: Build and run plugin-state test only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-r08-state -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-r08-state --target test_plugin_state -j2
+          ctest --test-dir build-r08-state -R '^plugin_state$' --output-on-failure
+
+      - name: Commit guarded codec patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "rgb-estudios-r08-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/runtime/plugin_state.h src/runtime/plugin_state.cpp tests/test_plugin_state.cpp
+          git commit -m "R08 persist portable take bindings in host state"
+          git push origin HEAD:aeyla/r08-capture-zero-midi-rec-20260829
