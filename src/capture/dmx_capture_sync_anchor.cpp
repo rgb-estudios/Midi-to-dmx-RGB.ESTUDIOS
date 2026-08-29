@@ -8,6 +8,7 @@ void DmxCaptureSyncAnchor::begin(
     const runtime::HostTransportSnapshot& initial_host) noexcept {
   const std::scoped_lock lock(mutex_);
   anchor_frame_ = 0U;
+  source_ = DmxCaptureSyncSource::none;
   state_ = initial_host.revision != 0U && !initial_host.rendering_offline &&
                    !initial_host.running
                ? DmxCaptureSyncState::waiting_for_transport
@@ -23,6 +24,20 @@ bool DmxCaptureSyncAnchor::observe(
     return false;
 
   anchor_frame_ = recorded_frames;
+  source_ = DmxCaptureSyncSource::transport_start;
+  state_ = DmxCaptureSyncState::anchored;
+  return true;
+}
+
+bool DmxCaptureSyncAnchor::anchor_explicit(
+    std::uint64_t recorded_frames) noexcept {
+  const std::scoped_lock lock(mutex_);
+  if(state_ == DmxCaptureSyncState::idle ||
+     source_ == DmxCaptureSyncSource::show_midi_marker)
+    return false;
+
+  anchor_frame_ = recorded_frames;
+  source_ = DmxCaptureSyncSource::show_midi_marker;
   state_ = DmxCaptureSyncState::anchored;
   return true;
 }
@@ -31,11 +46,12 @@ void DmxCaptureSyncAnchor::reset() noexcept {
   const std::scoped_lock lock(mutex_);
   state_ = DmxCaptureSyncState::idle;
   anchor_frame_ = 0U;
+  source_ = DmxCaptureSyncSource::none;
 }
 
 DmxCaptureSyncStatus DmxCaptureSyncAnchor::status() const noexcept {
   const std::scoped_lock lock(mutex_);
-  return {state_, anchor_frame_};
+  return {state_, anchor_frame_, source_};
 }
 
 std::optional<std::uint64_t> DmxCaptureSyncAnchor::resolved_anchor(
