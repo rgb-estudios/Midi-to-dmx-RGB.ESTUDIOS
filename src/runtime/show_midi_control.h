@@ -11,6 +11,10 @@
 namespace aeyla::runtime {
 
 inline constexpr std::size_t kShowMidiSongCapacity = 15U;
+// R07 safety command. It is deliberately fixed instead of persisted/learned so
+// the final PRETEST does not change the VST3 state format. It follows the
+// configured MIDI SHOW channel and is one-way: PANIC can only enter blackout.
+inline constexpr std::uint8_t kShowMidiPanicNote = 41U;
 
 enum class ShowMidiCommand : std::uint8_t {
   previous_song = 0,
@@ -18,6 +22,7 @@ enum class ShowMidiCommand : std::uint8_t {
   play_retrigger,
   pause_resume,
   stop_reset,
+  panic_blackout,
   launch_song,
 };
 
@@ -33,7 +38,8 @@ enum class ShowMidiLearnTarget : std::uint8_t {
 
 // Defaults deliberately live on MIDI channel 16 and remain disabled until the
 // operator explicitly enables Show control. Direct Song launch occupies 15
-// consecutive notes. All values are persisted in VST3 component state.
+// consecutive notes. All configurable values are persisted in VST3 component
+// state; the reserved PANIC note above is part of the R07 safety contract.
 struct ShowMidiMapping {
   bool enabled{false};
   std::uint8_t channel{16U};
