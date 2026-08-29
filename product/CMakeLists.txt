@@ -189,6 +189,115 @@ if(_aeyla_midi_no_io_already_patched EQUAL -1)
   message(STATUS "Applied AEYLA no-I/O MIDI null-guard patch to pinned iPlug2")
 endif()
 
+# Temporary R08 diagnostic breadcrumbs for the Windows graphical standalone.
+# The hosted runner reports a second 0xC0000005 with no usable WER module/stack.
+# Record only coarse startup boundaries so we can identify whether the remaining
+# failure is before CreateDialog, inside WM_INITDIALOG/OpenWindow, or after UI
+# attachment. This patch is Windows-only and must be removed before freezing the
+# final PRETEST SHA.
+if(WIN32)
+  set(_aeyla_trace_anchor "UINT gScrollMessage;\n")
+  set(_aeyla_trace_impl [=[UINT gScrollMessage;
+
+void AeylaStartupTrace(const char* stage)
+{
+  if(stage == nullptr)
+    return;
+  char tempPath[MAX_PATH] = {};
+  const DWORD tempLength = GetTempPathA(MAX_PATH, tempPath);
+  if(tempLength == 0 || tempLength >= MAX_PATH)
+    return;
+  static const char kFileName[] = "AEYLA_GRAPHICAL_STARTUP_TRACE.txt";
+  if(tempLength + sizeof(kFileName) >= MAX_PATH)
+    return;
+  char path[MAX_PATH] = {};
+  lstrcpyA(path, tempPath);
+  lstrcatA(path, kFileName);
+  HANDLE file = CreateFileA(path, FILE_APPEND_DATA,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if(file == INVALID_HANDLE_VALUE)
+    return;
+  DWORD written = 0;
+  WriteFile(file, stage, static_cast<DWORD>(lstrlenA(stage)), &written, nullptr);
+  static const char newline[] = "\r\n";
+  WriteFile(file, newline, 2U, &written, nullptr);
+  FlushFileBuffers(file);
+  CloseHandle(file);
+}
+]=])
+  string(FIND "${_aeyla_iplug_app_main_source}" "void AeylaStartupTrace(const char* stage)" _aeyla_trace_impl_present)
+  if(_aeyla_trace_impl_present EQUAL -1)
+    string(FIND "${_aeyla_iplug_app_main_source}" "${_aeyla_trace_anchor}" _aeyla_trace_anchor_pos)
+    if(_aeyla_trace_anchor_pos EQUAL -1)
+      message(FATAL_ERROR "Pinned iPlug2 trace anchor changed; cannot instrument graphical startup safely.")
+    endif()
+    string(REPLACE "${_aeyla_trace_anchor}" "${_aeyla_trace_impl}" _aeyla_iplug_app_main_source "${_aeyla_iplug_app_main_source}")
+  endif()
+
+  set(_aeyla_trace_create_old "    IPlugAPPHost* pAppHost = IPlugAPPHost::Create();")
+  set(_aeyla_trace_create_new "    AeylaStartupTrace(\"WinMain:before-CreateHost\");\n    IPlugAPPHost* pAppHost = IPlugAPPHost::Create();\n    AeylaStartupTrace(\"WinMain:after-CreateHost\");")
+  string(REPLACE "${_aeyla_trace_create_old}" "${_aeyla_trace_create_new}" _aeyla_iplug_app_main_source "${_aeyla_iplug_app_main_source}")
+
+  set(_aeyla_trace_init_old "    pAppHost->Init();\n    pAppHost->TryToChangeAudio();")
+  set(_aeyla_trace_init_new "    AeylaStartupTrace(\"WinMain:before-Init\");\n    pAppHost->Init();\n    AeylaStartupTrace(\"WinMain:after-Init\");\n    pAppHost->TryToChangeAudio();\n    AeylaStartupTrace(\"WinMain:after-TryToChangeAudio\");")
+  string(REPLACE "${_aeyla_trace_init_old}" "${_aeyla_trace_init_new}" _aeyla_iplug_app_main_source "${_aeyla_iplug_app_main_source}")
+
+  set(_aeyla_trace_dialog_old "    CreateDialog(gHINSTANCE, MAKEINTRESOURCE(IDD_DIALOG_MAIN), GetDesktopWindow(), IPlugAPPHost::MainDlgProc);")
+  set(_aeyla_trace_dialog_new "    AeylaStartupTrace(\"WinMain:before-CreateDialog\");\n    HWND aeylaDialog = CreateDialog(gHINSTANCE, MAKEINTRESOURCE(IDD_DIALOG_MAIN), GetDesktopWindow(), IPlugAPPHost::MainDlgProc);\n    AeylaStartupTrace(aeylaDialog != nullptr ? \"WinMain:after-CreateDialog-ok\" : \"WinMain:after-CreateDialog-null\");")
+  string(REPLACE "${_aeyla_trace_dialog_old}" "${_aeyla_trace_dialog_new}" _aeyla_iplug_app_main_source "${_aeyla_iplug_app_main_source}")
+  file(WRITE "${_aeyla_iplug_app_main}" "${_aeyla_iplug_app_main_source}")
+
+  set(_aeyla_iplug_app_dialog "${IPLUG2_DIR}/IPlug/APP/IPlugAPP_dialog.cpp")
+  file(READ "${_aeyla_iplug_app_dialog}" _aeyla_iplug_app_dialog_source)
+  set(_aeyla_dialog_extern_old "extern float GetScaleForHWND(HWND hWnd);\n#define GET_MENU() GetMenu(gHWND)")
+  set(_aeyla_dialog_extern_new "extern float GetScaleForHWND(HWND hWnd);\nextern void AeylaStartupTrace(const char* stage);\n#define GET_MENU() GetMenu(gHWND)")
+  string(REPLACE "${_aeyla_dialog_extern_old}" "${_aeyla_dialog_extern_new}" _aeyla_iplug_app_dialog_source "${_aeyla_iplug_app_dialog_source}")
+
+  set(_aeyla_dialog_init_old [=[    case WM_INITDIALOG:
+    {
+      gHWND = hwndDlg;
+      IPlugAPP* pPlug = pAppHost->GetPlug();
+
+      if (!pAppHost->OpenWindow(gHWND))
+      {
+        DBGMSG("couldn't attach gui\n");
+      }
+
+      ClientResize(hwndDlg, pPlug->GetEditorWidth(), pPlug->GetEditorHeight());
+
+      ShowWindow(hwndDlg, SW_SHOW);]=])
+  set(_aeyla_dialog_init_new [=[    case WM_INITDIALOG:
+    {
+      AeylaStartupTrace("MainDlg:WM_INITDIALOG-enter");
+      gHWND = hwndDlg;
+      IPlugAPP* pPlug = pAppHost->GetPlug();
+      AeylaStartupTrace("MainDlg:before-OpenWindow");
+
+      if (!pAppHost->OpenWindow(gHWND))
+      {
+        DBGMSG("couldn't attach gui\n");
+      }
+      AeylaStartupTrace("MainDlg:after-OpenWindow");
+
+      ClientResize(hwndDlg, pPlug->GetEditorWidth(), pPlug->GetEditorHeight());
+      AeylaStartupTrace("MainDlg:after-ClientResize");
+
+      ShowWindow(hwndDlg, SW_SHOW);
+      AeylaStartupTrace("MainDlg:after-ShowWindow");]=])
+  string(FIND "${_aeyla_iplug_app_dialog_source}" "${_aeyla_dialog_init_old}" _aeyla_dialog_init_pos)
+  if(_aeyla_dialog_init_pos EQUAL -1)
+    message(FATAL_ERROR "Pinned iPlug2 WM_INITDIALOG changed; cannot instrument graphical startup safely.")
+  endif()
+  string(REPLACE "${_aeyla_dialog_init_old}" "${_aeyla_dialog_init_new}" _aeyla_iplug_app_dialog_source "${_aeyla_iplug_app_dialog_source}")
+
+  set(_aeyla_minmax_old "    case WM_GETMINMAXINFO:\n    {\n      if (!pAppHost)")
+  set(_aeyla_minmax_new "    case WM_GETMINMAXINFO:\n    {\n      AeylaStartupTrace(\"MainDlg:WM_GETMINMAXINFO\");\n      if (!pAppHost)")
+  string(REPLACE "${_aeyla_minmax_old}" "${_aeyla_minmax_new}" _aeyla_iplug_app_dialog_source "${_aeyla_iplug_app_dialog_source}")
+  file(WRITE "${_aeyla_iplug_app_dialog}" "${_aeyla_iplug_app_dialog_source}")
+  message(STATUS "Applied temporary AEYLA Windows graphical startup breadcrumbs")
+endif()
+
 set(IPLUG_DEPLOY_PLUGINS OFF CACHE BOOL "Do not deploy CI proof artifacts" FORCE)
 set(IGRAPHICS_BACKEND NANOVG CACHE STRING "Lightweight shared UI backend" FORCE)
 
