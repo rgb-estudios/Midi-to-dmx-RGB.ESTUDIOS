@@ -76,6 +76,11 @@ ShowMidiMappingError validate_show_midi_mapping(
      }))
     return ShowMidiMappingError::invalid_note;
 
+  // Deliberately do not reject legacy PRETEST maps that already used N41.
+  // Persisted format 1.2 predates the PANIC reservation; rejecting such a map
+  // here would reject the whole restored VST3 component state. At runtime PANIC
+  // has first-match priority, while MIDI Learn below prevents creating any new
+  // collision with the reserved note.
   for(std::size_t left = 0U; left < notes.size(); ++left) {
     if(inside_launch_range(mapping, notes[left]))
       return ShowMidiMappingError::duplicate_note;
@@ -96,7 +101,10 @@ bool match_show_midi_note(const ShowMidiMapping& mapping,
      validate_show_midi_mapping(mapping) != ShowMidiMappingError::none)
     return false;
 
-  if(note == mapping.previous_note)
+  // Safety command always wins over a legacy mapping collision.
+  if(note == kShowMidiPanicNote)
+    match.command = ShowMidiCommand::panic_blackout;
+  else if(note == mapping.previous_note)
     match.command = ShowMidiCommand::previous_song;
   else if(note == mapping.next_note)
     match.command = ShowMidiCommand::next_song;
@@ -125,6 +133,23 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
     error_message = "No existe una asignación MIDI esperando aprendizaje";
     return false;
   }
+
+  // N41 is a fixed one-way safety control in R07. Existing persisted maps may
+  // still contain an old collision and remain readable, but no new Learn
+  // operation is allowed to create one.
+  if(target == ShowMidiLearnTarget::launch_song_base) {
+    const auto first = static_cast<unsigned>(note);
+    const auto panic = static_cast<unsigned>(kShowMidiPanicNote);
+    if(panic >= first && panic < first + kShowMidiSongCapacity) {
+      error_message = "El rango de canciones no puede incluir la nota 41 reservada para PANIC";
+      return false;
+    }
+  }
+  else if(note == kShowMidiPanicNote) {
+    error_message = "La nota 41 está reservada para PANIC / APAGÓN";
+    return false;
+  }
+
   ShowMidiMapping candidate = mapping;
   candidate.channel = channel;
   switch(target) {

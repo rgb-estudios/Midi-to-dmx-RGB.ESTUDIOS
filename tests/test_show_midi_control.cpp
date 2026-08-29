@@ -38,6 +38,14 @@ int main() {
   check(!match_show_midi_note(mapping, 16U, mapping.play_note, 0U, match),
         "velocity-zero Note On must not trigger transport");
 
+  check(match_show_midi_note(mapping, 16U, kShowMidiPanicNote, 127U, match) &&
+            match.command == ShowMidiCommand::panic_blackout,
+        "reserved PANIC note must decode on the configured Show channel");
+  check(!match_show_midi_note(mapping, 15U, kShowMidiPanicNote, 127U, match),
+        "PANIC must not leak across MIDI channels");
+  check(!match_show_midi_note(mapping, 16U, kShowMidiPanicNote, 0U, match),
+        "velocity-zero PANIC must not trigger safety action");
+
   for(std::uint8_t song = 0U; song < kShowMidiSongCapacity; ++song) {
     const auto note = static_cast<std::uint8_t>(mapping.launch_base_note + song);
     check(match_show_midi_note(mapping, 16U, note, 100U, match) &&
@@ -56,9 +64,52 @@ int main() {
                                12U, 72U, error) &&
             mapping == before_collision && !error.empty(),
         "MIDI Learn collision must be rejected without altering mapping");
+  check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::stop_reset,
+                               12U, kShowMidiPanicNote, error) &&
+            mapping == before_collision &&
+            error.find("PANIC") != std::string::npos,
+        "reserved PANIC note must not be learnable by another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,
                                12U, 120U, error),
         "launch base must reserve all 15 direct Song notes");
+  check(!assign_show_midi_note(
+            mapping, ShowMidiLearnTarget::launch_song_base, 12U,
+            static_cast<std::uint8_t>(
+                kShowMidiPanicNote - (kShowMidiSongCapacity - 1U)), error) &&
+            error.find("PANIC") != std::string::npos,
+        "new Song launch banks must not be learned across PANIC N41");
+
+  // Format 1.2 predates the PANIC reservation. A restored map that already
+  // used N41 must remain decodable instead of invalidating the whole VST3
+  // component state. PANIC safely shadows the old assignment at runtime.
+  {
+    ShowMidiMapping legacy = mapping;
+    legacy.stop_note = kShowMidiPanicNote;
+    check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
+          "legacy configurable N41 collision must remain state-compatible");
+    check(match_show_midi_note(
+              legacy, legacy.channel, kShowMidiPanicNote, 127U, match) &&
+              match.command == ShowMidiCommand::panic_blackout,
+          "PANIC must take precedence over a legacy configurable N41 collision");
+  }
+  {
+    ShowMidiMapping legacy = mapping;
+    legacy.launch_base_note = static_cast<std::uint8_t>(
+        kShowMidiPanicNote - (kShowMidiSongCapacity - 1U));
+    // Move every configurable global command outside that inherited 27..41
+    // bank so this test isolates only the reserved PANIC overlap.
+    legacy.previous_note = 70U;
+    legacy.next_note = 71U;
+    legacy.play_note = 72U;
+    legacy.pause_note = 73U;
+    legacy.stop_note = 74U;
+    check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
+          "legacy launch bank crossing only N41 must remain state-compatible");
+    check(match_show_midi_note(
+              legacy, legacy.channel, kShowMidiPanicNote, 127U, match) &&
+              match.command == ShowMidiCommand::panic_blackout,
+          "PANIC must take precedence over a legacy direct-Song N41 collision");
+  }
 
   // Callback scheduling and artistic transport are deliberately different
   // clocks. Stopped DAW blocks may make an event ready for the worker but must
@@ -90,9 +141,28 @@ int main() {
           "global command inside launch range must be rejected");
   }
 
-  // Queue overflow is a safety boundary: it is observable and requests one
-  // fail-safe stop. Consuming that request rearms the detector for a later
-  // independent overflow period.
+  // PANIC bypasses the artistic SPSC queue and sample-ready wait. The callback
+  // only raises an atomic request; the runtime consumes it independently.
+  {
+    ShowMidiIngress<4U> panic_ingress;
+    ShowMidiEvent panic_event;
+    panic_event.command = ShowMidiCommand::panic_blackout;
+    panic_event.trigger_sample = 999U;
+    panic_event.ready_sample = 1999U;
+    check(panic_ingress.try_submit(panic_event),
+          "PANIC request must be accepted without queue capacity dependency");
+    check(panic_ingress.consume_panic_request() &&
+              !panic_ingress.consume_panic_request(),
+          "PANIC request must be a one-shot atomic safety boundary");
+    ShowMidiEvent should_be_empty;
+    check(!panic_ingress.try_consume(should_be_empty) &&
+              panic_ingress.dropped_events() == 0U,
+          "PANIC must not occupy or overflow the artistic transport queue");
+  }
+
+  // Queue overflow is a separate safety boundary: it is observable and
+  // requests one fail-safe stop. Consuming that request rearms the detector for
+  // a later independent overflow period.
   ShowMidiIngress<4U> ingress;
   ShowMidiEvent event;
   event.trigger_sample = 1234U;

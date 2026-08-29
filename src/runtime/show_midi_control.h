@@ -11,6 +11,10 @@
 namespace aeyla::runtime {
 
 inline constexpr std::size_t kShowMidiSongCapacity = 15U;
+// R07 safety command. It is deliberately fixed instead of persisted/learned so
+// the final PRETEST does not change the VST3 state format. It follows the
+// configured MIDI SHOW channel and is one-way: PANIC can only enter blackout.
+inline constexpr std::uint8_t kShowMidiPanicNote = 41U;
 
 enum class ShowMidiCommand : std::uint8_t {
   previous_song = 0,
@@ -18,6 +22,7 @@ enum class ShowMidiCommand : std::uint8_t {
   play_retrigger,
   pause_resume,
   stop_reset,
+  panic_blackout,
   launch_song,
 };
 
@@ -33,7 +38,8 @@ enum class ShowMidiLearnTarget : std::uint8_t {
 
 // Defaults deliberately live on MIDI channel 16 and remain disabled until the
 // operator explicitly enables Show control. Direct Song launch occupies 15
-// consecutive notes. All values are persisted in VST3 component state.
+// consecutive notes. All configurable values are persisted in VST3 component
+// state; the reserved PANIC note above is part of the R07 safety contract.
 struct ShowMidiMapping {
   bool enabled{false};
   std::uint8_t channel{16U};
@@ -120,6 +126,13 @@ template <std::size_t StorageCapacity>
 class ShowMidiIngress final {
  public:
   [[nodiscard]] bool try_submit(const ShowMidiEvent& event) noexcept {
+    // PANIC is not an artistic transport event and must not wait for queue
+    // capacity or sample-ready scheduling. The audio callback only raises this
+    // lock-free flag; the non-realtime runtime worker performs the safety work.
+    if(event.command == ShowMidiCommand::panic_blackout) {
+      panic_requested_.store(true, std::memory_order_release);
+      return true;
+    }
     if(queue_.try_push(event))
       return true;
     dropped_events_.fetch_add(1U, std::memory_order_relaxed);
@@ -129,6 +142,10 @@ class ShowMidiIngress final {
 
   [[nodiscard]] bool try_consume(ShowMidiEvent& event) noexcept {
     return queue_.try_pop(event);
+  }
+
+  [[nodiscard]] bool consume_panic_request() noexcept {
+    return panic_requested_.exchange(false, std::memory_order_acq_rel);
   }
 
   [[nodiscard]] bool consume_safety_stop_request() noexcept {
@@ -142,6 +159,7 @@ class ShowMidiIngress final {
  private:
   SpscQueue<ShowMidiEvent, StorageCapacity> queue_{};
   std::atomic<std::uint64_t> dropped_events_{0U};
+  std::atomic<bool> panic_requested_{false};
   std::atomic<bool> safety_stop_requested_{false};
 };
 
