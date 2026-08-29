@@ -33,7 +33,8 @@ ShowMidiEvent make_show_midi_event(
     std::uint8_t note,
     std::uint64_t completed_callback_samples,
     std::uint64_t completed_transport_samples,
-    std::uint32_t sample_offset) noexcept {
+    std::uint32_t sample_offset,
+    std::uint64_t capture_frame_snapshot) noexcept {
   const auto offset = static_cast<std::uint64_t>(sample_offset);
   const auto saturating_add = [offset](std::uint64_t value) noexcept {
     return value > std::numeric_limits<std::uint64_t>::max() - offset
@@ -47,6 +48,7 @@ ShowMidiEvent make_show_midi_event(
   event.note = note;
   event.trigger_sample = saturating_add(completed_transport_samples);
   event.ready_sample = saturating_add(completed_callback_samples);
+  event.capture_frame_snapshot = capture_frame_snapshot;
   return event;
 }
 
