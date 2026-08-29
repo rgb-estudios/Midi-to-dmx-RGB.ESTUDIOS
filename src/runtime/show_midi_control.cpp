@@ -76,8 +76,14 @@ ShowMidiMappingError validate_show_midi_mapping(
      }))
     return ShowMidiMappingError::invalid_note;
 
+  // PANIC is deliberately fixed for R07. Configurable transport commands and
+  // the 15-song launch bank may not shadow this one-way safety action.
+  if(inside_launch_range(mapping, kShowMidiPanicNote))
+    return ShowMidiMappingError::duplicate_note;
+
   for(std::size_t left = 0U; left < notes.size(); ++left) {
-    if(inside_launch_range(mapping, notes[left]))
+    if(notes[left] == kShowMidiPanicNote ||
+       inside_launch_range(mapping, notes[left]))
       return ShowMidiMappingError::duplicate_note;
     for(std::size_t right = left + 1U; right < notes.size(); ++right) {
       if(notes[left] == notes[right])
@@ -96,7 +102,9 @@ bool match_show_midi_note(const ShowMidiMapping& mapping,
      validate_show_midi_mapping(mapping) != ShowMidiMappingError::none)
     return false;
 
-  if(note == mapping.previous_note)
+  if(note == kShowMidiPanicNote)
+    match.command = ShowMidiCommand::panic_blackout;
+  else if(note == mapping.previous_note)
     match.command = ShowMidiCommand::previous_song;
   else if(note == mapping.next_note)
     match.command = ShowMidiCommand::next_song;
@@ -139,9 +147,12 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
 
   const auto validation = validate_show_midi_mapping(candidate);
   if(validation != ShowMidiMappingError::none) {
-    error_message = validation == ShowMidiMappingError::launch_range_overflow
-        ? "La nota base debe dejar espacio para 15 canciones"
-        : "La nota coincide con otro comando o con el rango de canciones";
+    if(note == kShowMidiPanicNote)
+      error_message = "La nota 41 está reservada para PANIC / APAGÓN";
+    else
+      error_message = validation == ShowMidiMappingError::launch_range_overflow
+          ? "La nota base debe dejar espacio para 15 canciones"
+          : "La nota coincide con otro comando, PANIC o el rango de canciones";
     return false;
   }
   mapping = candidate;
