@@ -193,6 +193,21 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
   // Seek and Loop must never relocate or duplicate a relative DMX clip.
   const bool renderingOffline = GetRenderingOffline();
   const bool transportRunning = GetTransportIsRunning();
+
+  // Timestamp the capture cursor before publishing RUNNING to the host mailbox.
+  // If RuntimeTick observes the new transport state, this release sequence makes
+  // the corresponding 44 Hz capture marker visible first. Only atomics are used
+  // here; the non-realtime worker owns the sync state machine itself.
+  const bool transportWasRunning = mAudioTransportRunning.exchange(
+      transportRunning, std::memory_order_acq_rel);
+  if(!transportWasRunning && transportRunning &&
+     mArtNetCapture.streamed_recording_active())
+  {
+    mPendingCaptureTransportFrame.store(
+        mArtNetCapture.recorded_frames_fast(), std::memory_order_release);
+    mCaptureTransportMarkerRevision.fetch_add(1U, std::memory_order_release);
+  }
+
   mHostTransport.publish(transportRunning,
                          renderingOffline,
                          GetSamplePos(),
@@ -533,9 +548,31 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     const auto host = mHostTransport.latest();
     if(mArtNetCapture.streamed_recording_active())
     {
+      const auto markerRevision = mCaptureTransportMarkerRevision.load(
+          std::memory_order_acquire);
+      if(markerRevision != mLastCaptureTransportMarkerRevision)
+      {
+        const auto markerFrame = mPendingCaptureTransportFrame.load(
+            std::memory_order_acquire);
+        (void)mCaptureSyncAnchor.anchor_transport_snapshot(markerFrame);
+        mLastCaptureTransportMarkerRevision = markerRevision;
+      }
+
+      // Legacy fallback for hosts that suspend ProcessBlock while stopped or do
+      // not deliver a clean STOP->PLAY callback edge. It runs only after the
+      // callback marker above, so worker scheduling can never replace a more
+      // precise callback timestamp.
       const auto capture = mArtNetCapture.stats();
-      (void) mCaptureSyncAnchor.observe(host, capture.recorded_frames);
+      (void)mCaptureSyncAnchor.observe(host, capture.recorded_frames);
     }
+    else
+    {
+      // Baseline every inactive period. A marker from a previous recording can
+      // therefore never be inherited by the next N42 capture session.
+      mLastCaptureTransportMarkerRevision =
+          mCaptureTransportMarkerRevision.load(std::memory_order_acquire);
+    }
+
     const std::scoped_lock lock(mModelMutex);
     if(mRuntimeFaulted.load(std::memory_order_acquire))
     {
@@ -1167,8 +1204,7 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
   {
     const std::scoped_lock stateLock(mHostStateMutex);
     bound = std::any_of(
-        mHostStateCache.song_bindings.begin(),
-        mHostStateCache.song_bindings.end(),
+        mHostStateCache.song_bindings.begin(), mHostStateCache.song_bindings.end(),
         [&](const aeyla::runtime::SessionSongBinding& candidate) {
           return candidate.song_id == mModel.snapshot().active_song_id;
         });
