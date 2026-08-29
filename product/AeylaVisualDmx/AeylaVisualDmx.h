@@ -547,6 +547,11 @@ private:
   std::atomic<bool> mParameterUpdatePending{true};
   std::atomic<bool> mLookParameterUiSyncPending{false};
   std::atomic<bool> mHostDeactivationPending{false};
+  // OnReset may execute on a host processing thread. It only raises this
+  // lock-free request; RuntimeTick performs the destructive scheduler/model
+  // reset outside the audio callback. This prevents a take loaded at an old
+  // sample rate from surviving an Ableton audio-engine reset.
+  std::atomic<bool> mHostResetPending{false};
   std::atomic<bool> mHostStateRestoreRejected{false};
   std::atomic<bool> mOutputArmed{false};
   std::atomic<bool> mGlobalBlackout{true};

@@ -332,6 +332,12 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
 void AeylaVisualDmx::OnReset()
 {
   mLastMidiNote.store(-1, std::memory_order_relaxed);
+  // Ableton may call OnReset when its audio engine/device/sample rate is
+  // rebuilt. Never perform scheduler locks or file I/O here. Mark the next
+  // transport callback as a fresh edge and ask the runtime worker to
+  // invalidate any file-backed take that was calibrated to the old rate.
+  mAudioTransportRunning.store(false, std::memory_order_release);
+  mHostResetPending.store(true, std::memory_order_release);
 
   aeyla::runtime::HostEvent event{};
   event.type = aeyla::runtime::HostEventType::all_notes_off;
@@ -585,6 +591,27 @@ void AeylaVisualDmx::RuntimeTick() noexcept
       return;
     }
     ApplyPendingHostStateLocked();
+
+    if(mHostResetPending.exchange(false, std::memory_order_acq_rel))
+    {
+      // A host audio-engine reset may change sample rate. A loaded clip's
+      // sample-domain conversion is therefore no longer authoritative.
+      // Fail closed now; the next PLAY/preflight reloads the .aeylatake with
+      // the current GetSampleRate() instead of continuing with stale timing.
+      ClearShowMidiCommandsLocked();
+      mTakeScheduler.stop_reset();
+      mTakeScheduler.disarm();
+      mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+      mActiveTakeSongIndex.store(-1, std::memory_order_release);
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
+      mModel.release_transients();
+      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
+      mModel.set_blackout(true);
+      mParamBlackout.store(true, std::memory_order_release);
+      SetShowMidiMessage(
+          "HOST RESET · SALIDA DESARMADA · toma invalidada y pendiente de recarga");
+    }
 
     if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
     {
