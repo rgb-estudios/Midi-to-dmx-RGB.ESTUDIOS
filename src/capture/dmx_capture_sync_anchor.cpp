@@ -29,6 +29,20 @@ bool DmxCaptureSyncAnchor::observe(
   return true;
 }
 
+bool DmxCaptureSyncAnchor::anchor_transport_snapshot(
+    std::uint64_t recorded_frames) noexcept {
+  const std::scoped_lock lock(mutex_);
+  if(state_ == DmxCaptureSyncState::idle ||
+     source_ == DmxCaptureSyncSource::show_midi_marker ||
+     source_ == DmxCaptureSyncSource::transport_start)
+    return false;
+
+  anchor_frame_ = recorded_frames;
+  source_ = DmxCaptureSyncSource::transport_start;
+  state_ = DmxCaptureSyncState::anchored;
+  return true;
+}
+
 bool DmxCaptureSyncAnchor::anchor_explicit(
     std::uint64_t recorded_frames) noexcept {
   const std::scoped_lock lock(mutex_);
