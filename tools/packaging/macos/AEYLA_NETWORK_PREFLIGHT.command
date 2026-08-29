@@ -26,8 +26,10 @@ fi
 printf '\nChecklist AEYLA:\n'
 printf '  1. Usa Ethernet/USB-Ethernet/Thunderbolt-Ethernet, no Wi-Fi.\n'
 printf '  2. La IPv4 debe estar en la misma subred que Avolites/nodo/Capture.\n'
-printf '  3. Abre Ableton DESPUÉS de dejar lista la NIC.\n'
-printf '  4. En AEYLA pulsa REESCANEAR y confirma RX/TX sobre esa IPv4.\n'
-printf '  5. Antes de show, ARM debe producir carrier Art-Net aun con PLAY detenido.\n\n'
+printf '  3. macOS 15+: abre Ajustes del Sistema > Privacidad y seguridad > Red local y habilita Ableton Live 12.\n'
+printf '  4. Revisa que Firewall/Little Snitch no bloquee UDP de Ableton Live.\n'
+printf '  5. Abre Ableton DESPUÉS de dejar lista la NIC.\n'
+printf '  6. En AEYLA pulsa REESCANEAR y confirma RX/TX sobre esa IPv4.\n'
+printf '  7. Antes de show, ARM debe producir carrier Art-Net aun con PLAY detenido.\n\n'
 
 read -r -p 'Presiona Enter para cerrar…' _
