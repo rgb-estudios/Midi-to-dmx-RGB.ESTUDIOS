@@ -250,7 +250,7 @@ void DmxTakeScheduler::stop_hold() noexcept {
 
 void DmxTakeScheduler::stop_reset() noexcept {
   if(file_mode_.load(std::memory_order_acquire)) {
-    file_player_.stop_and_reset();
+    file_player_.stop_and_reset(true);
     return;
   }
   stop_hold();
