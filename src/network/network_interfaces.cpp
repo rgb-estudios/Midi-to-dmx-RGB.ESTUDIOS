@@ -95,7 +95,7 @@ bool interface_is_wireless(const std::string& name) noexcept {
   if(descriptor < 0)
     return false;
 
-  ifmediareq media{};
+  struct ifmediareq media{};
   std::strncpy(media.ifm_name, name.c_str(), sizeof(media.ifm_name) - 1U);
   media.ifm_name[sizeof(media.ifm_name) - 1U] = '\0';
   const bool wireless =
