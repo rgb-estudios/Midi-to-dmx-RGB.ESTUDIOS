@@ -23,6 +23,7 @@
 #include <cstring>
 #include <net/if_media.h>
 #include <sys/ioctl.h>
+#include <sys/sockio.h>
 #include <unistd.h>
 #endif
 #endif
