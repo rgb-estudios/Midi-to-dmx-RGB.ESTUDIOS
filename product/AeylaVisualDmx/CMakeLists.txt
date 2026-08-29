@@ -5,6 +5,11 @@ if(NOT DEFINED IPLUG2_DIR)
   message(FATAL_ERROR "IPLUG2_DIR must be provided by product/CMakeLists.txt")
 endif()
 
+# Apply narrowly scoped compatibility/safety patches to the exact pinned iPlug2
+# source before the APP/VST3 targets compile it. On Windows this makes an
+# unavailable OpenGL/NanoVG editor fail cleanly instead of terminating the host.
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/AeylaIPlugWindowsGraphicsHardening.cmake)
+
 include(${IPLUG2_DIR}/iPlug2.cmake)
 find_package(iPlug2 REQUIRED)
 
