@@ -471,14 +471,21 @@ void DmxTakeScheduler::run() noexcept {
       const auto fileStatus = file_player_.status();
       const bool hostOffline = hostSnapshot.revision != 0U &&
                                hostSnapshot.rendering_offline;
-      if((hostOffline || (!hostSafe && !file_player_.uses_monotonic_clock())) &&
-         fileStatus.armed) {
+      // Ableton may suspend ProcessBlock on a silent instrument while stopped.
+      // READY/PAUSED/ENDED do not advance on host samples and can safely keep
+      // the held Art-Net frame alive in the independent worker. Once PLAYING
+      // uses the host-sample clock, heartbeat loss is again a hard fail-closed
+      // boundary because advancing without the DAW clock would desynchronize.
+      const bool hostClockRequired =
+          fileStatus.transport == DmxClipTransportState::playing &&
+          !file_player_.uses_monotonic_clock();
+      if((hostOffline || (!hostSafe && hostClockRequired)) && fileStatus.armed) {
         file_player_.disarm();
         armed_.store(false, std::memory_order_release);
         const std::scoped_lock lock(mutex_);
         error_ = hostOffline
             ? "Salida DMX desarmada: el host inició renderizado sin conexión"
-            : "Salida DMX desarmada automáticamente: se perdió el pulso del host";
+            : "Salida DMX desarmada automáticamente: se perdió el reloj del host durante PLAY";
       }
       std::this_thread::sleep_for(kLoopPeriod);
       continue;

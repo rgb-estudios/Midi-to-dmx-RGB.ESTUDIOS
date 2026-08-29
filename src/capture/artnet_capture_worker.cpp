@@ -24,6 +24,11 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#endif
 #endif
 
 namespace aeyla::capture {
@@ -67,6 +72,32 @@ std::string ipv4_text(const sockaddr_in& address) {
     return {};
   return text.data();
 }
+
+#ifdef __APPLE__
+unsigned int interface_index_for_ipv4(std::string_view text) noexcept {
+  in_addr requested{};
+  if(!parse_ipv4(text, requested))
+    return 0U;
+
+  ifaddrs* addresses = nullptr;
+  if(getifaddrs(&addresses) != 0 || addresses == nullptr)
+    return 0U;
+
+  unsigned int index = 0U;
+  for(const ifaddrs* item = addresses; item != nullptr; item = item->ifa_next) {
+    if(item->ifa_addr == nullptr || item->ifa_addr->sa_family != AF_INET ||
+       item->ifa_name == nullptr)
+      continue;
+    const auto* address = reinterpret_cast<const sockaddr_in*>(item->ifa_addr);
+    if(address->sin_addr.s_addr == requested.s_addr) {
+      index = if_nametoindex(item->ifa_name);
+      break;
+    }
+  }
+  freeifaddrs(addresses);
+  return index;
+}
+#endif
 
 struct ParsedArtDmx {
   DmxUniverse frame{};
@@ -167,12 +198,37 @@ class ArtNetCaptureWorker::Impl final {
     sockaddr_in local{};
     local.sin_family = AF_INET;
     local.sin_port = htons(config.udp_port);
+#ifdef __APPLE__
+    // On Darwin, binding a UDP socket to the interface's unicast address can
+    // exclude directed-broadcast Art-Net addressed to that subnet. Bind the
+    // socket to the selected physical interface instead, then listen on ANY on
+    // that interface. This accepts both unicast-to-Mac and directed broadcast
+    // without opening the capture path to every NIC on the host.
+    const unsigned int interface_index =
+        interface_index_for_ipv4(config.listen_ipv4);
+    if(interface_index == 0U) {
+      close_socket(socket_handle);
+      cleanup_winsock();
+      error_message = "Could not resolve the selected macOS interface for " +
+                      config.listen_ipv4;
+      return false;
+    }
+    if(setsockopt(socket_handle, IPPROTO_IP, IP_BOUND_IF,
+                  &interface_index, sizeof(interface_index)) != 0) {
+      close_socket(socket_handle);
+      cleanup_winsock();
+      error_message = "Could not bind Art-Net capture to the selected macOS interface";
+      return false;
+    }
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+#else
     if(inet_pton(AF_INET, config.listen_ipv4.c_str(), &local.sin_addr) != 1) {
       close_socket(socket_handle);
       cleanup_winsock();
       error_message = "Capture listen IPv4 could not be parsed";
       return false;
     }
+#endif
     if(bind(socket_handle, reinterpret_cast<const sockaddr*>(&local),
             sizeof(local)) != 0) {
       close_socket(socket_handle);

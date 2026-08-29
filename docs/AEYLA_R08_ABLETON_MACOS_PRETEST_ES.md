@@ -1,0 +1,227 @@
+# AEYLA Visual DMX — R08 macOS / Ableton Live PRETEST
+
+Fecha de definición: 29 de agosto de 2026.
+
+## 1. Objetivo
+
+R08 convierte macOS + Ableton Live en el entorno principal de producción de AEYLA Visual DMX. Windows/REAPER continúa como banco de pruebas y compatibilidad, pero una versión no se promociona a SHOW CANDIDATE si no supera el flujo real en Ableton sobre un Mac.
+
+Entorno objetivo:
+
+- Ableton Live 12.
+- macOS 11.7.10 o posterior dentro de la matriz oficialmente soportada por Live 12.
+- Mac Apple Silicon como objetivo principal.
+- Intel x86_64 conservado en el binario Universal para compatibilidad.
+- Ethernet cableado dedicado para Art-Net.
+- VST3 como formato principal del Set.
+- AUv2 como formato secundario de respaldo/diagnóstico; no mezclar VST3 y AU del mismo plugin dentro del mismo Set.
+
+## 2. Formato recomendado en Ableton
+
+Usar **AEYLA Visual DMX VST3**.
+
+AEYLA está declarado como instrumento MIDI silencioso:
+
+- se inserta en una pista MIDI dedicada;
+- recibe las notas MIDI SHOW directamente desde clips MIDI o Arrangement;
+- no necesita entrada de audio;
+- su salida de audio permanece en silencio;
+- el motor DMX usa el reloj de muestras que Ableton entrega al plugin.
+
+AUv2 se compila y valida para macOS, pero no es el formato primario del show. VST3 conserva además la misma identidad de formato cuando el Set se traslada entre macOS y Windows.
+
+## 3. Arquitectura de sincronía
+
+Ruta principal:
+
+`Ableton audio + MIDI SHOW -> mismo reloj de muestras -> AEYLA -> Art-Net`
+
+El evento MIDI SHOW de inicio se coloca exactamente en el punto artístico de comienzo de cada canción. AEYLA compensa el sample offset del bloque de audio y gobierna la toma DMX con el cursor de muestras del host.
+
+La captura física y reproducción DMX siguen trabajando nominalmente a 44 fps, por lo que la resolución física final es aproximadamente 22,7 ms por cuadro DMX. El disparo dentro de Ableton puede ser sample-accurate; no se debe prometer una resolución física menor que un cuadro DMX.
+
+## 4. Timecode hacia Avolites
+
+Ableton Live puede **recibir** MIDI Timecode, pero no genera MTC nativamente como master. Su salida Sync nativa es MIDI Clock.
+
+Por lo tanto AEYLA no debe depender de MTC para sincronizar el DMX con el audio.
+
+Para el sistema AEYLA/Avolites se mantienen dos rutas paralelas, independientes del reloj interno del plugin.
+
+### Opción A — LTC en pista de audio dedicada — RECOMENDADA
+
+Para Avolites T3, usar una pista/archivo LTC generado previamente y una salida física dedicada de la interfaz de audio hacia la entrada LTC del T3.
+
+Ventajas:
+
+- el T3 dispone de entrada LTC dedicada;
+- el LTC es reproducido por el mismo motor de audio que reproduce las canciones;
+- no depende de un dispositivo Max for Live adicional para generar timecode;
+- permite conservar horas distintas por canción;
+- la pista puede permanecer sin Warp para que la relación temporal sea determinista.
+
+El LTC no gobierna el motor DMX de AEYLA. Ambos simplemente comparten el mismo Arrangement/audio master de Ableton.
+
+### Opción B — MTC mediante Max for Live
+
+Si se desea conservar el flujo MIDI Timecode existente, usar un dispositivo Max for Live dedicado a generar MTC y rutearlo al puerto MIDI que recibe Avolites.
+
+Requisitos:
+
+- Max Runtime/Max for Live disponible;
+- dispositivo MTC validado en el mismo Mac del show;
+- puerto MIDI y frame rate verificados;
+- prueba de localización, STOP/PLAY y cambio entre canciones.
+
+MTC queda como alternativa, no como dependencia del plugin.
+
+## 5. Convención por canción
+
+La convención de una hora de timecode por canción puede conservarse para Avolites:
+
+- canción 01 -> 01:00:00:00
+- canción 02 -> 02:00:00:00
+- canción 03 -> 03:00:00:00
+- etc.
+
+La nota MIDI SHOW que dispara AEYLA debe ubicarse en el mismo inicio artístico que se usa para el timecode de esa canción.
+
+No es necesario que AEYLA decodifique esa hora para mantenerse sincronizado.
+
+## 6. Configuración de Ableton
+
+### Pista AEYLA
+
+1. Crear una pista MIDI dedicada llamada `AEYLA DMX`.
+2. Insertar `AEYLA Visual DMX` en formato VST3.
+3. Mantener la pista activa durante todo el show.
+4. Usar clips/Arrangement MIDI para las notas MIDI SHOW.
+5. No insertar una instancia AU adicional de AEYLA en el mismo Set.
+
+### MIDI SHOW R07/R08
+
+Mapa inicial:
+
+- N36: canción anterior.
+- N37: siguiente canción.
+- N38: PLAY / retrigger.
+- N39: pausa / reanudar.
+- N40: STOP / RESET.
+- N41: PANIC / APAGÓN unidireccional.
+- N48–62: canción 01–15.
+
+El canal por defecto es 16 y puede cambiarse desde AEYLA.
+
+PANIC N41 nunca puede armar Art-Net ni quitar APAGÓN.
+
+## 7. Grabación con pre-roll en Ableton
+
+1. Seleccionar la canción en AEYLA.
+2. Confirmar Art-Net RX desde Avolites.
+3. Comenzar `GRABAR NUEVA TOMA` antes del inicio real.
+4. Ableton puede estar ya corriendo en pre-roll.
+5. Colocar/disparar N38 exactamente en el inicio artístico.
+6. Durante grabación, esa nota actúa como marcador explícito de sincronía y no intenta reproducir una toma antigua.
+7. Detener y guardar.
+8. AEYLA conserva el RAW completo y usa el marcador como ENTRADA no destructiva.
+
+## 8. Red en macOS
+
+AEYLA puede enumerar interfaces IPv4 y R08 distingue interfaces Wi-Fi de interfaces Ethernet en macOS. La salida de show debe utilizar Ethernet cableado.
+
+R08 no modifica de forma privilegiada la configuración IPv4 del sistema desde dentro de Ableton. Antes de abrir el show:
+
+1. Conectar el adaptador Ethernet que se usará para Art-Net.
+2. Ejecutar `AEYLA_NETWORK_PREFLIGHT.command` si se quiere revisar las interfaces actuales.
+3. Configurar su IPv4/submáscara en Ajustes del Sistema -> Red.
+4. Usar una red compatible con Avolites/nodo/Capture.
+5. Abrir Ableton y AEYLA después de configurar la NIC.
+6. En AEYLA pulsar reescaneo y seleccionar esa interfaz para RX/TX.
+7. Confirmar que la IPv4 mostrada por AEYLA coincide con la configurada en macOS.
+
+Esto evita pedir privilegios de administrador desde un plugin cargado dentro de Ableton y reduce un punto de fallo durante show.
+
+## 9. Instalación macOS PRETEST
+
+El paquete R08 contiene:
+
+- `VST3/AeylaVisualDmx.vst3` Universal arm64+x86_64.
+- `AUv2/AeylaVisualDmx.component` Universal arm64+x86_64.
+- `INSTALL_AEYLA_ABLETON.command` para instalar únicamente VST3, opción recomendada.
+- `INSTALL_AEYLA.command` para instalar VST3 + AUv2 si se requiere diagnóstico en ambos formatos.
+- `AEYLA_NETWORK_PREFLIGHT.command` para revisar las interfaces sin modificar el sistema.
+- scripts de auditoría/desinstalación limitados a AEYLA.
+- `BUILD_ID.txt` y hashes SHA-256.
+
+La compilación PRETEST usa firma ad-hoc. Una distribución pública definitiva requiere Developer ID y notarización de Apple; no se debe presentar una build ad-hoc como release pública firmada/notarizada.
+
+## 10. Gate automático macOS
+
+El workflow `ableton-macos-pretest` debe aprobar:
+
+1. sintaxis de scripts operativos macOS;
+2. compilación VST3 Universal;
+3. compilación AUv2 Universal;
+4. presencia de slices arm64 + x86_64;
+5. verificación codesign ad-hoc de ambos bundles;
+6. Steinberg VST3 Validator;
+7. Apple `auval` para AUv2;
+8. generación de artefacto PRETEST con BUILD_ID y hashes.
+
+Estas pruebas no sustituyen Ableton real, porque Ableton Live no está disponible en GitHub Actions.
+
+## 11. Gate físico obligatorio — Ableton / Mac
+
+### A — descubrimiento del plugin
+
+- instalación limpia VST3;
+- Live 12 encuentra `AEYLA Visual DMX` bajo VST3;
+- insertar en pista MIDI;
+- abrir/cerrar UI repetidamente sin crash;
+- redimensionar ventana y cambiar pestañas.
+
+### B — MIDI y transporte
+
+- ejecutar N36/N37/N38/N39/N40 desde clips MIDI;
+- confirmar selección PREPARADA/ACTIVA correcta;
+- hacer cinco lanzamientos desde el mismo punto de Arrangement;
+- no debe aparecer deriva acumulativa respecto del audio.
+
+### C — captura
+
+- Avolites -> Art-Net -> Ethernet Mac -> AEYLA;
+- grabar con pre-roll;
+- N38 en inicio real debe fijar ENTRADA de captura;
+- RAW debe permanecer intacto.
+
+### D — carrier y reproducción física
+
+- quitar APAGÓN manualmente;
+- ARMAR manualmente;
+- sin PLAY, Capture/nodo debe detectar el universo inmediatamente;
+- observar al menos 30 s con Ableton detenido: carrier estable;
+- PLAY por MIDI SHOW debe iniciar la toma sincronizada;
+- STOP/RESET conserva carrier y vuelve a cero;
+- DISARM elimina autoridad.
+
+### E — seguridad
+
+- con salida armada, enviar N41;
+- resultado: APAGÓN activo + autoridad desarmada;
+- repetir N41 varias veces: jamás vuelve la luz;
+- quitar APAGÓN manualmente no rearma la salida;
+- ARM posterior siempre es manual.
+
+### F — sesión completa + timecode
+
+- preparar al menos tres canciones consecutivas;
+- cambiar PREPARADA mientras otra canción está activa;
+- lanzar cada canción desde su clip/marker real;
+- validar que el cambio entre tomas no introduce blackout no solicitado;
+- si se usa LTC: comprobar tres horas/canciones distintas en T3 y reubicar Arrangement antes de PLAY;
+- si se usa MTC Max for Live: repetir la misma prueba de localización y cambio de canción;
+- confirmar que un fallo de la ruta de timecode no altera el reloj interno de AEYLA.
+
+## 12. Promoción
+
+R08 sólo puede denominarse `ABLETON/MAC SHOW CANDIDATE` cuando los gates automáticos y A–F hayan pasado sobre el Mac de show o sobre un Mac equivalente con la misma arquitectura, versión de Live y adaptador de red.

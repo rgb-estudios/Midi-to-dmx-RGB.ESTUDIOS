@@ -1,0 +1,148 @@
+name: ableton-macos-pretest
+
+on:
+  pull_request:
+    paths:
+      - "product/**"
+      - "src/**"
+      - "tools/maintenance/macos/**"
+      - "tools/packaging/macos/**"
+      - "docs/AEYLA_R08_ABLETON_MACOS_PRETEST_ES.md"
+      - ".github/workflows/ableton-macos-pretest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AEYLA_VERSION: 0.3.3-alpha
+  AEYLA_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  universal-formats:
+    name: macOS Universal / VST3 + AUv2 / Ableton preflight
+    runs-on: macos-15
+    timeout-minutes: 55
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
+
+      - name: Validate macOS operator scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/maintenance/macos/AEYLA_PLUGIN_MAINTENANCE.sh
+          bash -n tools/packaging/macos/INSTALL_AEYLA_ABLETON.command
+          bash -n tools/packaging/macos/INSTALL_AEYLA.command
+          bash -n tools/packaging/macos/UNINSTALL_AEYLA.command
+          bash -n tools/packaging/macos/AUDIT_AEYLA.command
+          bash -n tools/packaging/macos/AEYLA_NETWORK_PREFLIGHT.command
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Build native Universal VST3 and AUv2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode \
+            -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" \
+            -DIPLUG2_UNIVERSAL=ON \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release \
+            --target AeylaVisualDmx-vst3 AeylaVisualDmx-au --parallel 2
+
+      - name: Verify Apple Silicon + Intel slices and signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          au="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
+          test -n "$vst3" && test -n "$au"
+          vst3_bin="$(find "$vst3/Contents/MacOS" -type f | head -n 1)"
+          au_bin="$(find "$au/Contents/MacOS" -type f | head -n 1)"
+          lipo "$vst3_bin" -verify_arch arm64 x86_64
+          lipo "$au_bin" -verify_arch arm64 x86_64
+          codesign --force --deep --sign - "$vst3"
+          codesign --force --deep --sign - "$au"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$au"
+          file "$vst3_bin"
+          file "$au_bin"
+
+      - name: Validate VST3 with Steinberg validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK \
+            -B build-validator -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          test -n "$vst3" && test -n "$validator"
+          "$validator" "$vst3"
+
+      - name: Validate AUv2 with Apple auval
+        shell: bash
+        run: |
+          set -euo pipefail
+          au="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
+          test -n "$au"
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          rm -rf "$HOME/Library/Audio/Plug-Ins/Components/AeylaVisualDmx.component"
+          ditto "$au" "$HOME/Library/Audio/Plug-Ins/Components/AeylaVisualDmx.component"
+          codesign --verify --deep --strict --verbose=2 \
+            "$HOME/Library/Audio/Plug-Ins/Components/AeylaVisualDmx.component"
+          killall -9 AudioComponentRegistrar >/dev/null 2>&1 || true
+          sleep 2
+          auval -v aumu AyVD RGBE
+
+      - name: Stage Ableton macOS PRETEST bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          au="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
+          stage="$GITHUB_WORKSPACE/AEYLA-R08-ABLETON-macOS-PRETEST"
+          mkdir -p "$stage/VST3" "$stage/AUv2"
+          ditto "$vst3" "$stage/VST3/AeylaVisualDmx.vst3"
+          ditto "$au" "$stage/AUv2/AeylaVisualDmx.component"
+          cp tools/maintenance/macos/AEYLA_PLUGIN_MAINTENANCE.sh "$stage/"
+          cp tools/packaging/macos/INSTALL_AEYLA_ABLETON.command "$stage/"
+          cp tools/packaging/macos/INSTALL_AEYLA.command "$stage/"
+          cp tools/packaging/macos/UNINSTALL_AEYLA.command "$stage/"
+          cp tools/packaging/macos/AUDIT_AEYLA.command "$stage/"
+          cp tools/packaging/macos/AEYLA_NETWORK_PREFLIGHT.command "$stage/"
+          cp docs/AEYLA_R08_ABLETON_MACOS_PRETEST_ES.md "$stage/README_ABLETON_MACOS_ES.md"
+          printf 'SOURCE_COMMIT=%s\nFORMAT_PRIMARY=VST3\nFORMAT_SECONDARY=AUv2\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\n' \
+            "$AEYLA_SOURCE_SHA" > "$stage/BUILD_ID.txt"
+          chmod +x "$stage"/*.command "$stage"/*.sh
+          shasum -a 256 "$stage/VST3/AeylaVisualDmx.vst3/Contents/MacOS/"* \
+            "$stage/AUv2/AeylaVisualDmx.component/Contents/MacOS/"* \
+            > "$stage/SHA256SUMS.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-R08-ABLETON-macOS-Universal-PRETEST
+          path: AEYLA-R08-ABLETON-macOS-PRETEST
+          if-no-files-found: error
+          retention-days: 90
