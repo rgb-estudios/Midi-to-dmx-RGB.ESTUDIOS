@@ -467,6 +467,11 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
   const auto apply_midi_panic = [&]() {
     // One-way safety action: PANIC is allowed to remove authority and enter
     // blackout, but no MIDI path can ever clear blackout or arm Art-Net.
+    mPendingShowMidiEvent.reset();
+    aeyla::runtime::ShowMidiEvent ignored{};
+    while(mShowMidiIngress.try_consume(ignored))
+    {
+    }
     mTakeScheduler.stop_reset();
     mTakeScheduler.disarm();
     mActiveTakeSongIndex.store(-1, std::memory_order_release);
@@ -477,6 +482,11 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     SetShowMidiMessage(
         "PANIC MIDI · APAGÓN ACTIVO · salida desarmada · rearme manual");
   };
+
+  if(mShowMidiIngress.consume_panic_request()) {
+    apply_midi_panic();
+    return;
+  }
 
   if(mShowMidiIngress.consume_safety_stop_request()) {
     mPendingShowMidiEvent.reset();
@@ -613,6 +623,8 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     mPendingShowMidiEvent.reset();
 
     if(event.command == aeyla::runtime::ShowMidiCommand::panic_blackout) {
+      // Compatibility fallback for any already-queued PANIC event created by an
+      // older ingress implementation before this runtime revision was loaded.
       apply_midi_panic();
       continue;
     }
@@ -749,8 +761,6 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
         SetShowMidiMessage("STOP / RESET MIDI · cursor en cero · armado conservado");
         break;
       case aeyla::runtime::ShowMidiCommand::panic_blackout:
-        // Handled before any artistic/recording branch above. Kept here so the
-        // command switch remains exhaustive if compiler warnings are enabled.
         apply_midi_panic();
         break;
       case aeyla::runtime::ShowMidiCommand::launch_song:
