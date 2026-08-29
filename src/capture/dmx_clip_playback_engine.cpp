@@ -608,8 +608,7 @@ void DmxClipPlaybackEngine::run() noexcept {
     if(!published) {
       armed_.store(false, std::memory_order_release);
       output->set_override_enabled(false);
-    }
-    else {
+    } else {
       const auto after = transport_.load(std::memory_order_acquire);
       const bool authoritative = after == DmxClipTransportState::ready ||
           after == DmxClipTransportState::playing ||
@@ -628,8 +627,7 @@ void DmxClipPlaybackEngine::set_error(std::string message) noexcept {
   try {
     const std::scoped_lock lock(error_mutex_);
     error_ = std::move(message);
-  }
-  catch(...) {
+  } catch(...) {
   }
 }
 
