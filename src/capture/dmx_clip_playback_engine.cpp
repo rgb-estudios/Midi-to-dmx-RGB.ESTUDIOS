@@ -221,9 +221,31 @@ bool DmxClipPlaybackEngine::arm(std::string& error_message) {
       return false;
     }
   }
+
   ensure_thread();
   set_error({});
   armed_.store(true, std::memory_order_release);
+
+  // ARMAR grants physical authority independently of artistic transport.
+  // Publish frame zero/current cursor immediately so receivers keep a healthy
+  // Art-Net stream while the DAW is stopped. PLAY/PAUSE/RESET only move or
+  // freeze the artistic cursor; DISARM/BLACKOUT is the authority boundary.
+  {
+    const std::scoped_lock lock(mutex_);
+    if(!publish_cursor_frame_locked()) {
+      armed_.store(false, std::memory_order_release);
+      if(output_ != nullptr)
+        output_->set_override_enabled(false);
+      error_message = error();
+      if(error_message.empty())
+        error_message = "No se pudo preparar el cuadro DMX inicial al armar";
+      return false;
+    }
+    if(output_ != nullptr &&
+       heartbeat_ok_.load(std::memory_order_acquire) &&
+       !rendering_offline_.load(std::memory_order_acquire))
+      output_->set_override_enabled(true);
+  }
   return true;
 }
 
@@ -358,7 +380,14 @@ void DmxClipPlaybackEngine::stop_and_reset() noexcept {
   hold_valid_ = false;
   current_frame_.store(range_start_frame_, std::memory_order_relaxed);
   progress_.store(0.0, std::memory_order_relaxed);
-  if(output_ != nullptr)
+
+  if(armed_.load(std::memory_order_acquire)) {
+    if(publish_cursor_frame_locked() && output_ != nullptr &&
+       (uses_monotonic_clock() || heartbeat_ok_.load(std::memory_order_acquire)) &&
+       !rendering_offline_.load(std::memory_order_acquire))
+      output_->set_override_enabled(true);
+  }
+  else if(output_ != nullptr)
     output_->set_override_enabled(false);
 }
 
@@ -534,11 +563,25 @@ void DmxClipPlaybackEngine::run() noexcept {
     }
 
     const auto state = transport_.load(std::memory_order_acquire);
-    if(state == DmxClipTransportState::ready ||
-       state == DmxClipTransportState::fault) {
+    if(state == DmxClipTransportState::fault) {
       output->set_override_enabled(false);
       std::this_thread::sleep_for(kWorkerSleep);
       continue;
+    }
+
+    // READY is a stopped artistic transport, not a disconnected endpoint. A
+    // valid held frame stays authoritative while ARM remains active.
+    if(state == DmxClipTransportState::ready) {
+      bool has_hold = false;
+      {
+        const std::scoped_lock lock(mutex_);
+        has_hold = hold_valid_;
+      }
+      if(!has_hold) {
+        output->set_override_enabled(false);
+        std::this_thread::sleep_for(kWorkerSleep);
+        continue;
+      }
     }
 
     bool published = false;
@@ -552,9 +595,11 @@ void DmxClipPlaybackEngine::run() noexcept {
     if(!published) {
       armed_.store(false, std::memory_order_release);
       output->set_override_enabled(false);
-    } else {
+    }
+    else {
       const auto after = transport_.load(std::memory_order_acquire);
-      const bool authoritative = after == DmxClipTransportState::playing ||
+      const bool authoritative = after == DmxClipTransportState::ready ||
+          after == DmxClipTransportState::playing ||
           after == DmxClipTransportState::paused ||
           after == DmxClipTransportState::ended;
       output->set_override_enabled(authoritative);
@@ -570,7 +615,8 @@ void DmxClipPlaybackEngine::set_error(std::string message) noexcept {
   try {
     const std::scoped_lock lock(error_mutex_);
     error_ = std::move(message);
-  } catch(...) {
+  }
+  catch(...) {
   }
 }
 
