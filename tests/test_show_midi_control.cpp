@@ -113,15 +113,20 @@ int main() {
 
   // Callback scheduling and artistic transport are deliberately different
   // clocks. Stopped DAW blocks may make an event ready for the worker but must
-  // never be counted as elapsed DMX playback time.
+  // never be counted as elapsed DMX playback time. The capture frame is a third
+  // timeline: it is snapshotted at MIDI ingress and must never be recomputed
+  // when the runtime consumes the event later.
   const auto stamped = make_show_midi_event(
       ShowMidiCommand::play_retrigger, 0U, 12U, 72U,
-      4000U, 2000U, 64U);
+      4000U, 2000U, 64U, 137U);
   check(stamped.ready_sample == 4064U && stamped.trigger_sample == 2064U,
         "MIDI event must retain separate callback and running clocks");
+  check(stamped.capture_frame_snapshot == 137U,
+        "MIDI event must preserve the exact capture frame seen at ingress");
   check(!show_midi_event_ready(4064U, stamped) &&
-            show_midi_event_ready(4065U, stamped),
-        "sample-zero race guard must wait beyond the containing block offset");
+            show_midi_event_ready(8192U, stamped) &&
+            stamped.capture_frame_snapshot == 137U,
+        "delayed runtime consumption must not move the capture frame snapshot");
   check(show_midi_elapsed_samples(2064U, stamped) == 0U &&
             show_midi_elapsed_samples(2576U, stamped) == 512U,
         "stopped blocks must not advance artistic MIDI compensation");
@@ -167,6 +172,7 @@ int main() {
   ShowMidiEvent event;
   event.trigger_sample = 1234U;
   event.ready_sample = 5678U;
+  event.capture_frame_snapshot = 91U;
   check(ingress.try_submit(event), "first event must enter bounded queue");
   check(ingress.try_submit(event), "second event must enter bounded queue");
   check(ingress.try_submit(event), "third event must enter bounded queue");
@@ -178,8 +184,9 @@ int main() {
   ShowMidiEvent consumed;
   check(ingress.try_consume(consumed) &&
             consumed.trigger_sample == event.trigger_sample &&
-            consumed.ready_sample == event.ready_sample,
-        "bounded ingress must preserve artistic and scheduling sample clocks");
+            consumed.ready_sample == event.ready_sample &&
+            consumed.capture_frame_snapshot == event.capture_frame_snapshot,
+        "bounded ingress must preserve all three event timelines");
 
   if(failures == 0) {
     std::cout << "All Show MIDI control tests passed.\n";
