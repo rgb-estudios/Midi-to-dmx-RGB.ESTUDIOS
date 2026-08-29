@@ -196,7 +196,7 @@ bool DmxTakeScheduler::play(std::string& error_message,
     return false;
   }
   current_frame_ = range_start_frame_;
-  hold_frame_ = take_->frames[current_frame_frame_];
+  hold_frame_ = take_->frames[current_frame_];
   hold_valid_ = true;
   progress_.store(0.0, std::memory_order_release);
   play_started_ = std::chrono::steady_clock::now();
@@ -247,6 +247,7 @@ void DmxTakeScheduler::stop_hold() noexcept {
   if(armed_.load(std::memory_order_acquire) && hold_valid_)
     publish_hold_locked();
 }
+
 void DmxTakeScheduler::stop_reset() noexcept {
   if(file_mode_.load(std::memory_order_acquire)) {
     file_player_.stop_and_reset(true);
