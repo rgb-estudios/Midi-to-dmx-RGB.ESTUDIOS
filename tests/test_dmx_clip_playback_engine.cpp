@@ -203,11 +203,20 @@ int main() {
   require(wait_until([&]() { return output.override_enabled(); }),
           "clip authority did not recover after host heartbeat returned");
 
+  // RESET must return to the first frame without tearing down an already armed
+  // Art-Net endpoint. This is the operator-visible distinction between RESET
+  // (artistic transport) and DISARM/BLACKOUT (physical authority).
   engine.stop_and_reset();
-  require(wait_until([&]() { return !output.override_enabled(); }),
-          "STOP/RESET must remove physical clip authority");
-  require(engine.status().cursor_samples == 0U,
-          "STOP/RESET must return cursor to zero");
+  require(wait_until([&]() {
+    const auto status = engine.status();
+    return status.transport == DmxClipTransportState::ready &&
+           status.current_frame == 0U && status.cursor_samples == 0U &&
+           status.armed && output.override_enabled();
+  }), "STOP/RESET must hold frame zero and preserve armed Art-Net authority");
+  const auto reset_packets_before = output.stats().sent_packets;
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  require(output.stats().sent_packets >= reset_packets_before + 5U,
+          "STOP/RESET did not preserve the continuous 44 Hz carrier");
 
   // Regresión de la evidencia física en REAPER 7.78: al cambiar el foco a
   // Capture, REAPER muestra "audio device closed" y deja de entregar callbacks.
@@ -250,6 +259,8 @@ int main() {
   engine.stop_and_reset();
 
   engine.disarm();
+  require(wait_until([&]() { return !output.override_enabled(); }),
+          "DISARM must be the boundary that removes physical Art-Net authority");
   engine.unload();
 
   // Flujo de show sincronizado: ARMAR con REAPER detenido debe dejar el nodo
@@ -327,6 +338,12 @@ int main() {
                 output.override_enabled() &&
                 output.stats().sent_packets > packets_before_pause_hold,
             "DAW STOP did not freeze cursor while preserving Art-Net carrier");
+    scheduler.stop_reset();
+    require(wait_until([&]() {
+      const auto status = scheduler.status();
+      return status.current_frame == 0U && status.armed &&
+             output.override_enabled();
+    }), "scheduler RESET dropped an armed Art-Net carrier");
     scheduler.disarm();
   }
 
