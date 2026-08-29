@@ -158,6 +158,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleShowMidiFromUI()
     mMidiPreflightCursor.store(-1, std::memory_order_release);
   const std::string message = mapping.enabled
       ? "MIDI SHOW ACTIVO · canal " + std::to_string(mapping.channel) +
+            " · PANIC nota " +
+            std::to_string(aeyla::runtime::kShowMidiPanicNote) +
             " · reloj por muestras del DAW"
       : "MIDI SHOW DESACTIVADO · las notas vuelven a los Cues normales";
   SetShowMidiMessage(message);
@@ -462,6 +464,20 @@ bool AeylaVisualDmx::StartPreparedTakeFromMidiLocked(
 void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     const aeyla::runtime::HostTransportSnapshot& host)
 {
+  const auto apply_midi_panic = [&]() {
+    // One-way safety action: PANIC is allowed to remove authority and enter
+    // blackout, but no MIDI path can ever clear blackout or arm Art-Net.
+    mTakeScheduler.stop_reset();
+    mTakeScheduler.disarm();
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+    mModel.release_transients();
+    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::operator_disarm);
+    mModel.set_blackout(true);
+    mParamBlackout.store(true, std::memory_order_release);
+    SetShowMidiMessage(
+        "PANIC MIDI · APAGÓN ACTIVO · salida desarmada · rearme manual");
+  };
+
   if(mShowMidiIngress.consume_safety_stop_request()) {
     mPendingShowMidiEvent.reset();
     mTakeScheduler.stop_reset();
@@ -541,6 +557,12 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
         learned & 0xFFU);
     const auto channel = static_cast<std::uint8_t>((learned >> 8U) & 0xFFU);
     const auto note = static_cast<std::uint8_t>((learned >> 16U) & 0xFFU);
+    if(ShowMidiMapping().enabled &&
+       channel == ShowMidiMapping().channel &&
+       note == aeyla::runtime::kShowMidiPanicNote) {
+      apply_midi_panic();
+      return;
+    }
     auto mapping = ShowMidiMapping();
     std::string error;
     if(aeyla::runtime::assign_show_midi_note(
@@ -589,6 +611,11 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
       return;
     const auto event = *mPendingShowMidiEvent;
     mPendingShowMidiEvent.reset();
+
+    if(event.command == aeyla::runtime::ShowMidiCommand::panic_blackout) {
+      apply_midi_panic();
+      continue;
+    }
 
     const auto song_count = mModel.snapshot().song_count;
     const auto prepared = mModel.snapshot().active_song_index;
@@ -720,6 +747,11 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
         EndShowTransportMutation();
         mActiveTakeSongIndex.store(-1, std::memory_order_release);
         SetShowMidiMessage("STOP / RESET MIDI · cursor en cero · armado conservado");
+        break;
+      case aeyla::runtime::ShowMidiCommand::panic_blackout:
+        // Handled before any artistic/recording branch above. Kept here so the
+        // command switch remains exhaustive if compiler warnings are enabled.
+        apply_midi_panic();
         break;
       case aeyla::runtime::ShowMidiCommand::launch_song:
         if(event.song_index >= song_count) {
