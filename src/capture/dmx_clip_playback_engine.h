@@ -101,7 +101,9 @@ class DmxClipPlaybackEngine final {
   // y transporte detenido.
   [[nodiscard]] bool seek_frame(std::uint64_t frame_index,
                                 std::string& error_message);
-  void stop_and_reset() noexcept;
+  // Reset técnico por defecto: vuelve a cero y retira autoridad física. La
+  // capa de operador/MIDI puede conservar ARM + carrier de forma explícita.
+  void stop_and_reset(bool preserve_armed_authority = false) noexcept;
 
   // Ruta de tiempo de audio en tiempo real. El integrador debe respetar el
   // sampleOffset de un evento MIDI al decidir cuántas muestras se contabilizan
