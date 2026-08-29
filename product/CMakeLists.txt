@@ -160,6 +160,35 @@ if(_aeyla_no_io_already_patched EQUAL -1)
   message(STATUS "Applied AEYLA no-audio standalone startup patch")
 endif()
 
+# The pinned standalone Init() assumes InitMidi() always creates RtMidi objects.
+# In AEYLA no-I/O mode InitMidi() deliberately returns without creating them,
+# so the subsequent SelectMIDIDevice() calls dereference null mMidiIn/mMidiOut
+# and crash at address 0 on Windows. Keep the upstream source pinned and patch
+# only that invalid no-I/O path; DAW VST3/AUv2 MIDI remains unchanged.
+set(_aeyla_iplug_app_host "${IPLUG2_DIR}/IPlug/APP/IPlugAPP_host.cpp")
+file(READ "${_aeyla_iplug_app_host}" _aeyla_iplug_app_host_source)
+set(_aeyla_midi_select_old
+  "  InitMidi(); // creates RTMidiIn and RTMidiOut objects\n  ProbeMidiIO(); // find out what midi IO devs are available and put their names in the global variables gMidiInputDevs / gMidiOutputDevs\n  SelectMIDIDevice(ERoute::kInput, mState.mMidiInDev.Get());\n  SelectMIDIDevice(ERoute::kOutput, mState.mMidiOutDev.Get());")
+set(_aeyla_midi_select_new
+  "  InitMidi(); // creates RTMidiIn and RTMidiOut objects\n  ProbeMidiIO(); // find out what midi IO devs are available and put their names in the global variables gMidiInputDevs / gMidiOutputDevs\n  if(!mNoIO && !IsScreenshotMode())\n  {\n    SelectMIDIDevice(ERoute::kInput, mState.mMidiInDev.Get());\n    SelectMIDIDevice(ERoute::kOutput, mState.mMidiOutDev.Get());\n  }")
+
+string(FIND "${_aeyla_iplug_app_host_source}" "${_aeyla_midi_select_new}" _aeyla_midi_no_io_already_patched)
+if(_aeyla_midi_no_io_already_patched EQUAL -1)
+  string(FIND "${_aeyla_iplug_app_host_source}" "${_aeyla_midi_select_old}" _aeyla_midi_no_io_patch_point)
+  if(_aeyla_midi_no_io_patch_point EQUAL -1)
+    message(FATAL_ERROR
+      "Pinned iPlug2 MIDI startup changed; review the no-I/O MIDI guard before building.")
+  endif()
+
+  string(REPLACE
+    "${_aeyla_midi_select_old}"
+    "${_aeyla_midi_select_new}"
+    _aeyla_iplug_app_host_source
+    "${_aeyla_iplug_app_host_source}")
+  file(WRITE "${_aeyla_iplug_app_host}" "${_aeyla_iplug_app_host_source}")
+  message(STATUS "Applied AEYLA no-I/O MIDI null-guard patch to pinned iPlug2")
+endif()
+
 set(IPLUG_DEPLOY_PLUGINS OFF CACHE BOOL "Do not deploy CI proof artifacts" FORCE)
 set(IGRAPHICS_BACKEND NANOVG CACHE STRING "Lightweight shared UI backend" FORCE)
 
