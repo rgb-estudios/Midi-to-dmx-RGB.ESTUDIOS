@@ -76,14 +76,13 @@ ShowMidiMappingError validate_show_midi_mapping(
      }))
     return ShowMidiMappingError::invalid_note;
 
-  // PANIC is deliberately fixed for R07. Configurable transport commands and
-  // the 15-song launch bank may not shadow this one-way safety action.
-  if(inside_launch_range(mapping, kShowMidiPanicNote))
-    return ShowMidiMappingError::duplicate_note;
-
+  // Deliberately do not reject legacy PRETEST maps that already used N41.
+  // Persisted format 1.2 predates the PANIC reservation; rejecting such a map
+  // here would reject the whole restored VST3 component state. At runtime PANIC
+  // has first-match priority, while MIDI Learn below prevents creating any new
+  // collision with the reserved note.
   for(std::size_t left = 0U; left < notes.size(); ++left) {
-    if(notes[left] == kShowMidiPanicNote ||
-       inside_launch_range(mapping, notes[left]))
+    if(inside_launch_range(mapping, notes[left]))
       return ShowMidiMappingError::duplicate_note;
     for(std::size_t right = left + 1U; right < notes.size(); ++right) {
       if(notes[left] == notes[right])
@@ -102,6 +101,7 @@ bool match_show_midi_note(const ShowMidiMapping& mapping,
      validate_show_midi_mapping(mapping) != ShowMidiMappingError::none)
     return false;
 
+  // Safety command always wins over a legacy mapping collision.
   if(note == kShowMidiPanicNote)
     match.command = ShowMidiCommand::panic_blackout;
   else if(note == mapping.previous_note)
@@ -133,6 +133,23 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
     error_message = "No existe una asignación MIDI esperando aprendizaje";
     return false;
   }
+
+  // N41 is a fixed one-way safety control in R07. Existing persisted maps may
+  // still contain an old collision and remain readable, but no new Learn
+  // operation is allowed to create one.
+  if(target == ShowMidiLearnTarget::launch_song_base) {
+    const auto first = static_cast<unsigned>(note);
+    const auto panic = static_cast<unsigned>(kShowMidiPanicNote);
+    if(panic >= first && panic < first + kShowMidiSongCapacity) {
+      error_message = "El rango de canciones no puede incluir la nota 41 reservada para PANIC";
+      return false;
+    }
+  }
+  else if(note == kShowMidiPanicNote) {
+    error_message = "La nota 41 está reservada para PANIC / APAGÓN";
+    return false;
+  }
+
   ShowMidiMapping candidate = mapping;
   candidate.channel = channel;
   switch(target) {
@@ -147,12 +164,9 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
 
   const auto validation = validate_show_midi_mapping(candidate);
   if(validation != ShowMidiMappingError::none) {
-    if(note == kShowMidiPanicNote)
-      error_message = "La nota 41 está reservada para PANIC / APAGÓN";
-    else
-      error_message = validation == ShowMidiMappingError::launch_range_overflow
-          ? "La nota base debe dejar espacio para 15 canciones"
-          : "La nota coincide con otro comando, PANIC o el rango de canciones";
+    error_message = validation == ShowMidiMappingError::launch_range_overflow
+        ? "La nota base debe dejar espacio para 15 canciones"
+        : "La nota coincide con otro comando o con el rango de canciones";
     return false;
   }
   mapping = candidate;
