@@ -1,5 +1,6 @@
 name: r08-integrate-take-reopen-once
 
+# One-shot integration gate. This file deletes itself after a validated patch.
 on:
   push:
     branches:
