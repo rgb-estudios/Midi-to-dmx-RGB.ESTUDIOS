@@ -73,24 +73,57 @@ jobs:
           $evidenceDir = Join-Path (Resolve-Path build-native-window) "evidence"
           New-Item -ItemType Directory -Force $evidenceDir | Out-Null
           $evidence = Join-Path $evidenceDir "WINDOW_STARTUP_SMOKE.txt"
+          $eventEvidence = Join-Path $evidenceDir "WINDOW_CRASH_EVENTS.txt"
+
+          # Capture a real crash dump and Application Error/WER metadata if the
+          # source-built standalone exits unexpectedly. This keeps the gate
+          # strict while turning 0xC0000005 from an opaque red check into an
+          # actionable faulting-module/offset report.
+          $dumpKey = "HKCU:\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\AeylaVisualDmx.exe"
+          New-Item -Path $dumpKey -Force | Out-Null
+          New-ItemProperty -Path $dumpKey -Name DumpFolder -Value $evidenceDir -PropertyType ExpandString -Force | Out-Null
+          New-ItemProperty -Path $dumpKey -Name DumpType -Value 2 -PropertyType DWord -Force | Out-Null
+          New-ItemProperty -Path $dumpKey -Name DumpCount -Value 2 -PropertyType DWord -Force | Out-Null
 
           # GitHub-hosted Windows runners do not provide a reliable interactive
           # desktop contract. MainWindowHandle/screenshot assertions therefore
           # produced false negatives even when the APP and VST3 built correctly.
           # CI validates process startup/crash behaviour here. A real visible
           # window remains a mandatory manual gate on an interactive Windows host.
+          $startedAt = Get-Date
           $process = Start-Process -FilePath $app.FullName -ArgumentList "--no-io" -PassThru
           Start-Sleep -Seconds 5
           $process.Refresh()
 
           if ($process.HasExited) {
+            Start-Sleep -Seconds 2
+            $events = Get-WinEvent -FilterHashtable @{
+              LogName = 'Application'
+              StartTime = $startedAt.AddSeconds(-2)
+            } -ErrorAction SilentlyContinue | Where-Object {
+              $_.ProviderName -in @('Application Error', 'Windows Error Reporting') -and
+              $_.Message -match 'AeylaVisualDmx'
+            } | Select-Object -First 12 TimeCreated, Id, ProviderName, LevelDisplayName, Message
+
+            if ($events) {
+              $events | Format-List | Out-String -Width 4096 | Set-Content -Encoding UTF8 $eventEvidence
+            } else {
+              "No matching Application Error / Windows Error Reporting event was available." |
+                Set-Content -Encoding UTF8 $eventEvidence
+            }
+
+            $dumps = @(Get-ChildItem -Path $evidenceDir -File -Filter "*.dmp" -ErrorAction SilentlyContinue)
             @(
               "RESULT: FAILED - standalone exited during headless startup smoke"
               "ExitCode: $($process.ExitCode)"
+              ("ExitCodeHex: 0x{0:X8}" -f ([uint32]$process.ExitCode))
               "Commit: $env:GITHUB_SHA"
               "Executable: $($app.FullName)"
+              "CrashDumps: $($dumps.Count)"
+              "EventEvidence: $eventEvidence"
             ) | Set-Content -Encoding UTF8 $evidence
             Get-Content $evidence
+            Get-Content $eventEvidence
             throw "Source-built graphical APP exited with code $($process.ExitCode)"
           }
 
@@ -118,16 +151,17 @@ jobs:
           $pdb = Get-ChildItem -Path build-native-window -Recurse -File -Filter "AeylaVisualDmx.pdb" | Select-Object -First 1
           if ($pdb) { Copy-Item -Force $pdb.FullName package/Evidence/ }
 
-          if (Test-Path build-native-window/evidence/WINDOW_STARTUP_SMOKE.txt) {
-            Copy-Item -Force build-native-window/evidence/WINDOW_STARTUP_SMOKE.txt package/Evidence/
+          if (Test-Path build-native-window/evidence) {
+            Copy-Item -Force build-native-window/evidence/* package/Evidence/ -ErrorAction SilentlyContinue
           }
 
           @'
           AEYLA Windows CI startup evidence
 
           This artifact proves that the source-built standalone starts and remains
-          alive on the GitHub-hosted Windows runner. The runner is not treated as
-          an interactive desktop and therefore cannot certify native-window input.
+          alive on the GitHub-hosted Windows runner. If it crashes, the evidence
+          folder also contains Windows Error Reporting/Application Error metadata
+          and, when Windows produces it, a full user-mode crash dump.
 
           Mandatory release gate: open AEYLA in REAPER/Windows on real hardware,
           interact with the UI, arm Art-Net and validate an external receiver.
@@ -141,6 +175,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: AEYLA-R07-Windows-source-startup-smoke
+          name: AEYLA-R08-Windows-source-startup-smoke
           path: package/**
           if-no-files-found: error
