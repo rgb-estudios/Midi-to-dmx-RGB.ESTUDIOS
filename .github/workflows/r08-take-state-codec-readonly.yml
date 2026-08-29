@@ -1,0 +1,73 @@
+name: r08-take-state-codec-readonly
+
+on:
+  push:
+    branches:
+      - aeyla/r08-capture-zero-midi-rec-20260829
+    paths:
+      - .github/workflows/r08-take-state-codec-readonly.yml
+      - tools/dev/r08_validate_take_state_codec.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-codec-13:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm repository is still format 1.2 before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'kPluginStateFormatMinor = 2' src/runtime/plugin_state.h
+          if grep -Fq 'SessionTakeBinding' src/runtime/plugin_state.h; then
+            echo 'Repository already contains an unreviewed 1.3 codec' >&2
+            exit 1
+          fi
+
+      - name: Apply hardened 1.3 candidate only in runner workspace
+        run: python3 tools/dev/r08_validate_take_state_codec.py
+
+      - name: Verify candidate diff scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          printf 'Candidate changed files:\n%s\n' "${changed[*]}"
+          if [[ ${#changed[@]} -ne 3 ]]; then
+            echo 'Expected exactly three candidate files' >&2
+            exit 1
+          fi
+          for path in "${changed[@]}"; do
+            case "$path" in
+              src/runtime/plugin_state.h|src/runtime/plugin_state.cpp|tests/test_plugin_state.cpp) ;;
+              *) echo "Unexpected candidate file: $path" >&2; exit 1 ;;
+            esac
+          done
+          grep -F 'kPluginStateFormatMinor = 3' src/runtime/plugin_state.h
+          grep -F '.aeylatake' src/runtime/plugin_state.cpp
+          git diff -- src/runtime/plugin_state.h src/runtime/plugin_state.cpp tests/test_plugin_state.cpp
+
+      - name: Build plugin-state regression test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-r08-codec -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-r08-codec --target aeyla_plugin_state_tests -j2
+
+      - name: Run migration, validation and malformed-state regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-r08-codec -R '^aeyla_plugin_state_tests$' --output-on-failure
+
+      - name: Prove validator cannot modify repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Validation completed in disposable runner workspace only.'
+          echo 'GITHUB_TOKEN permission is contents:read; no commit/push step exists.'
