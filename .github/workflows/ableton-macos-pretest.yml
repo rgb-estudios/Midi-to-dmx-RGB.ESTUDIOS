@@ -31,6 +31,17 @@ jobs:
         with:
           ref: ${{ env.AEYLA_SOURCE_SHA }}
 
+      - name: Validate macOS operator scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tools/maintenance/macos/AEYLA_PLUGIN_MAINTENANCE.sh
+          bash -n tools/packaging/macos/INSTALL_AEYLA_ABLETON.command
+          bash -n tools/packaging/macos/INSTALL_AEYLA.command
+          bash -n tools/packaging/macos/UNINSTALL_AEYLA.command
+          bash -n tools/packaging/macos/AUDIT_AEYLA.command
+          bash -n tools/packaging/macos/AEYLA_NETWORK_PREFLIGHT.command
+
       - name: Fetch pinned iPlug2 and Steinberg SDK
         shell: bash
         run: |
@@ -120,6 +131,7 @@ jobs:
           cp tools/packaging/macos/INSTALL_AEYLA.command "$stage/"
           cp tools/packaging/macos/UNINSTALL_AEYLA.command "$stage/"
           cp tools/packaging/macos/AUDIT_AEYLA.command "$stage/"
+          cp tools/packaging/macos/AEYLA_NETWORK_PREFLIGHT.command "$stage/"
           cp docs/AEYLA_R08_ABLETON_MACOS_PRETEST_ES.md "$stage/README_ABLETON_MACOS_ES.md"
           printf 'SOURCE_COMMIT=%s\nFORMAT_PRIMARY=VST3\nFORMAT_SECONDARY=AUv2\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\n' \
             "$AEYLA_SOURCE_SHA" > "$stage/BUILD_ID.txt"
