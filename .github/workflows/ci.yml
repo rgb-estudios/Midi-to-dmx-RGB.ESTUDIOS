@@ -15,14 +15,13 @@ jobs:
           ref: aeyla/r08-capture-zero-midi-rec-20260829
           fetch-depth: 2
 
-      - name: Guard exact R08 source
+      - name: Guard exact R08 product source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "c39d5f87692c66e48e5df9d49b88cdf966944a99" || \
-            test "$(git log -1 --format=%s)" = "R08 run guarded persistence integration through core CI"
           test "$(git hash-object product/AeylaVisualDmx/AeylaVisualDmx.cpp)" = "fbf44c8d1d9dfb80bee64f39d3e6b0df3f8ac6ce"
           test "$(git hash-object product/AeylaVisualDmx/AeylaTakeLibrarySession.cpp)" = "53b490bd246ea86360f38a72b829363910417430"
+          ! grep -q "stage_persisted_state" product/AeylaVisualDmx/AeylaVisualDmx.cpp
 
       - name: Apply host Take reopen integration
         shell: bash
@@ -30,18 +29,17 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path('product/AeylaVisualDmx/AeylaVisualDmx.cpp')
           text = path.read_text(encoding='utf-8')
 
           old_restore = '''  if(uuidMismatch || schemaMismatch || checksumMismatch)\n  {\n    // The Set identifies a project that is not the currently loaded package.\n    // Until locator-based asynchronous loading is implemented, expose an\n    // invalid project and publish only the safe frame.\n    mModel.set_project_valid(false);\n    mModel.set_blackout(true);\n    mParamBlackout.store(true, std::memory_order_release);\n    mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);\n    const std::scoped_lock stateLock(mHostStateMutex);\n    mHostStateCache.song_bindings.clear();\n  }\n\n  // UnserializeParams already restored host-visible preferences. Applying them\n'''
-          new_restore = '''  if(uuidMismatch || schemaMismatch || checksumMismatch)\n  {\n    // The Set identifies a project that is not the currently loaded package.\n    // Until locator-based asynchronous loading is implemented, expose an\n    // invalid project and publish only the safe frame. Never carry Take\n    // bindings from a different project identity into the current session.\n    mModel.set_project_valid(false);\n    mModel.set_blackout(true);\n    mParamBlackout.store(true, std::memory_order_release);\n    mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);\n    {\n      const std::scoped_lock stateLock(mHostStateMutex);\n      mHostStateCache.song_bindings.clear();\n      mHostStateCache.take_library_locator.clear();\n      mHostStateCache.take_bindings.clear();\n    }\n    aeyla::take_library_session::clear(this);\n  }\n  else\n  {\n    // State 1.3 restores only library selection and non-destructive Take\n    // bindings. The session bridge never arms Art-Net and never starts\n    // playback. If the exact saved directory is absent (for example after a\n    // Windows -> macOS move), bindings stay pending until the operator selects\n    // the destination library once.\n    aeyla::take_library_session::stage_persisted_state(\n        this, mModel.project_document().project_id,\n        pending->take_library_locator, pending->take_bindings);\n  }\n\n  // UnserializeParams already restored host-visible preferences. Applying them\n'''
+          new_restore = '''  if(uuidMismatch || schemaMismatch || checksumMismatch)\n  {\n    // The Set identifies a project that is not the currently loaded package.\n    // Until locator-based asynchronous loading is implemented, expose an\n    // invalid project and publish only the safe frame. Never carry Take\n    // bindings from a different project identity into the current session.\n    mModel.set_project_valid(false);\n    mModel.set_blackout(true);\n    mParamBlackout.store(true, std::memory_order_release);\n    mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);\n    {\n      const std::scoped_lock stateLock(mHostStateMutex);\n      mHostStateCache.song_bindings.clear();\n      mHostStateCache.take_library_locator.clear();\n      mHostStateCache.take_bindings.clear();\n    }\n    aeyla::take_library_session::clear(this);\n  }\n  else\n  {\n    // State 1.3 restores only non-destructive Take/library state. This never\n    // arms Art-Net and never starts playback. A missing cross-platform path\n    // remains pending until the operator selects the destination library once.\n    aeyla::take_library_session::stage_persisted_state(\n        this, mModel.project_document().project_id,\n        pending->take_library_locator, pending->take_bindings);\n  }\n\n  // UnserializeParams already restored host-visible preferences. Applying them\n'''
           if text.count(old_restore) != 1:
               raise SystemExit('restore anchor mismatch')
           text = text.replace(old_restore, new_restore)
 
           old_refresh = '''void AeylaVisualDmx::RefreshHostStateCacheLocked()\n{\n  const auto& snapshot = mModel.snapshot();\n  if(!snapshot.project_valid)\n    return;\n\n  std::array<std::uint8_t, 16> uuid{};\n  if(!DecodeCanonicalUuid(snapshot.project_id, uuid))\n    return;\n\n  const std::scoped_lock lock(mHostStateMutex);\n  if(mHostStateCache.project_uuid != uuid)\n  {\n    mHostStateCache.project_checksum.fill(0U);\n    mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;\n    mHostStateCache.project_locator.clear();\n    mHostStateCache.song_bindings.clear();\n  }\n  mHostStateCache.project_uuid = uuid;\n  mHostStateCache.project_schema_major =\n      mModel.project_document().schema_version.major;\n  mHostStateCache.project_schema_minor =\n      mModel.project_document().schema_version.minor;\n  mHostStateCache.grand_master = snapshot.grand_master;\n  // Persist the global operator/safety latch, never a transient artistic\n  // blackout caused by a missing/out-of-range Cue.\n  mHostStateCache.blackout = snapshot.global_blackout;\n}\n'''
-          new_refresh = '''void AeylaVisualDmx::RefreshHostStateCacheLocked()\n{\n  const auto& snapshot = mModel.snapshot();\n  if(!snapshot.project_valid)\n    return;\n\n  std::array<std::uint8_t, 16> uuid{};\n  if(!DecodeCanonicalUuid(snapshot.project_id, uuid))\n    return;\n\n  // Capture the non-realtime Take session before taking mHostStateMutex. This\n  // keeps lock order deterministic and persists at most the 15 show Songs.\n  aeyla::take_library_session::ensure_scope(this, snapshot.project_id);\n  std::vector<std::string> songIds;\n  const auto& show = mModel.show_program();\n  songIds.reserve(std::min(\n      show.songs.size(), aeyla::runtime::kMaxSessionTakeBindings));\n  for(const auto& song : show.songs)\n  {\n    if(songIds.size() >= aeyla::runtime::kMaxSessionTakeBindings)\n      break;\n    songIds.push_back(song.song_id);\n  }\n  auto hostTakeState =\n      aeyla::take_library_session::snapshot_for_host(this, songIds);\n\n  const std::scoped_lock lock(mHostStateMutex);\n  if(mHostStateCache.project_uuid != uuid)\n  {\n    mHostStateCache.project_checksum.fill(0U);\n    mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;\n    mHostStateCache.project_locator.clear();\n    mHostStateCache.song_bindings.clear();\n    mHostStateCache.take_library_locator.clear();\n    mHostStateCache.take_bindings.clear();\n  }\n  mHostStateCache.project_uuid = uuid;\n  mHostStateCache.project_schema_major =\n      mModel.project_document().schema_version.major;\n  mHostStateCache.project_schema_minor =\n      mModel.project_document().schema_version.minor;\n  mHostStateCache.grand_master = snapshot.grand_master;\n  // Persist the global operator/safety latch, never a transient artistic\n  // blackout caused by a missing/out-of-range Cue.\n  mHostStateCache.blackout = snapshot.global_blackout;\n  mHostStateCache.take_library_locator =\n      std::move(hostTakeState.library_locator);\n  mHostStateCache.take_bindings = std::move(hostTakeState.bindings);\n}\n'''
+          new_refresh = '''void AeylaVisualDmx::RefreshHostStateCacheLocked()\n{\n  const auto& snapshot = mModel.snapshot();\n  if(!snapshot.project_valid)\n    return;\n\n  std::array<std::uint8_t, 16> uuid{};\n  if(!DecodeCanonicalUuid(snapshot.project_id, uuid))\n    return;\n\n  // Snapshot Take state before taking mHostStateMutex to keep lock order\n  // deterministic. Only the 15 show Songs can enter host component state.\n  aeyla::take_library_session::ensure_scope(this, snapshot.project_id);\n  std::vector<std::string> songIds;\n  const auto& show = mModel.show_program();\n  songIds.reserve(std::min(\n      show.songs.size(), aeyla::runtime::kMaxSessionTakeBindings));\n  for(const auto& song : show.songs)\n  {\n    if(songIds.size() >= aeyla::runtime::kMaxSessionTakeBindings)\n      break;\n    songIds.push_back(song.song_id);\n  }\n  auto hostTakeState =\n      aeyla::take_library_session::snapshot_for_host(this, songIds);\n\n  const std::scoped_lock lock(mHostStateMutex);\n  if(mHostStateCache.project_uuid != uuid)\n  {\n    mHostStateCache.project_checksum.fill(0U);\n    mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;\n    mHostStateCache.project_locator.clear();\n    mHostStateCache.song_bindings.clear();\n    mHostStateCache.take_library_locator.clear();\n    mHostStateCache.take_bindings.clear();\n  }\n  mHostStateCache.project_uuid = uuid;\n  mHostStateCache.project_schema_major =\n      mModel.project_document().schema_version.major;\n  mHostStateCache.project_schema_minor =\n      mModel.project_document().schema_version.minor;\n  mHostStateCache.grand_master = snapshot.grand_master;\n  // Persist the global operator/safety latch, never a transient artistic\n  // blackout caused by a missing/out-of-range Cue.\n  mHostStateCache.blackout = snapshot.global_blackout;\n  mHostStateCache.take_library_locator =\n      std::move(hostTakeState.library_locator);\n  mHostStateCache.take_bindings = std::move(hostTakeState.bindings);\n}\n'''
           if text.count(old_refresh) != 1:
               raise SystemExit('refresh anchor mismatch')
           path.write_text(text.replace(old_refresh, new_refresh), encoding='utf-8')
@@ -49,13 +47,11 @@ jobs:
           session = Path('product/AeylaVisualDmx/AeylaTakeLibrarySession.cpp')
           session_text = session.read_text(encoding='utf-8')
           if '#include <iterator>\n' not in session_text:
-              anchor = '#include <algorithm>\n'
-              if session_text.count(anchor) != 1:
-                  raise SystemExit('session include anchor mismatch')
-              session.write_text(session_text.replace(anchor, anchor + '#include <iterator>\n'), encoding='utf-8')
+              session_text = session_text.replace('#include <algorithm>\n', '#include <algorithm>\n#include <iterator>\n', 1)
+              session.write_text(session_text, encoding='utf-8')
           PY
 
-      - name: Remove R08 temporary engineering scaffolding and restore core CI
+      - name: Remove temporary R08 engineering scaffolding
         shell: bash
         run: |
           set -euo pipefail
@@ -66,40 +62,10 @@ jobs:
             .github/workflows/report-graphical-run.yml \
             tools/dev/r08_apply_take_state_codec.py \
             tools/dev/r08_validate_take_state_codec.py
-          cat > .github/workflows/ci.yml <<'YAML'
-          name: core-ci
-
-          on:
-            push:
-            pull_request:
-
-          jobs:
-            build-and-test:
-              strategy:
-                fail-fast: false
-                matrix:
-                  os: [ubuntu-latest, windows-latest, macos-latest]
-              runs-on: ${{ matrix.os }}
-              steps:
-                - uses: actions/checkout@v4
-                - name: Configure
-                  run: cmake -S . -B build
-                - name: Build
-                  run: cmake --build build --config Release
-                - name: Test
-                  run: ctest --test-dir build -C Release --output-on-failure
-                - name: Validate JSON syntax
-                  shell: python
-                  run: |
-                    import json, pathlib
-                    for p in pathlib.Path('.').rglob('*.json'):
-                        json.loads(p.read_text(encoding='utf-8'))
-                        print('OK', p)
-          YAML
-          sed -i 's/^          //' .github/workflows/ci.yml
+          echo 'bmFtZTogY29yZS1jaQoKb246CiAgcHVzaDoKICBwdWxsX3JlcXVlc3Q6Cgpqb2JzOgogIGJ1aWxkLWFuZC10ZXN0OgogICAgc3RyYXRlZ3k6CiAgICAgIGZhaWwtZmFzdDogZmFsc2UKICAgICAgbWF0cml4OgogICAgICAgIG9zOiBbdWJ1bnR1LWxhdGVzdCwgd2luZG93cy1sYXRlc3QsIG1hY29zLWxhdGVzdF0KICAgIHJ1bnMtb246ICR7eyBtYXRyaXgub3MgfX0KICAgIHN0ZXBzOgogICAgICAtIHVzZXM6IGFjdGlvbnMvY2hlY2tvdXRAdjQKICAgICAgLSBuYW1lOiBDb25maWd1cmUKICAgICAgICBydW46IGNtYWtlIC1TIC4gLUIgYnVpbGQKICAgICAgLSBuYW1lOiBCdWlsZAogICAgICAgIHJ1bjogY21ha2UgLS1idWlsZCBidWlsZCAtLWNvbmZpZyBSZWxlYXNlCiAgICAgIC0gbmFtZTogVGVzdAogICAgICAgIHJ1bjogY3Rlc3QgLS10ZXN0LWRpciBidWlsZCAtQyBSZWxlYXNlIC0tb3V0cHV0LW9uLWZhaWx1cmUKICAgICAgLSBuYW1lOiBWYWxpZGF0ZSBKU09OIHN5bnRheAogICAgICAgIHNoZWxsOiBweXRob24KICAgICAgICBydW46IHwKICAgICAgICAgIGltcG9ydCBqc29uLCBwYXRobGliCiAgICAgICAgICBmb3IgcCBpbiBwYXRobGliLlBhdGgoJy4nKS5yZ2xvYignKi5qc29uJyk6CiAgICAgICAgICAgICAganNvbi5sb2FkcyhwLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKSkKICAgICAgICAgICAgICBwcmludCgnT0snLCBwKQo=' | base64 -d > .github/workflows/ci.yml
           git diff --check
 
-      - name: Validate persistence unit gates
+      - name: Validate persistence gates
         shell: bash
         run: |
           set -euo pipefail
@@ -107,7 +73,7 @@ jobs:
           cmake --build build --target aeyla_take_library_session_tests aeyla_plugin_state_tests --parallel 2
           ctest --test-dir build --output-on-failure -R 'aeyla_(take_library_session|plugin_state)_tests'
 
-      - name: Commit clean validated runtime integration
+      - name: Commit clean validated integration
         shell: bash
         run: |
           set -euo pipefail
@@ -115,6 +81,5 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add -A
           git diff --cached --check
-          git status --short
           git commit -m "R08 restore Take session from host state 1.3"
           git push origin HEAD:aeyla/r08-capture-zero-midi-rec-20260829
