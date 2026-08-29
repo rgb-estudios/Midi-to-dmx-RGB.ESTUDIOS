@@ -79,6 +79,11 @@ struct ShowMidiEvent {
   // offset. This lets the runtime wait for the event's block even when the DAW
   // is stopped, without contaminating the artistic cursor above.
   std::uint64_t ready_sample{0U};
+  // Snapshot of the deterministic 44 Hz capture timeline taken in the MIDI
+  // callback itself. The runtime may process this event milliseconds later;
+  // carrying the snapshot prevents that scheduling delay from moving the
+  // non-destructive capture IN marker by one or more DMX frames.
+  std::uint64_t capture_frame_snapshot{0U};
 };
 
 [[nodiscard]] ShowMidiEvent make_show_midi_event(
@@ -88,7 +93,8 @@ struct ShowMidiEvent {
     std::uint8_t note,
     std::uint64_t completed_callback_samples,
     std::uint64_t completed_transport_samples,
-    std::uint32_t sample_offset) noexcept;
+    std::uint32_t sample_offset,
+    std::uint64_t capture_frame_snapshot = 0U) noexcept;
 
 [[nodiscard]] bool show_midi_event_ready(
     std::uint64_t completed_callback_samples,
