@@ -1,10 +1,11 @@
 name: r08-runtime-self-patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - aeyla/r08-capture-zero-midi-rec-20260829
+      - aeyla/r08-macos-ableton-20260829
     paths:
+      - .github/workflows/r08-runtime-self-patch.yml
       - tools/dev/r08_apply_runtime_patch.py
 
 permissions:
@@ -12,6 +13,7 @@ permissions:
 
 jobs:
   apply-runtime-patch:
+    if: github.event.pull_request.head.ref == 'aeyla/r08-capture-zero-midi-rec-20260829'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
