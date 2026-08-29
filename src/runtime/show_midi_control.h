@@ -142,12 +142,36 @@ class ShowMidiIngress final {
     }
     if(queue_.try_push(event))
       return true;
+
+    // N42 is also operational rather than artistic. If the bounded queue is
+    // already saturated, preserve the toggle in a separate atomic fallback so
+    // a capture STOP cannot disappear and leave RAW writing indefinitely. The
+    // queue overflow still requests the normal fail-safe blackout/disarm. The
+    // runtime will consume this fallback on the next tick before queued events.
+    if(event.command == ShowMidiCommand::capture_toggle) {
+      capture_fallback_requests_.fetch_add(1U, std::memory_order_release);
+      safety_stop_requested_.store(true, std::memory_order_release);
+      return true;
+    }
+
     dropped_events_.fetch_add(1U, std::memory_order_relaxed);
     safety_stop_requested_.store(true, std::memory_order_release);
     return false;
   }
 
   [[nodiscard]] bool try_consume(ShowMidiEvent& event) noexcept {
+    auto pending_capture = capture_fallback_requests_.load(
+        std::memory_order_acquire);
+    while(pending_capture > 0U) {
+      if(capture_fallback_requests_.compare_exchange_weak(
+             pending_capture, pending_capture - 1U,
+             std::memory_order_acq_rel, std::memory_order_acquire)) {
+        event = {};
+        event.command = ShowMidiCommand::capture_toggle;
+        event.note = kShowMidiCaptureNote;
+        return true;
+      }
+    }
     return queue_.try_pop(event);
   }
 
@@ -166,6 +190,7 @@ class ShowMidiIngress final {
  private:
   SpscQueue<ShowMidiEvent, StorageCapacity> queue_{};
   std::atomic<std::uint64_t> dropped_events_{0U};
+  std::atomic<std::uint32_t> capture_fallback_requests_{0U};
   std::atomic<bool> panic_requested_{false};
   std::atomic<bool> safety_stop_requested_{false};
 };
