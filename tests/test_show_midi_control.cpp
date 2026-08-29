@@ -175,8 +175,8 @@ int main() {
   }
 
   // PANIC bypasses the artistic SPSC queue and sample-ready wait. Capture N42
-  // deliberately uses the bounded queue because disk work is performed only by
-  // the non-realtime runtime worker.
+  // normally uses that queue because disk work belongs to the non-realtime
+  // runtime worker, with an atomic fallback only if the queue is already full.
   {
     ShowMidiIngress<4U> panic_ingress;
     ShowMidiEvent panic_event;
@@ -205,6 +205,33 @@ int main() {
               consumed_capture.command == ShowMidiCommand::capture_toggle &&
               consumed_capture.capture_frame_snapshot == 55U,
           "capture toggle must reach non-realtime runtime unchanged");
+  }
+  {
+    ShowMidiIngress<4U> capture_overflow;
+    ShowMidiEvent artistic;
+    artistic.command = ShowMidiCommand::play_retrigger;
+    check(capture_overflow.try_submit(artistic),
+          "overflow setup event one must enter queue");
+    check(capture_overflow.try_submit(artistic),
+          "overflow setup event two must enter queue");
+    check(capture_overflow.try_submit(artistic),
+          "overflow setup event three must enter queue");
+
+    ShowMidiEvent capture_stop;
+    capture_stop.command = ShowMidiCommand::capture_toggle;
+    check(capture_overflow.try_submit(capture_stop),
+          "N42 must be preserved through a full artistic queue");
+    check(capture_overflow.consume_safety_stop_request() &&
+              !capture_overflow.consume_safety_stop_request(),
+          "N42 overflow must still request the normal fail-safe boundary");
+    check(capture_overflow.dropped_events() == 0U,
+          "preserved N42 must not be reported as a dropped event");
+
+    ShowMidiEvent recovered_capture;
+    check(capture_overflow.try_consume(recovered_capture) &&
+              recovered_capture.command == ShowMidiCommand::capture_toggle &&
+              recovered_capture.note == kShowMidiCaptureNote,
+          "N42 overflow fallback must be consumed before stale artistic events");
   }
 
   ShowMidiIngress<4U> ingress;
