@@ -593,6 +593,50 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     const auto song_count = mModel.snapshot().song_count;
     const auto prepared = mModel.snapshot().active_song_index;
     std::string error;
+
+    // During DMX recording, MIDI SHOW becomes a synchronization-only surface.
+    // The universal PLAY note (or the direct launch note for the already
+    // selected Song) marks the real artistic boundary without attempting to
+    // play a previously recorded Take or changing Song selection mid-capture.
+    // This fixes DAW pre-roll: an earlier transport-start fallback may be
+    // refined once by the explicit marker, while later retriggers are ignored.
+    if(TakeRecording()) {
+      const bool sync_command =
+          event.command == aeyla::runtime::ShowMidiCommand::play_retrigger ||
+          (event.command == aeyla::runtime::ShowMidiCommand::launch_song &&
+           event.song_index == prepared);
+      if(!sync_command) {
+        SetShowMidiMessage(
+            "MIDI SHOW IGNORADO · durante GRABAR sólo se acepta el marcador de inicio");
+        continue;
+      }
+      if(!host.running) {
+        SetShowMidiMessage(
+            "SYNC GRABACIÓN EN ESPERA · el DAW aún está detenido");
+        continue;
+      }
+
+      const auto capture = mArtNetCapture.stats();
+      const bool accepted =
+          mCaptureSyncAnchor.anchor_explicit(capture.recorded_frames);
+      const auto sync = mCaptureSyncAnchor.status();
+      if(accepted) {
+        SetShowMidiMessage(
+            "SYNC GRABACIÓN MIDI · inicio fijado en cuadro " +
+            std::to_string(sync.anchor_frame) + " · RAW preservado");
+      }
+      else if(sync.source ==
+              aeyla::capture::DmxCaptureSyncSource::show_midi_marker) {
+        SetShowMidiMessage(
+            "SYNC GRABACIÓN MIDI · marcador ya fijado · retrigger ignorado");
+      }
+      else {
+        SetShowMidiMessage(
+            "SYNC GRABACIÓN MIDI IGNORADO · no hay captura R07 activa");
+      }
+      continue;
+    }
+
     switch(event.command) {
       case aeyla::runtime::ShowMidiCommand::previous_song: {
         if(song_count == 0U || prepared == 0U) {
