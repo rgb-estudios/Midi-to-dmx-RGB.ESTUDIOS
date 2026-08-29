@@ -46,23 +46,34 @@ Ableton Live puede **recibir** MIDI Timecode, pero no genera MTC nativamente com
 
 Por lo tanto AEYLA no debe depender de MTC para sincronizar el DMX con el audio.
 
-Para Avolites se permiten dos rutas paralelas, independientes del reloj interno de AEYLA:
+Para el sistema AEYLA/Avolites se mantienen dos rutas paralelas, independientes del reloj interno del plugin.
 
-### Opción A — MTC mediante Max for Live
+### Opción A — LTC en pista de audio dedicada — RECOMENDADA
 
-Usar un dispositivo Max for Live dedicado a generar MTC y rutearlo al puerto MIDI que recibe Avolites.
+Para Avolites T3, usar una pista/archivo LTC generado previamente y una salida física dedicada de la interfaz de audio hacia la entrada LTC del T3.
 
-Ventaja: conserva el flujo MTC ya conocido.
+Ventajas:
 
-Requisito: validar el dispositivo Max for Live, su puerto MIDI y el frame rate antes del show.
+- el T3 dispone de entrada LTC dedicada;
+- el LTC es reproducido por el mismo motor de audio que reproduce las canciones;
+- no depende de un dispositivo Max for Live adicional para generar timecode;
+- permite conservar horas distintas por canción;
+- la pista puede permanecer sin Warp para que la relación temporal sea determinista.
 
-### Opción B — LTC en pista de audio dedicada
+El LTC no gobierna el motor DMX de AEYLA. Ambos simplemente comparten el mismo Arrangement/audio master de Ableton.
 
-Usar un archivo/pista LTC generado previamente y una salida física dedicada de la interfaz de audio hacia la entrada LTC correspondiente del sistema de iluminación.
+### Opción B — MTC mediante Max for Live
 
-Ventaja: el LTC queda reproducido por el mismo motor de audio que reproduce las canciones.
+Si se desea conservar el flujo MIDI Timecode existente, usar un dispositivo Max for Live dedicado a generar MTC y rutearlo al puerto MIDI que recibe Avolites.
 
-La elección MTC/LTC para Avolites no cambia el reloj del plugin: AEYLA continúa sincronizado por muestras de Ableton.
+Requisitos:
+
+- Max Runtime/Max for Live disponible;
+- dispositivo MTC validado en el mismo Mac del show;
+- puerto MIDI y frame rate verificados;
+- prueba de localización, STOP/PLAY y cambio entre canciones.
+
+MTC queda como alternativa, no como dependencia del plugin.
 
 ## 5. Convención por canción
 
@@ -121,11 +132,12 @@ AEYLA puede enumerar interfaces IPv4 y R08 distingue interfaces Wi-Fi de interfa
 R08 no modifica de forma privilegiada la configuración IPv4 del sistema desde dentro de Ableton. Antes de abrir el show:
 
 1. Conectar el adaptador Ethernet que se usará para Art-Net.
-2. Configurar su IPv4/submáscara en Ajustes del Sistema -> Red.
-3. Usar una red compatible con Avolites/nodo/Capture.
-4. Abrir Ableton y AEYLA después de configurar la NIC.
-5. En AEYLA pulsar reescaneo y seleccionar esa interfaz para RX/TX.
-6. Confirmar que la IPv4 mostrada por AEYLA coincide con la configurada en macOS.
+2. Ejecutar `AEYLA_NETWORK_PREFLIGHT.command` si se quiere revisar las interfaces actuales.
+3. Configurar su IPv4/submáscara en Ajustes del Sistema -> Red.
+4. Usar una red compatible con Avolites/nodo/Capture.
+5. Abrir Ableton y AEYLA después de configurar la NIC.
+6. En AEYLA pulsar reescaneo y seleccionar esa interfaz para RX/TX.
+7. Confirmar que la IPv4 mostrada por AEYLA coincide con la configurada en macOS.
 
 Esto evita pedir privilegios de administrador desde un plugin cargado dentro de Ableton y reduce un punto de fallo durante show.
 
@@ -137,6 +149,7 @@ El paquete R08 contiene:
 - `AUv2/AeylaVisualDmx.component` Universal arm64+x86_64.
 - `INSTALL_AEYLA_ABLETON.command` para instalar únicamente VST3, opción recomendada.
 - `INSTALL_AEYLA.command` para instalar VST3 + AUv2 si se requiere diagnóstico en ambos formatos.
+- `AEYLA_NETWORK_PREFLIGHT.command` para revisar las interfaces sin modificar el sistema.
 - scripts de auditoría/desinstalación limitados a AEYLA.
 - `BUILD_ID.txt` y hashes SHA-256.
 
@@ -146,13 +159,14 @@ La compilación PRETEST usa firma ad-hoc. Una distribución pública definitiva 
 
 El workflow `ableton-macos-pretest` debe aprobar:
 
-1. compilación VST3 Universal;
-2. compilación AUv2 Universal;
-3. presencia de slices arm64 + x86_64;
-4. verificación codesign ad-hoc de ambos bundles;
-5. Steinberg VST3 Validator;
-6. Apple `auval` para AUv2;
-7. generación de artefacto PRETEST con BUILD_ID y hashes.
+1. sintaxis de scripts operativos macOS;
+2. compilación VST3 Universal;
+3. compilación AUv2 Universal;
+4. presencia de slices arm64 + x86_64;
+5. verificación codesign ad-hoc de ambos bundles;
+6. Steinberg VST3 Validator;
+7. Apple `auval` para AUv2;
+8. generación de artefacto PRETEST con BUILD_ID y hashes.
 
 Estas pruebas no sustituyen Ableton real, porque Ableton Live no está disponible en GitHub Actions.
 
@@ -198,13 +212,15 @@ Estas pruebas no sustituyen Ableton real, porque Ableton Live no está disponibl
 - quitar APAGÓN manualmente no rearma la salida;
 - ARM posterior siempre es manual.
 
-### F — sesión completa
+### F — sesión completa + timecode
 
 - preparar al menos tres canciones consecutivas;
 - cambiar PREPARADA mientras otra canción está activa;
 - lanzar cada canción desde su clip/marker real;
 - validar que el cambio entre tomas no introduce blackout no solicitado;
-- validar la ruta paralela de timecode seleccionada para Avolites.
+- si se usa LTC: comprobar tres horas/canciones distintas en T3 y reubicar Arrangement antes de PLAY;
+- si se usa MTC Max for Live: repetir la misma prueba de localización y cambio de canción;
+- confirmar que un fallo de la ruta de timecode no altera el reloj interno de AEYLA.
 
 ## 12. Promoción
 
