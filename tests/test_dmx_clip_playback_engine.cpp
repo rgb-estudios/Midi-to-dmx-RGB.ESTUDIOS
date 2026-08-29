@@ -114,6 +114,17 @@ int main() {
 
   engine.set_host_heartbeat_ok(true);
   require(engine.arm(error), error);
+  require(wait_until([&]() {
+    return engine.status().current_frame == 0U && output.override_enabled();
+  }), "ARM must establish physical Art-Net authority at the held start frame");
+  require(wait_until([&]() {
+    DmxUniverse received{};
+    return receiver.latest_frame(received) && received == expected_frame(0U);
+  }), "ARM did not publish the held start frame to the Art-Net receiver");
+  const auto armed_packets_before = output.stats().sent_packets;
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  require(output.stats().sent_packets >= armed_packets_before + 5U,
+          "ARM did not keep a continuous Art-Net carrier while transport was stopped");
   require(!engine.seek_frame(44U, error),
           "editor scrub must fail closed while physical DMX is armed");
   require(engine.play_from_start(DmxClipClockSource::host_samples, error), error);
@@ -241,9 +252,9 @@ int main() {
   engine.disarm();
   engine.unload();
 
-  // Regression del flujo real del operador: ARMAR primero y REPRODUCIR después
-  // debe conservar la autoridad. El reloj avanza por nFrames del callback aun
-  // cuando la posición absoluta del Arrangement permanece detenida.
+  // Flujo de show sincronizado: ARMAR con REAPER detenido debe dejar el nodo
+  // Art-Net activo en el primer cuadro. PLAY/PAUSE del host gobierna el cursor
+  // por muestras; STOP nunca corta el carrier mientras la salida siga armada.
   {
     runtime::HostTransportMailbox host;
     host.publish(false, false, 777.0, 0.0, 120.0);
@@ -257,57 +268,65 @@ int main() {
             "an armed Take reload must fail instead of silently disarming output");
     require(scheduler.status().armed,
             "rejected armed reload unexpectedly removed Take authority");
-    require(scheduler.play(error), error);
     require(wait_until([&]() {
       return scheduler.status().current_frame == 0U && output.override_enabled();
-    }), "ARM -> PLAY did not establish physical Take authority");
+    }), "ARM while DAW stopped did not establish continuous Art-Net authority");
+    require(!scheduler.play(error, DmxClipClockSource::host_samples),
+            "host-sample PLAY must not free-run while the DAW is stopped");
 
-    // Simula un segundo de callbacks sin ninguna llamada de UI. Esta es la
-    // propiedad requerida cuando el editor está cerrado o minimizado: el host
-    // continúa publicando bloques, el scheduler avanza y el worker mantiene su
-    // propia cadencia de red.
-    const auto packets_before_headless_second = output.stats().sent_packets;
-    const auto headless_started = std::chrono::steady_clock::now();
-    for(int block = 0; block < 100; ++block) {
-      scheduler.advance_samples(480U, false);
+    const auto packets_before_stopped = output.stats().sent_packets;
+    const auto stopped_started = std::chrono::steady_clock::now();
+    for(int block = 0; block < 50; ++block) {
       host.publish(false, false, 777.0, 0.0, 120.0);
+      scheduler.advance_samples(480U, false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const auto stopped_cursor = scheduler.status();
+    require(stopped_cursor.current_frame == 0U && !stopped_cursor.playing &&
+                output.override_enabled(),
+            "STOP must hold frame zero without dropping Art-Net authority");
+    const auto stopped_stats = output.stats();
+    const auto stopped_packets =
+        stopped_stats.sent_packets - packets_before_stopped;
+    const auto stopped_elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - stopped_started).count();
+    const auto stopped_pps = static_cast<double>(stopped_packets) / stopped_elapsed;
+    require(stopped_packets >= 10U && stopped_pps >= 30.0 &&
+                stopped_pps <= 58.0 && stopped_stats.send_errors == 0U &&
+                !stopped_stats.fail_closed,
+            "armed STOP did not sustain a healthy Art-Net carrier");
+
+    // PLAY del DAW es ahora la única autoridad del reloj host_samples.
+    host.publish(true, false, 777.0, 0.0, 120.0);
+    require(wait_until([&]() { return scheduler.status().playing; }),
+            "DAW PLAY edge did not start the armed DMX clip automatically");
+    for(int block = 0; block < 100; ++block) {
+      host.publish(true, false, 777.0 + static_cast<double>(block * 480),
+                   0.0, 120.0);
+      scheduler.advance_samples(480U, false);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     require(wait_until([&]() { return scheduler.status().current_frame == 44U; }),
-            "stopped Arrangement did not advance from callback sample count");
-    require(wait_until([&]() {
-      return scheduler.status().armed && output.override_enabled();
-    }), "real-time Take playback lost authority after callback advance");
+            "one running host second did not resolve to frame 44");
     require(wait_until([&]() {
       DmxUniverse received{};
       return receiver.latest_frame(received) && received == expected_frame(44U);
-    }), "headless/minimized path did not transmit the advanced DMX frame");
-    const auto headless_stats = output.stats();
-    const auto headless_packets =
-        headless_stats.sent_packets - packets_before_headless_second;
-    const auto headless_elapsed = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - headless_started).count();
-    const auto headless_packets_per_second =
-        static_cast<double>(headless_packets) / headless_elapsed;
-    if(headless_stats.configured_fps != 44U ||
-       headless_elapsed < 0.9 || headless_packets < 20U ||
-       headless_packets_per_second < 30.0 ||
-       headless_packets_per_second > 58.0 ||
-       headless_stats.send_errors != 0U || headless_stats.fail_closed) {
-      std::cerr << "Headless Art-Net diagnostics: packets="
-                << headless_packets << " elapsed=" << headless_elapsed
-                << " rate=" << headless_packets_per_second
-                << " configured_fps=" << headless_stats.configured_fps
-                << " send_errors=" << headless_stats.send_errors
-                << " fail_closed=" << headless_stats.fail_closed << '\n';
+    }), "DAW-follow playback did not transmit frame 44");
+
+    host.publish(false, false, 48777.0, 0.0, 120.0);
+    require(wait_until([&]() { return scheduler.status().paused; }),
+            "DAW STOP edge did not pause the DMX clip");
+    const auto paused_at = scheduler.status().current_frame;
+    const auto packets_before_pause_hold = output.stats().sent_packets;
+    for(int block = 0; block < 25; ++block) {
+      host.publish(false, false, 48777.0, 0.0, 120.0);
+      scheduler.advance_samples(480U, false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    require(headless_stats.configured_fps == 44U &&
-                headless_elapsed >= 0.9 && headless_packets >= 20U &&
-                headless_packets_per_second >= 30.0 &&
-                headless_packets_per_second <= 58.0 &&
-                headless_stats.send_errors == 0U &&
-                !headless_stats.fail_closed,
-            "headless/minimized path did not sustain healthy 44 Hz Art-Net");
+    require(scheduler.status().current_frame == paused_at &&
+                output.override_enabled() &&
+                output.stats().sent_packets > packets_before_pause_hold,
+            "DAW STOP did not freeze cursor while preserving Art-Net carrier");
     scheduler.disarm();
   }
 
@@ -322,10 +341,10 @@ int main() {
     require(scheduler.load_take_file(stream_config.target_path, 48000.0, error),
             error);
     require(scheduler.arm(error), error);
-    require(scheduler.play(error, DmxClipClockSource::host_samples), error);
+    require(wait_until([&]() {
+      return scheduler.status().playing && output.override_enabled();
+    }), "arming into a running DAW did not join host transport");
     scheduler.advance_samples(12000U, false);
-    require(wait_until([&]() { return output.override_enabled(); }),
-            "host-sample playback did not establish authority");
     require(wait_until([&]() {
       const auto status = scheduler.status();
       return !status.armed && !output.override_enabled();
@@ -336,7 +355,7 @@ int main() {
   }
 
   // Regresión completa del video: existe un pulso válido al armar, el operador
-  // inicia PLAY y luego REAPER deja de publicar por más de los 750 ms del
+  // inicia PLAY manual y luego REAPER deja de publicar por más de los 750 ms del
   // watchdog al perder foco. La toma manual debe seguir avanzando y el receptor
   // debe conservar un stream continuo a 44 Hz.
   {
@@ -392,6 +411,6 @@ int main() {
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
 
-  std::cout << "AEYLA DMX clip engine PASS: host + manual clocks / stable Art-Net\n";
+  std::cout << "AEYLA DMX clip engine PASS: DAW transport follow + armed 44 Hz carrier + manual clock\n";
   return EXIT_SUCCESS;
 }
