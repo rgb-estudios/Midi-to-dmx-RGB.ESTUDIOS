@@ -637,8 +637,8 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     // The universal PLAY note (or the direct launch note for the already
     // selected Song) marks the real artistic boundary without attempting to
     // play a previously recorded Take or changing Song selection mid-capture.
-    // This fixes DAW pre-roll: an earlier transport-start fallback may be
-    // refined once by the explicit marker, while later retriggers are ignored.
+    // The capture-frame timestamp was taken in ProcessMidiMsg itself, not here:
+    // runtime scheduling latency therefore cannot move the non-destructive IN.
     if(TakeRecording()) {
       const bool sync_command =
           event.command == aeyla::runtime::ShowMidiCommand::play_retrigger ||
@@ -655,14 +655,15 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
         continue;
       }
 
-      const auto capture = mArtNetCapture.stats();
       const bool accepted =
-          mCaptureSyncAnchor.anchor_explicit(capture.recorded_frames);
+          mCaptureSyncAnchor.anchor_explicit(event.capture_frame_snapshot);
       const auto sync = mCaptureSyncAnchor.status();
       if(accepted) {
         SetShowMidiMessage(
             "SYNC GRABACIÓN MIDI · inicio fijado en cuadro " +
-            std::to_string(sync.anchor_frame) + " · RAW preservado");
+            std::to_string(sync.anchor_frame) +
+            " · timestamp tomado al entrar N" + std::to_string(event.note) +
+            " · RAW preservado");
       }
       else if(sync.source ==
               aeyla::capture::DmxCaptureSyncSource::show_midi_marker) {
@@ -671,7 +672,7 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
       }
       else {
         SetShowMidiMessage(
-            "SYNC GRABACIÓN MIDI IGNORADO · no hay captura R07 activa");
+            "SYNC GRABACIÓN MIDI IGNORADO · no hay captura R08 activa");
       }
       continue;
     }
