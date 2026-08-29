@@ -191,6 +191,24 @@ bool AeylaNetworkConfiguration::Start(
     error_message = std::move(network_error);
     return false;
   }
+
+#ifndef _WIN32
+  // A plug-in hosted by Ableton must not launch a privileged network mutation.
+  // Configure the show NIC before Live starts; AEYLA then validates and binds
+  // to that already-configured address without elevated privileges.
+#ifdef __APPLE__
+  error_message =
+      "macOS: configura la IPv4/submáscara del Ethernet en Ajustes del Sistema > Red, "
+      "luego vuelve a AEYLA y pulsa REESCANEAR. El plugin no solicita privilegios dentro de Ableton.";
+#else
+  error_message =
+      "La configuración automática de IP/submáscara no está disponible en esta plataforma";
+#endif
+  mBusy.store(false, std::memory_order_release);
+  Publish(AeylaNetworkConfigurationState::failed, ipv4, prefix_length,
+          error_message);
+  return false;
+#else
   if(mWorker.joinable()) mWorker.join();
   Publish(AeylaNetworkConfigurationState::awaiting_permission, ipv4,
           prefix_length,
@@ -205,6 +223,7 @@ bool AeylaNetworkConfiguration::Start(
     return false;
   }
   return true;
+#endif
 }
 
 AeylaNetworkConfigurationSnapshot AeylaNetworkConfiguration::Snapshot() const {
@@ -292,7 +311,7 @@ void AeylaNetworkConfiguration::Run(
 #else
     (void)adapter;
     Publish(AeylaNetworkConfigurationState::failed, ipv4, prefix_length,
-            "La configuración interna de IP/submáscara está disponible primero en Windows");
+            "La configuración automática de IP/submáscara no está disponible en esta plataforma");
 #endif
   } catch(...) {
     Publish(AeylaNetworkConfigurationState::failed, ipv4, prefix_length,
