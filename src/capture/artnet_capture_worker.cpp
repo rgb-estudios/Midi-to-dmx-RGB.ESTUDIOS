@@ -388,6 +388,10 @@ class ArtNetCaptureWorker::Impl final {
     return streamed_mode_.load(std::memory_order_acquire);
   }
 
+  std::uint64_t recorded_frames_fast() const noexcept {
+    return recorded_frames_.load(std::memory_order_acquire);
+  }
+
   void discard_recording() noexcept {
     recording_.store(false, std::memory_order_release);
     const bool was_streamed =
@@ -685,6 +689,10 @@ bool ArtNetCaptureWorker::streamed_recording_active() const noexcept {
 
 void ArtNetCaptureWorker::discard_recording() noexcept {
   impl_->discard_recording();
+}
+
+std::uint64_t ArtNetCaptureWorker::recorded_frames_fast() const noexcept {
+  return impl_->recorded_frames_fast();
 }
 
 bool ArtNetCaptureWorker::latest_frame(DmxUniverse& frame) const noexcept {
