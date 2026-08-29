@@ -425,15 +425,16 @@ void DmxClipPlaybackEngine::synchronize_host_cursor(
 
 void DmxClipPlaybackEngine::set_host_heartbeat_ok(bool ok) noexcept {
   heartbeat_ok_.store(ok, std::memory_order_release);
-  // Ableton can suspend DSP for a silent device while transport is stopped.
-  // READY/PAUSED/ENDED do not consume host samples, so a stale audio callback
-  // must not make an armed Art-Net endpoint disappear between Songs. PLAYING
-  // on the host-sample clock still fails closed immediately if its clock dies.
-  if(!ok && !uses_monotonic_clock() &&
-     transport_.load(std::memory_order_acquire) ==
-         DmxClipTransportState::playing) {
+  // Revalidate after acquiring the reader/output mutex. A transport change may
+  // happen between the first atomic read and this side effect; stale PLAYING
+  // must never disable a newly READY/PAUSED/ENDED armed carrier.
+  if(!ok && !uses_monotonic_clock()) {
     const std::scoped_lock lock(mutex_);
-    if(output_ != nullptr)
+    if(output_ != nullptr &&
+       !heartbeat_ok_.load(std::memory_order_acquire) &&
+       transport_.load(std::memory_order_acquire) ==
+           DmxClipTransportState::playing &&
+       !uses_monotonic_clock())
       output_->set_override_enabled(false);
   }
 }
@@ -570,42 +571,63 @@ void DmxClipPlaybackEngine::run() noexcept {
       continue;
     }
 
-    const auto state = transport_.load(std::memory_order_acquire);
-    const bool host_clock_required =
-        state == DmxClipTransportState::playing && !uses_monotonic_clock();
-    if((host_clock_required && !heartbeat_ok_.load(std::memory_order_acquire)) ||
+    const auto observed_state = transport_.load(std::memory_order_acquire);
+    const bool observed_host_clock_required =
+        observed_state == DmxClipTransportState::playing &&
+        !uses_monotonic_clock();
+    if((observed_host_clock_required &&
+        !heartbeat_ok_.load(std::memory_order_acquire)) ||
        rendering_offline_.load(std::memory_order_acquire)) {
-      output->set_override_enabled(false);
-      std::this_thread::sleep_for(kWorkerSleep);
-      continue;
-    }
-
-    if(state == DmxClipTransportState::fault) {
-      output->set_override_enabled(false);
-      std::this_thread::sleep_for(kWorkerSleep);
-      continue;
-    }
-
-    // READY is a stopped artistic transport, not a disconnected endpoint. A
-    // valid held frame stays authoritative while ARM remains active. The same
-    // applies to PAUSED/ENDED: their cursor is frozen and needs no host clock.
-    if(state == DmxClipTransportState::ready) {
-      bool has_hold = false;
-      {
-        const std::scoped_lock lock(mutex_);
-        has_hold = hold_valid_;
-      }
-      if(!has_hold) {
+      // State may have changed after observed_state was loaded (notably an
+      // atomic armed Song swap). Revalidate before revoking authority so a
+      // stale PLAYING observation cannot punch a one-cycle hole in READY/HOLD.
+      const auto current_state = transport_.load(std::memory_order_acquire);
+      const bool current_host_clock_required =
+          current_state == DmxClipTransportState::playing &&
+          !uses_monotonic_clock();
+      const bool offline = rendering_offline_.load(std::memory_order_acquire);
+      if(offline ||
+         (current_host_clock_required &&
+          !heartbeat_ok_.load(std::memory_order_acquire))) {
         output->set_override_enabled(false);
         std::this_thread::sleep_for(kWorkerSleep);
         continue;
       }
     }
 
+    if(observed_state == DmxClipTransportState::fault) {
+      if(transport_.load(std::memory_order_acquire) ==
+         DmxClipTransportState::fault) {
+        output->set_override_enabled(false);
+        std::this_thread::sleep_for(kWorkerSleep);
+        continue;
+      }
+    }
+
+    // READY is a stopped artistic transport, not a disconnected endpoint. A
+    // valid held frame stays authoritative while ARM remains active. Re-read
+    // transport under the same mutex as hold_valid_: a stale READY snapshot
+    // must never disable a clip that has just been atomically replaced into
+    // PLAYING with a new reader/cursor.
+    bool ready_without_hold = false;
+    {
+      const std::scoped_lock lock(mutex_);
+      const auto current_state = transport_.load(std::memory_order_acquire);
+      ready_without_hold = current_state == DmxClipTransportState::ready &&
+                           !hold_valid_;
+    }
+    if(ready_without_hold) {
+      output->set_override_enabled(false);
+      std::this_thread::sleep_for(kWorkerSleep);
+      continue;
+    }
+
     bool published = false;
     {
       const std::scoped_lock lock(mutex_);
-      if(state == DmxClipTransportState::playing && uses_monotonic_clock())
+      const auto current_state = transport_.load(std::memory_order_acquire);
+      if(current_state == DmxClipTransportState::playing &&
+         uses_monotonic_clock())
         update_monotonic_cursor_locked(std::chrono::steady_clock::now());
       published = publish_cursor_frame_locked();
     }
