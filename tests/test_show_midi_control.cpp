@@ -72,6 +72,37 @@ int main() {
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,
                                12U, 120U, error),
         "launch base must reserve all 15 direct Song notes");
+  check(!assign_show_midi_note(
+            mapping, ShowMidiLearnTarget::launch_song_base, 12U,
+            static_cast<std::uint8_t>(
+                kShowMidiPanicNote - (kShowMidiSongCapacity - 1U)), error) &&
+            error.find("PANIC") != std::string::npos,
+        "new Song launch banks must not be learned across PANIC N41");
+
+  // Format 1.2 predates the PANIC reservation. A restored map that already
+  // used N41 must remain decodable instead of invalidating the whole VST3
+  // component state. PANIC safely shadows the old assignment at runtime.
+  {
+    ShowMidiMapping legacy = mapping;
+    legacy.stop_note = kShowMidiPanicNote;
+    check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
+          "legacy configurable N41 collision must remain state-compatible");
+    check(match_show_midi_note(
+              legacy, legacy.channel, kShowMidiPanicNote, 127U, match) &&
+              match.command == ShowMidiCommand::panic_blackout,
+          "PANIC must take precedence over a legacy configurable N41 collision");
+  }
+  {
+    ShowMidiMapping legacy = mapping;
+    legacy.launch_base_note = static_cast<std::uint8_t>(
+        kShowMidiPanicNote - (kShowMidiSongCapacity - 1U));
+    check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
+          "legacy launch bank crossing N41 must remain state-compatible");
+    check(match_show_midi_note(
+              legacy, legacy.channel, kShowMidiPanicNote, 127U, match) &&
+              match.command == ShowMidiCommand::panic_blackout,
+          "PANIC must take precedence over a legacy direct-Song N41 collision");
+  }
 
   // Callback scheduling and artistic transport are deliberately different
   // clocks. Stopped DAW blocks may make an event ready for the worker but must
@@ -101,14 +132,6 @@ int main() {
     check(validate_show_midi_mapping(invalid) ==
               ShowMidiMappingError::duplicate_note,
           "global command inside launch range must be rejected");
-  }
-  {
-    auto invalid = mapping;
-    invalid.launch_base_note = static_cast<std::uint8_t>(
-        kShowMidiPanicNote - (kShowMidiSongCapacity - 1U));
-    check(validate_show_midi_mapping(invalid) ==
-              ShowMidiMappingError::duplicate_note,
-          "Song launch bank must never overlap the fixed PANIC note");
   }
 
   // Queue overflow is a safety boundary: it is observable and requests one
