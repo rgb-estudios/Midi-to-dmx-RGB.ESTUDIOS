@@ -12,10 +12,13 @@
 namespace aeyla::runtime {
 
 inline constexpr std::uint16_t kPluginStateFormatMajor = 1;
-inline constexpr std::uint16_t kPluginStateFormatMinor = 2;
+inline constexpr std::uint16_t kPluginStateFormatMinor = 3;
 inline constexpr std::size_t kMaxProjectLocatorBytes = 4096;
+inline constexpr std::size_t kMaxTakeLibraryLocatorBytes = 4096;
+inline constexpr std::size_t kMaxTakeFileNameBytes = 512;
 inline constexpr std::size_t kMaxPluginStateBytes = 64 * 1024;
 inline constexpr std::size_t kMaxSessionSongBindings = 15;
+inline constexpr std::size_t kMaxSessionTakeBindings = 15;
 inline constexpr std::size_t kMaxSessionSongIdBytes = 128;
 
 enum class ProjectLocatorMode : std::uint8_t {
@@ -31,6 +34,17 @@ struct SessionSongBinding {
   bool operator==(const SessionSongBinding&) const = default;
 };
 
+// Portable per-song DMX take selection. Only the basename is persisted so
+// moving a library between Windows and macOS never bakes a platform path
+// into every song. 0/0 is the only full-file sentinel.
+struct SessionTakeBinding {
+  std::string song_id;
+  std::string file_name;
+  std::uint64_t start_frame{0U};
+  std::uint64_t end_frame_exclusive{0U};
+  bool operator==(const SessionTakeBinding&) const = default;
+};
+
 // Authoritative VST3 component state. Output Arm is deliberately absent: every
 // instantiate/restore path starts disarmed regardless of previously saved UI.
 struct PluginComponentState {
@@ -44,6 +58,8 @@ struct PluginComponentState {
   std::string project_locator{};
   std::vector<SessionSongBinding> song_bindings{};
   ShowMidiMapping show_midi{};
+  std::string take_library_locator{};
+  std::vector<SessionTakeBinding> take_bindings{};
 
   bool operator==(const PluginComponentState&) const = default;
 };
@@ -62,7 +78,8 @@ enum class PluginStateError : std::uint8_t {
   invalid_grand_master,
   inconsistent_locator,
   invalid_song_binding,
-  invalid_show_midi_mapping
+  invalid_show_midi_mapping,
+  invalid_take_binding
 };
 
 struct PluginStateEncodeResult {
