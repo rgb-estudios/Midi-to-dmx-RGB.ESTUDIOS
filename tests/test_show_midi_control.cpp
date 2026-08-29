@@ -96,8 +96,15 @@ int main() {
     ShowMidiMapping legacy = mapping;
     legacy.launch_base_note = static_cast<std::uint8_t>(
         kShowMidiPanicNote - (kShowMidiSongCapacity - 1U));
+    // Move every configurable global command outside that inherited 27..41
+    // bank so this test isolates only the reserved PANIC overlap.
+    legacy.previous_note = 70U;
+    legacy.next_note = 71U;
+    legacy.play_note = 72U;
+    legacy.pause_note = 73U;
+    legacy.stop_note = 74U;
     check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
-          "legacy launch bank crossing N41 must remain state-compatible");
+          "legacy launch bank crossing only N41 must remain state-compatible");
     check(match_show_midi_note(
               legacy, legacy.channel, kShowMidiPanicNote, 127U, match) &&
               match.command == ShowMidiCommand::panic_blackout,
