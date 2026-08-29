@@ -38,6 +38,14 @@ int main() {
   check(!match_show_midi_note(mapping, 16U, mapping.play_note, 0U, match),
         "velocity-zero Note On must not trigger transport");
 
+  check(match_show_midi_note(mapping, 16U, kShowMidiPanicNote, 127U, match) &&
+            match.command == ShowMidiCommand::panic_blackout,
+        "reserved PANIC note must decode on the configured Show channel");
+  check(!match_show_midi_note(mapping, 15U, kShowMidiPanicNote, 127U, match),
+        "PANIC must not leak across MIDI channels");
+  check(!match_show_midi_note(mapping, 16U, kShowMidiPanicNote, 0U, match),
+        "velocity-zero PANIC must not trigger safety action");
+
   for(std::uint8_t song = 0U; song < kShowMidiSongCapacity; ++song) {
     const auto note = static_cast<std::uint8_t>(mapping.launch_base_note + song);
     check(match_show_midi_note(mapping, 16U, note, 100U, match) &&
@@ -56,6 +64,11 @@ int main() {
                                12U, 72U, error) &&
             mapping == before_collision && !error.empty(),
         "MIDI Learn collision must be rejected without altering mapping");
+  check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::stop_reset,
+                               12U, kShowMidiPanicNote, error) &&
+            mapping == before_collision &&
+            error.find("PANIC") != std::string::npos,
+        "reserved PANIC note must not be learnable by another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,
                                12U, 120U, error),
         "launch base must reserve all 15 direct Song notes");
@@ -88,6 +101,14 @@ int main() {
     check(validate_show_midi_mapping(invalid) ==
               ShowMidiMappingError::duplicate_note,
           "global command inside launch range must be rejected");
+  }
+  {
+    auto invalid = mapping;
+    invalid.launch_base_note = static_cast<std::uint8_t>(
+        kShowMidiPanicNote - (kShowMidiSongCapacity - 1U));
+    check(validate_show_midi_mapping(invalid) ==
+              ShowMidiMappingError::duplicate_note,
+          "Song launch bank must never overlap the fixed PANIC note");
   }
 
   // Queue overflow is a safety boundary: it is observable and requests one
