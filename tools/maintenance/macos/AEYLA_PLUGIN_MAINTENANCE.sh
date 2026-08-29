@@ -39,6 +39,24 @@ remove_exact() {
   esac
 }
 
+verify_bundle() {
+  local path="$1"
+  if [[ ! -e "$path" ]]; then
+    echo "ERROR: bundle AEYLA ausente despues de instalar: $path" >&2
+    exit 7
+  fi
+  if command -v xattr >/dev/null 2>&1; then
+    # Internal PRETEST artifacts can inherit browser/chat quarantine. Clear it
+    # only on the exact AEYLA bundle; never touch the host, other plug-ins or a
+    # global plug-in directory.
+    xattr -dr com.apple.quarantine "$path" 2>/dev/null || true
+  fi
+  if command -v codesign >/dev/null 2>&1; then
+    codesign --verify --deep --strict --verbose=2 "$path"
+    log "Firma del bundle verificada: $path"
+  fi
+}
+
 audit() {
   log "Auditando instalaciones AEYLA conocidas"
   local paths=(
@@ -52,6 +70,11 @@ audit() {
   for path in "${paths[@]}"; do
     if [[ -e "$path" ]]; then
       log "ENCONTRADO: $path"
+      if command -v codesign >/dev/null 2>&1; then
+        codesign --verify --deep --strict "$path" >/dev/null 2>&1 \
+          && log "  firma: OK" \
+          || log "  firma: INVALIDA / revisar instalacion"
+      fi
     else
       log "ausente: $path"
     fi
@@ -81,10 +104,12 @@ install() {
       exit 5
     fi
     local vst3_root="$HOME/Library/Audio/Plug-Ins/VST3"
+    local vst3_target="$vst3_root/$BUNDLE_VST3"
     mkdir -p "$vst3_root"
-    rm -rf -- "$vst3_root/$BUNDLE_VST3"
-    cp -R "$SOURCE_VST3" "$vst3_root/$BUNDLE_VST3"
-    log "VST3 instalado para el usuario: $vst3_root/$BUNDLE_VST3"
+    rm -rf -- "$vst3_target"
+    /usr/bin/ditto "$SOURCE_VST3" "$vst3_target"
+    verify_bundle "$vst3_target"
+    log "VST3 instalado para el usuario: $vst3_target"
   fi
 
   if [[ -n "$SOURCE_AU" ]]; then
@@ -93,10 +118,12 @@ install() {
       exit 6
     fi
     local au_root="$HOME/Library/Audio/Plug-Ins/Components"
+    local au_target="$au_root/$BUNDLE_AU"
     mkdir -p "$au_root"
-    rm -rf -- "$au_root/$BUNDLE_AU"
-    cp -R "$SOURCE_AU" "$au_root/$BUNDLE_AU"
-    log "AU instalado para el usuario: $au_root/$BUNDLE_AU"
+    rm -rf -- "$au_target"
+    /usr/bin/ditto "$SOURCE_AU" "$au_target"
+    verify_bundle "$au_target"
+    log "AU instalado para el usuario: $au_target"
   fi
 }
 
