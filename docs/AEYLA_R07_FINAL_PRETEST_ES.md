@@ -42,7 +42,9 @@ Mapa inicial:
 - **Nota 41: PANIC / APAGÓN — reservada, unidireccional y no aprendible en R07.**
 - Notas 48–62: lanzamiento directo de canciones 01–15.
 
-Los comandos configurables admiten APRENDER MIDI. La nota 41 se mantiene fija en R07 para no modificar el formato persistente del estado VST3 durante el cierre de entrega.
+Los comandos configurables admiten APRENDER MIDI. La nota 41 se mantiene fija en R07 para no modificar el formato persistente del estado VST3 durante el cierre de entrega. Nuevas asignaciones no pueden usar N41 ni crear un banco de canciones que la atraviese.
+
+Compatibilidad: un estado PRETEST 1.2 antiguo que ya hubiese usado N41 para otro comando sigue siendo legible. No se rechaza la sesión completa; en ejecución, PANIC tiene prioridad segura sobre esa asignación heredada. Se recomienda reaprender luego el comando antiguo en otra nota.
 
 ### Contrato de PANIC
 
