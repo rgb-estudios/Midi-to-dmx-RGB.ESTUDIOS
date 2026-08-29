@@ -3,6 +3,7 @@
 #include "capture/dmx_take_file_store.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <string>
@@ -234,7 +235,11 @@ PersistedRestoreStatus restore_persisted_state(const void* owner) {
 
   if(candidate.empty() && !savedLocator.empty()) {
     try {
-      candidate = std::filesystem::u8path(savedLocator).lexically_normal();
+      std::u8string locatorUtf8;
+      locatorUtf8.reserve(savedLocator.size());
+      for(const unsigned char byte : savedLocator)
+        locatorUtf8.push_back(static_cast<char8_t>(byte));
+      candidate = std::filesystem::path(locatorUtf8).lexically_normal();
       usingSavedLocator = true;
     } catch(...) {
       candidate.clear();

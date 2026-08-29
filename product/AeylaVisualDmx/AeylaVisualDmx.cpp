@@ -975,13 +975,28 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   {
     // The Set identifies a project that is not the currently loaded package.
     // Until locator-based asynchronous loading is implemented, expose an
-    // invalid project and publish only the safe frame.
+    // invalid project and publish only the safe frame. Never carry Take
+    // bindings from a different project identity into the current session.
     mModel.set_project_valid(false);
     mModel.set_blackout(true);
     mParamBlackout.store(true, std::memory_order_release);
     mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);
-    const std::scoped_lock stateLock(mHostStateMutex);
-    mHostStateCache.song_bindings.clear();
+    {
+      const std::scoped_lock stateLock(mHostStateMutex);
+      mHostStateCache.song_bindings.clear();
+      mHostStateCache.take_library_locator.clear();
+      mHostStateCache.take_bindings.clear();
+    }
+    aeyla::take_library_session::clear(this);
+  }
+  else
+  {
+    // State 1.3 restores only non-destructive Take/library state. This never
+    // arms Art-Net and never starts playback. A missing cross-platform path
+    // remains pending until the operator selects the destination library once.
+    aeyla::take_library_session::stage_persisted_state(
+        this, mModel.project_document().project_id,
+        pending->take_library_locator, pending->take_bindings);
   }
 
   // UnserializeParams already restored host-visible preferences. Applying them
@@ -1046,6 +1061,22 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   if(!DecodeCanonicalUuid(snapshot.project_id, uuid))
     return;
 
+  // Snapshot Take state before taking mHostStateMutex to keep lock order
+  // deterministic. Only the 15 show Songs can enter host component state.
+  aeyla::take_library_session::ensure_scope(this, snapshot.project_id);
+  std::vector<std::string> songIds;
+  const auto& show = mModel.show_program();
+  songIds.reserve(std::min(
+      show.songs.size(), aeyla::runtime::kMaxSessionTakeBindings));
+  for(const auto& song : show.songs)
+  {
+    if(songIds.size() >= aeyla::runtime::kMaxSessionTakeBindings)
+      break;
+    songIds.push_back(song.song_id);
+  }
+  auto hostTakeState =
+      aeyla::take_library_session::snapshot_for_host(this, songIds);
+
   const std::scoped_lock lock(mHostStateMutex);
   if(mHostStateCache.project_uuid != uuid)
   {
@@ -1053,6 +1084,8 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
     mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
     mHostStateCache.project_locator.clear();
     mHostStateCache.song_bindings.clear();
+    mHostStateCache.take_library_locator.clear();
+    mHostStateCache.take_bindings.clear();
   }
   mHostStateCache.project_uuid = uuid;
   mHostStateCache.project_schema_major =
@@ -1063,6 +1096,9 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   // Persist the global operator/safety latch, never a transient artistic
   // blackout caused by a missing/out-of-range Cue.
   mHostStateCache.blackout = snapshot.global_blackout;
+  mHostStateCache.take_library_locator =
+      std::move(hostTakeState.library_locator);
+  mHostStateCache.take_bindings = std::move(hostTakeState.bindings);
 }
 
 void AeylaVisualDmx::CaptureParameterValueFromHost(int paramIdx) noexcept
