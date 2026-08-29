@@ -19,6 +19,12 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#ifdef __APPLE__
+#include <cstring>
+#include <net/if_media.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
 #endif
 
 namespace aeyla::network {
@@ -75,6 +81,31 @@ std::uint8_t prefix_from_mask(const sockaddr_in* mask) noexcept {
     bits <<= 1U;
   }
   return prefix;
+}
+
+bool interface_is_wireless(const std::string& name) noexcept {
+#ifdef __APPLE__
+  // macOS getifaddrs() does not expose the hardware medium. Query the current
+  // interface media so AEYLA can preserve the show contract that TX must use a
+  // cabled NIC. Wi-Fi normally reports IFM_IEEE80211, while built-in/USB
+  // Ethernet reports IFM_ETHER. Unknown/virtual media remains non-wireless and
+  // is still subject to the ordinary IPv4/backend validation before ARM.
+  const int descriptor = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if(descriptor < 0)
+    return false;
+
+  ifmediareq media{};
+  std::strncpy(media.ifm_name, name.c_str(), sizeof(media.ifm_name) - 1U);
+  media.ifm_name[sizeof(media.ifm_name) - 1U] = '\0';
+  const bool wireless =
+      ::ioctl(descriptor, SIOCGIFMEDIA, &media) == 0 &&
+      IFM_TYPE(media.ifm_current) == IFM_IEEE80211;
+  ::close(descriptor);
+  return wireless;
+#else
+  (void)name;
+  return false;
+#endif
 }
 #endif
 
@@ -159,7 +190,7 @@ std::vector<NetworkInterface> enumerate_ipv4_interfaces() {
     const bool loopback = (item->ifa_flags & IFF_LOOPBACK) != 0;
     const std::string name = item->ifa_name == nullptr ? "IPv4" : item->ifa_name;
     result.push_back({name, name, text.data(), prefix_from_mask(mask), loopback,
-                      if_nametoindex(name.c_str()), false});
+                      if_nametoindex(name.c_str()), interface_is_wireless(name)});
   }
   freeifaddrs(addresses);
 #endif
