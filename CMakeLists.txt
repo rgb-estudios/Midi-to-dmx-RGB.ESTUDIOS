@@ -105,6 +105,7 @@ add_library(aeyla_runtime
   src/capture/dmx_take_scheduler.cpp
   src/capture/dmx_take_transport.cpp
   src/capture/dmx_take_stream_writer.cpp
+  src/output/dmx_live_memory.cpp
   src/output/artnet_output_worker.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
@@ -148,6 +149,7 @@ aeyla_add_strict_test(aeyla_show_program_tests tests/test_show_program.cpp)
 aeyla_add_strict_test(aeyla_show_performance_preflight_tests tests/test_show_performance_preflight.cpp)
 aeyla_add_strict_test(aeyla_show_program_codec_tests tests/test_show_program_codec.cpp)
 aeyla_add_strict_test(aeyla_programmer_tests tests/test_programmer.cpp)
+aeyla_add_strict_test(aeyla_dmx_live_memory_tests tests/test_dmx_live_memory.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_gate_r07_tests tests/test_artnet_output_gate_r07.cpp)
 aeyla_add_strict_test(aeyla_artnet_capture_worker_tests tests/test_artnet_capture_worker.cpp)
