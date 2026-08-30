@@ -227,6 +227,7 @@ public:
     aeyla::live_memory_session::register_runtime(
         this, &mArtNetOutput, &mArtNetCapture);
     const auto result = aeyla::live_memory_session::learn_from_avolites(this, index);
+    if(result.succeeded) CommitLiveMemoryPersistenceIfDirtyFromUI();
     return {result.succeeded, {}, result.message};
   }
 
@@ -265,6 +266,7 @@ public:
         this, &mArtNetOutput, &mArtNetCapture);
     const auto result = aeyla::live_memory_session::cycle_fade(
         this, index, direction);
+    if(result.succeeded) CommitLiveMemoryPersistenceIfDirtyFromUI();
     return {result.succeeded, {}, result.message};
   }
 
@@ -274,6 +276,7 @@ public:
     aeyla::live_memory_session::register_runtime(
         this, &mArtNetOutput, &mArtNetCapture);
     const auto result = aeyla::live_memory_session::toggle_mode(this, index);
+    if(result.succeeded) CommitLiveMemoryPersistenceIfDirtyFromUI();
     return {result.succeeded, {}, result.message};
   }
 
@@ -294,21 +297,41 @@ public:
               {"Cambiar de proyecto durante GRABAR podría separar el archivo de su canción."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
-    aeyla::live_memory_session::clear(this);
-    mLoadedTakeSongIndex.store(-1, std::memory_order_release);
-    mActiveTakeSongIndex.store(-1, std::memory_order_release);
-    const std::scoped_lock lock(mModelMutex);
-    const auto status = mProjectFiles.new_project(
-        aeyla::product::generate_project_uuid(),
-        aeyla::product::current_utc_timestamp());
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    aeyla::live_memory_session::reset_levels(this);
+
+    aeyla::product::ProjectFileStatus status;
+    aeyla::project::LiveMemoryPersistentState liveState;
+    {
+      const std::scoped_lock lock(mModelMutex);
+      status = mProjectFiles.new_project(
+          aeyla::product::generate_project_uuid(),
+          aeyla::product::current_utc_timestamp());
+      if(status.succeeded)
+      {
+        liveState = mProjectFiles.live_memory_state();
+        mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+        mActiveTakeSongIndex.store(-1, std::memory_order_release);
+        SyncParametersFromProject();
+        RefreshOutputBackendFromProjectLocked();
+        if(ShowMidiMapping().enabled)
+          mMidiPreflightCursor.store(0, std::memory_order_release);
+      }
+      SyncSnapshotToAtomicsLocked();
+    }
+
     if(status.succeeded)
     {
-      SyncParametersFromProject();
-      RefreshOutputBackendFromProjectLocked();
-      if(ShowMidiMapping().enabled)
-        mMidiPreflightCursor.store(0, std::memory_order_release);
+      const auto restored = aeyla::live_memory_session::restore_persistent_state(
+          this, liveState);
+      if(!restored.succeeded)
+      {
+        status.succeeded = false;
+        status.message = "Proyecto nuevo creado, pero las memorias EN VIVO no pudieron inicializarse";
+        status.diagnostics.push_back(restored.message);
+      }
     }
-    SyncSnapshotToAtomicsLocked();
     return status;
   }
 
@@ -323,19 +346,41 @@ public:
               {"La grabación activa conserva la identidad de la canción actual."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
-    aeyla::live_memory_session::clear(this);
-    mLoadedTakeSongIndex.store(-1, std::memory_order_release);
-    mActiveTakeSongIndex.store(-1, std::memory_order_release);
-    const std::scoped_lock lock(mModelMutex);
-    const auto status = mProjectFiles.open(path);
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    // Failed Open must not erase the current memory definitions. We only force
+    // their runtime levels OFF before validating the candidate package.
+    aeyla::live_memory_session::reset_levels(this);
+
+    aeyla::product::ProjectFileStatus status;
+    aeyla::project::LiveMemoryPersistentState liveState;
+    {
+      const std::scoped_lock lock(mModelMutex);
+      status = mProjectFiles.open(path);
+      if(status.succeeded)
+      {
+        liveState = mProjectFiles.live_memory_state();
+        mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+        mActiveTakeSongIndex.store(-1, std::memory_order_release);
+        SyncParametersFromProject();
+        RefreshOutputBackendFromProjectLocked();
+        if(ShowMidiMapping().enabled)
+          mMidiPreflightCursor.store(0, std::memory_order_release);
+      }
+      SyncSnapshotToAtomicsLocked();
+    }
+
     if(status.succeeded)
     {
-      SyncParametersFromProject();
-      RefreshOutputBackendFromProjectLocked();
-      if(ShowMidiMapping().enabled)
-        mMidiPreflightCursor.store(0, std::memory_order_release);
+      const auto restored = aeyla::live_memory_session::restore_persistent_state(
+          this, liveState);
+      if(!restored.succeeded)
+      {
+        status.succeeded = false;
+        status.message = "Proyecto abierto en modo seguro, pero live.bin no pudo publicarse";
+        status.diagnostics.push_back(restored.message);
+      }
     }
-    SyncSnapshotToAtomicsLocked();
     return status;
   }
 
@@ -343,9 +388,15 @@ public:
   {
     CaptureAllParameterValuesFromHost();
     const std::scoped_lock lock(mModelMutex);
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    mProjectFiles.set_live_memory_state(
+        aeyla::live_memory_session::persistent_state(this));
     PrepareProjectForSave();
     const auto status = mProjectFiles.save(
         aeyla::product::current_utc_timestamp());
+    if(status.succeeded)
+      (void)aeyla::live_memory_session::consume_persistence_dirty(this);
     SyncSnapshotToAtomicsLocked();
     return status;
   }
@@ -355,9 +406,15 @@ public:
   {
     CaptureAllParameterValuesFromHost();
     const std::scoped_lock lock(mModelMutex);
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    mProjectFiles.set_live_memory_state(
+        aeyla::live_memory_session::persistent_state(this));
     PrepareProjectForSave();
     const auto status = mProjectFiles.save_as(
         path, aeyla::product::current_utc_timestamp());
+    if(status.succeeded)
+      (void)aeyla::live_memory_session::consume_persistence_dirty(this);
     SyncSnapshotToAtomicsLocked();
     return status;
   }
@@ -507,6 +564,22 @@ private:
       const aeyla::capture::TakeFileIndexEntry& entry,
       std::uint64_t anchorFrame,
       std::string& error);
+
+  void CommitLiveMemoryPersistenceDirtyLocked()
+  {
+    if(!aeyla::live_memory_session::consume_persistence_dirty(this))
+      return;
+    mProjectFiles.set_live_memory_state(
+        aeyla::live_memory_session::persistent_state(this));
+    mModel.mark_project_unsaved();
+  }
+
+  void CommitLiveMemoryPersistenceIfDirtyFromUI()
+  {
+    const std::scoped_lock lock(mModelMutex);
+    CommitLiveMemoryPersistenceDirtyLocked();
+    SyncSnapshotToAtomicsLocked();
+  }
 
   void PrepareProjectForSave()
   {
