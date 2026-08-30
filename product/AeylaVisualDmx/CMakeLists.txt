@@ -48,6 +48,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/runtime/runtime_safety_state.cpp
     ../../src/runtime/host_song_binding.cpp
     ../../src/project/project_document.cpp
+    ../../src/project/live_memory_state.cpp
     ../../src/project/project_package.cpp
     ../../src/project/project_state_store.cpp
     ../../src/product/application_model.cpp
