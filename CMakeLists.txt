@@ -105,6 +105,7 @@ add_library(aeyla_runtime
   src/capture/dmx_take_scheduler.cpp
   src/capture/dmx_take_transport.cpp
   src/capture/dmx_take_stream_writer.cpp
+  src/output/dmx_live_memory.cpp
   src/output/artnet_output_worker.cpp
 )
 target_include_directories(aeyla_runtime PUBLIC src)
@@ -148,6 +149,7 @@ aeyla_add_strict_test(aeyla_show_program_tests tests/test_show_program.cpp)
 aeyla_add_strict_test(aeyla_show_performance_preflight_tests tests/test_show_performance_preflight.cpp)
 aeyla_add_strict_test(aeyla_show_program_codec_tests tests/test_show_program_codec.cpp)
 aeyla_add_strict_test(aeyla_programmer_tests tests/test_programmer.cpp)
+aeyla_add_strict_test(aeyla_dmx_live_memory_tests tests/test_dmx_live_memory.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_worker_tests tests/test_artnet_output_worker.cpp)
 aeyla_add_strict_test(aeyla_artnet_output_gate_r07_tests tests/test_artnet_output_gate_r07.cpp)
 aeyla_add_strict_test(aeyla_artnet_capture_worker_tests tests/test_artnet_capture_worker.cpp)
@@ -179,6 +181,23 @@ else()
 endif()
 add_test(NAME aeyla_take_library_session_tests
          COMMAND aeyla_take_library_session_tests)
+
+add_executable(aeyla_live_memory_session_tests
+  tests/test_live_memory_session.cpp
+  product/AeylaVisualDmx/AeylaLiveMemorySession.cpp
+)
+target_include_directories(aeyla_live_memory_session_tests PRIVATE
+  product/AeylaVisualDmx
+)
+target_link_libraries(aeyla_live_memory_session_tests PRIVATE aeyla_runtime)
+if(MSVC)
+  target_compile_options(aeyla_live_memory_session_tests PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(aeyla_live_memory_session_tests PRIVATE
+    -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME aeyla_live_memory_session_tests
+         COMMAND aeyla_live_memory_session_tests)
 
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)

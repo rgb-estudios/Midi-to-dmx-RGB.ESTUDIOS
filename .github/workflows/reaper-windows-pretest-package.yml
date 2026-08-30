@@ -7,8 +7,7 @@ on:
       - src/**
       - tests/**
       - docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md
-      - docs/AEYLA_R08_FIELD_PRETEST_ES.md
-      - docs/AEYLA_R08_HANDOFF_ES.md
+      - docs/AEYLA_R10_FIELD_PRETEST_ES.md
       - tools/maintenance/windows/**
       - tools/network/**
       - .github/workflows/reaper-windows-pretest-package.yml
@@ -91,43 +90,54 @@ jobs:
           Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $root
           Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $root
           Copy-Item docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md (Join-Path $root "UI_INTERACTION_CONTRACT.md")
-          Copy-Item docs/AEYLA_R08_FIELD_PRETEST_ES.md (Join-Path $root "R08_FIELD_PRETEST_ES.md")
-          Copy-Item docs/AEYLA_R08_HANDOFF_ES.md (Join-Path $root "R08_HANDOFF_ES.md")
+          Copy-Item docs/AEYLA_R10_FIELD_PRETEST_ES.md (Join-Path $root "R10_FIELD_PRETEST_ES.md")
 
           @'
-          AEYLA Visual DMX 0.3 — REAPER WINDOWS PRETEST
+          AEYLA Visual DMX 0.3 — R10.0 REAPER WINDOWS PRETEST
+
+          ESTADO
+          PRETEST_NOT_SHOW_CANDIDATE. Este paquete exige gates fisicos; CI verde no significa Show Ready.
 
           INSTALACION
           1. Cierra REAPER, Ableton y cualquier host VST3.
           2. Ejecuta CLEAN_INSTALL_AEYLA.cmd.
           3. Abre REAPER y re-scan VST3 si AEYLA no aparece automaticamente.
-          4. Confirma que BUILD_ID.txt corresponde al mismo SOURCE_COMMIT del paquete macOS.
+          4. Confirma en BUILD_ID.txt SOURCE_COMMIT y HOST_STATE_SCHEMA=1.4.
 
-          CAPTURA R08
-          1. Selecciona cancion y biblioteca; confirma Art-Net RX valido.
-          2. Con DAW detenido, N42 inicia RAW.
-          3. PLAY fija el CERO automatico dentro de la granularidad de 44 Hz.
-          4. Si existe pre-roll, N38 en el inicio artistico refina el CERO.
-          5. N42 detiene/finaliza. RAW debe conservarse.
+          CAPTURA R09.1
+          - AEYLA no usa MTC para fijar ZERO.
+          - N42 = REC START por defecto; N43 = REC STOP por defecto.
+          - START y STOP son comandos separados, idempotentes y aprendibles de forma independiente.
+          - REC START fija el origen de la captura; el RAW .aeylatake se conserva.
+          - Repetir START no reinicia ZERO; STOP sin captura activa se ignora.
 
           MIDI SHOW
-          N36 anterior | N37 siguiente | N38 PLAY/marcador | N39 pausa
-          N40 STOP/reset | N41 PANIC blackout+disarm | N42 REC | N48-N62 canciones 1-15.
+          N36 anterior | N37 siguiente | N38 PLAY | N39 pausa
+          N40 STOP/reset | N41 PANIC | N42 REC START | N43 REC STOP
+          N48-N62 canciones 1-15.
           MIDI nunca puede ARMAR la salida ni quitar APAGON.
 
-          REAPERTURA / ESTADO 1.3
+          CARRIER R09.2
+          - APAGON OFF y ARM son manuales.
+          - Una vez ARMADA, la salida Art-Net debe continuar transmitiendo ~44 Hz con DAW detenido/pausado.
+          - STOP/PAUSA normal conserva HOLD + carrier y nunca exige re-ARM.
+          - Perdida real del reloj mientras el ultimo estado conocido sigue RUNNING=true debe fallar cerrado.
+
+          EN VIVO R10
+          - PREPARADA y AL AIRE son estados separados: PREV/NEXT no sustituyen la toma activa hasta PLAY/GO.
+          - Memorias iniciales: FRONTAL, HUMO / HAZE, BASE BLANCA, TEST LUMINARIAS.
+          - APRENDER usa dos snapshots Avolites: primero memoria OFF (baseline), luego memoria ON (target).
+          - Solo los canales que cambiaron forman la mascara; nunca se aplica un snapshot ciego de 512 canales.
+          - Fades disponibles: 0.1 / 1.0 / 1.5 s. Modo BOTON/TOGGLE o FADER.
+          - DISARM, PANIC, fail-closed y reinicio de socket llevan memorias a OFF.
+          - MIDI Learn y persistencia de memorias R10 aun NO estan cerrados; no aprobar Show Candidate por estas funciones.
+
+          REAPERTURA / ESTADO 1.4
           1. Carga una toma, ajusta IN/OUT y guarda el .RPP.
           2. Cierra REAPER y vuelve a abrirlo.
           3. Deben restaurarse biblioteca/toma/trims si la carpeta guardada existe.
-          4. La salida debe volver segura: no se admite auto-ARM ni auto-PLAY.
-          5. Si el proyecto se mueve a otro sistema/ruta, selecciona la biblioteca una vez;
-             AEYLA debe resolver la toma por basename validado y conservar trims.
-
-          CARRIER / SAFETY
-          - APAGON OFF y ARM son manuales.
-          - Una toma armada mantiene carrier al detenerse si el host sigue vivo.
-          - N41 siempre produce APAGON + DESARME y nunca rearma.
-          - Perdida del pulso del host durante PLAY debe desarmar fail-closed.
+          4. La salida siempre vuelve segura: sin auto-ARM ni auto-PLAY.
+          5. El mapa MIDI SHOW incluye REC START y REC STOP independientes.
 
           HERRAMIENTAS
           AUDIT_AEYLA.cmd: informa instalaciones/cache AEYLA.
@@ -136,7 +146,7 @@ jobs:
           CLEAN_INSTALL_AEYLA.cmd: flujo recomendado para cada build nuevo.
 
           GATES FISICOS
-          Ejecutar completos R08_FIELD_PRETEST_ES.md y R08_HANDOFF_ES.md.
+          Ejecutar completo R10_FIELD_PRETEST_ES.md.
           PRETEST NO significa Show Candidate.
           '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
 
@@ -150,8 +160,8 @@ jobs:
           "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "NETWORK_HELPER_SHA256=$helperHash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
-          "BUILD_KIND=REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
-          "HOST_STATE_SCHEMA=1.3" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "BUILD_KIND=R10_REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "HOST_STATE_SCHEMA=1.4" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "STATUS=PRETEST_NOT_SHOW_CANDIDATE" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
 
           $binaryRel = [System.IO.Path]::GetRelativePath($root, $binary.FullName).Replace('\','/')
@@ -163,7 +173,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AEYLA-0.3-REAPER-Windows-PRETEST
+          name: AEYLA-R10.0-REAPER-Windows-PRETEST
           path: reaper-pretest/**
           if-no-files-found: error
           retention-days: 90

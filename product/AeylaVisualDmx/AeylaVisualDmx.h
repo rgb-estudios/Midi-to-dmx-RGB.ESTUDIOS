@@ -9,6 +9,7 @@
 #include "capture/dmx_take_scheduler.h"
 #include "network/network_interfaces.h"
 #include "AeylaNetworkConfiguration.h"
+#include "AeylaLiveMemorySession.h"
 #include "product/application_model.h"
 #include "product/project_file_controller.h"
 #include "product/project_identity.h"
@@ -205,6 +206,84 @@ public:
     return mArtNetCapture.stats();
   }
 
+  // R10 EN VIVO. The per-instance session binds lazily so simply opening or
+  // closing the editor never owns the socket and never changes Art-Net ARM.
+  [[nodiscard]] std::size_t LiveMemoryCount() const noexcept
+  {
+    return aeyla::live_memory_session::kOperatorMemoryCount;
+  }
+
+  [[nodiscard]] aeyla::live_memory_session::MemoryView LiveMemoryViewFromUI(
+      std::size_t index)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    return aeyla::live_memory_session::view(this, index);
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult LearnLiveMemoryFromAvolitesFromUI(
+      std::size_t index)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::learn_from_avolites(this, index);
+    return {result.succeeded, {}, result.message};
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult CancelLiveMemoryLearnFromUI(
+      std::size_t index)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::cancel_learn(this, index);
+    return {result.succeeded, {}, result.message};
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult ToggleLiveMemoryFromUI(
+      std::size_t index)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::toggle(this, index);
+    return {result.succeeded, {}, result.message};
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult SetLiveMemoryLevelFromUI(
+      std::size_t index, float level)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::set_fader_level(
+        this, index, level);
+    return {result.succeeded, {}, result.message};
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult CycleLiveMemoryFadeFromUI(
+      std::size_t index, int direction)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::cycle_fade(
+        this, index, direction);
+    return {result.succeeded, {}, result.message};
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult ToggleLiveMemoryModeFromUI(
+      std::size_t index)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::toggle_mode(this, index);
+    return {result.succeeded, {}, result.message};
+  }
+
+  void ResetLiveMemoriesFromUI() noexcept
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    aeyla::live_memory_session::reset_levels(this);
+  }
+
   aeyla::product::ProjectFileStatus NewProjectFromUI()
   {
     if(TakeRecording())
@@ -215,6 +294,7 @@ public:
               {"Cambiar de proyecto durante GRABAR podría separar el archivo de su canción."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
+    aeyla::live_memory_session::clear(this);
     mLoadedTakeSongIndex.store(-1, std::memory_order_release);
     mActiveTakeSongIndex.store(-1, std::memory_order_release);
     const std::scoped_lock lock(mModelMutex);
@@ -243,6 +323,7 @@ public:
               {"La grabación activa conserva la identidad de la canción actual."}};
     StopActiveTakePlaybackFromUI();
     mTakeScheduler.disarm();
+    aeyla::live_memory_session::clear(this);
     mLoadedTakeSongIndex.store(-1, std::memory_order_release);
     mActiveTakeSongIndex.store(-1, std::memory_order_release);
     const std::scoped_lock lock(mModelMutex);
