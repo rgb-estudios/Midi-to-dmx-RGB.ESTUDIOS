@@ -127,6 +127,25 @@ int main() {
   require(composed[100] == songBase[100],
           "unrelated Avolites baseline value leaked into memory mask");
 
+  // R10.1 show-safety: reconfiguring a live memory rebuilds its runtime and
+  // would otherwise snap it OFF. Authoring changes are therefore rejected
+  // while the memory is active or transitioning.
+  const auto activeFadeEdit = cycle_fade(&owner, 0U, 1);
+  require(!activeFadeEdit.succeeded,
+          "fade edit unexpectedly succeeded while FRONTAL was active");
+  const auto activeModeEdit = toggle_mode(&owner, 0U);
+  require(!activeModeEdit.succeeded,
+          "mode edit unexpectedly succeeded while FRONTAL was active");
+  const auto activeDmxLearn = learn_from_avolites(&owner, 0U);
+  require(!activeDmxLearn.succeeded,
+          "DMX relearn unexpectedly started while FRONTAL was active");
+  const auto stillLive = view(&owner, 0U);
+  require(stillLive.target_level > 0.99F &&
+              stillLive.mode == LiveMemoryControlMode::toggle &&
+              stillLive.fade_ms == 1000U &&
+              !stillLive.learning,
+          "blocked live-memory edit changed FRONTAL runtime/configuration");
+
   // MIDI Learn is deliberately non-destructive: the event used to bind the
   // control must never move live DMX. The next matching event operates it.
   reset_levels(&owner);
