@@ -88,6 +88,7 @@ add_library(aeyla_runtime
   src/product/project_file_controller.cpp
   src/product/project_identity.cpp
   src/project/project_document.cpp
+  src/project/live_memory_state.cpp
   src/project/project_state_store.cpp
   src/project/project_package.cpp
   src/show/show_program.cpp
@@ -142,6 +143,7 @@ aeyla_add_strict_test(aeyla_show_midi_control_tests tests/test_show_midi_control
 aeyla_add_strict_test(aeyla_runtime_safety_tests tests/test_runtime_safety.cpp)
 aeyla_add_strict_test(aeyla_application_model_tests tests/test_application_model.cpp)
 aeyla_add_strict_test(aeyla_project_document_tests tests/test_project_document.cpp)
+aeyla_add_strict_test(aeyla_live_memory_state_tests tests/test_live_memory_state.cpp)
 aeyla_add_strict_test(aeyla_project_state_store_tests tests/test_project_state_store.cpp)
 aeyla_add_strict_test(aeyla_project_package_tests tests/test_project_package.cpp)
 aeyla_add_strict_test(aeyla_project_file_controller_tests tests/test_project_file_controller.cpp)
