@@ -354,7 +354,10 @@ DmxTakeSchedulerStatus DmxTakeScheduler::status() const {
     result.ended = file.transport == DmxClipTransportState::ended;
     result.file_backed = true;
     result.hold_valid = file.hold_valid;
-    result.host_heartbeat_ok = file.host_heartbeat_ok;
+    // Report the literal callback heartbeat. The file player may be granted
+    // carrier authority while the host is intentionally stopped, but that
+    // permission is not the same thing as receiving fresh ProcessBlock calls.
+    result.host_heartbeat_ok = heartbeat_ok_.load(std::memory_order_acquire);
     result.monotonic_clock =
         file.clock_source == DmxClipClockSource::monotonic_realtime;
     result.progress = std::clamp(file.progress, 0.0, 1.0);
@@ -465,20 +468,27 @@ void DmxTakeScheduler::run() noexcept {
     }
     heartbeat_ok_.store(hostSafe, std::memory_order_release);
 
-    if(file_mode_.load(std::memory_order_acquire)) {
-      file_player_.set_host_heartbeat_ok(hostSafe);
+    const bool hostOffline = hostSnapshot.revision != 0U &&
+                             hostSnapshot.rendering_offline;
+    const bool intentionalHostStop = hostSnapshot.revision != 0U &&
+                                     !hostSnapshot.running && !hostOffline;
 
+    if(file_mode_.load(std::memory_order_acquire)) {
       const auto fileStatus = file_player_.status();
-      const bool hostOffline = hostSnapshot.revision != 0U &&
-                               hostSnapshot.rendering_offline;
-      // Ableton may suspend ProcessBlock on a silent instrument while stopped.
-      // READY/PAUSED/ENDED do not advance on host samples and can safely keep
-      // the held Art-Net frame alive in the independent worker. Once PLAYING
-      // uses the host-sample clock, heartbeat loss is again a hard fail-closed
-      // boundary because advancing without the DAW clock would desynchronize.
+
+      // Authority and transport are different contracts. An explicit
+      // RUNNING=false snapshot means the DAW intentionally stopped/paused its
+      // sample clock. The DMX cursor therefore freezes, but the armed Art-Net
+      // carrier must keep retransmitting the held frame even if the host then
+      // suspends ProcessBlock. If the last known host state was RUNNING=true,
+      // stale callbacks still mean the live sample clock disappeared and must
+      // fail closed.
+      const bool carrierClockPermitted = hostSafe || intentionalHostStop;
+      file_player_.set_host_heartbeat_ok(carrierClockPermitted);
+
       const bool hostClockRequired =
           fileStatus.transport == DmxClipTransportState::playing &&
-          !file_player_.uses_monotonic_clock();
+          !file_player_.uses_monotonic_clock() && hostSnapshot.running;
       if((hostOffline || (!hostSafe && hostClockRequired)) && fileStatus.armed) {
         file_player_.disarm();
         armed_.store(false, std::memory_order_release);
@@ -491,7 +501,8 @@ void DmxTakeScheduler::run() noexcept {
       continue;
     }
 
-    if(!hostSafe && armed_.load(std::memory_order_acquire)) {
+    if(!hostSafe && !intentionalHostStop &&
+       armed_.load(std::memory_order_acquire)) {
       armed_.store(false, std::memory_order_release);
       if(output_ != nullptr)
         output_->set_override_enabled(false);

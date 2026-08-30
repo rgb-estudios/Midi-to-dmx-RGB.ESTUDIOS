@@ -88,6 +88,51 @@ int main() {
           "library index must expose Take name");
   }
 
+  // Live-show isolation regression: recording Song A, then Song B, then a new
+  // version of Song A must create three independent files. Song changes and
+  // version selection are metadata/binding operations; no capture is allowed
+  // to replace another Song's RAW payload.
+  DmxTake songBTake = take;
+  songBTake.name = "Take 1";
+  songBTake.frames[0][0] = 42U;
+  const auto songBTarget = make_take_file_path(directory, "Song B", songBTake.name);
+  check(save_take_file_atomic(songBTarget, "song-b", "Song B", songBTake, error),
+        "Song B Take must save independently: " + error);
+
+  DmxTake songASecondTake = take;
+  songASecondTake.name = "Take 4";
+  songASecondTake.frames[0][0] = 84U;
+  const auto songASecondTarget =
+      make_take_file_path(directory, "Aeyla Intro", songASecondTake.name);
+  check(save_take_file_atomic(songASecondTarget, "song-aeyla-intro",
+                              "Aeyla Intro", songASecondTake, error),
+        "second Song A Take must save independently: " + error);
+
+  check(target != songBTarget && target != songASecondTarget &&
+            songBTarget != songASecondTarget,
+        "each Song/version capture must own a distinct filesystem target");
+  check(std::filesystem::exists(target) &&
+            std::filesystem::exists(songBTarget) &&
+            std::filesystem::exists(songASecondTarget),
+        "saving another Song/version must never remove a previous RAW Take");
+
+  const auto songAScan = scan_take_directory(directory, "song-aeyla-intro");
+  const auto songBScan = scan_take_directory(directory, "song-b");
+  check(songAScan.ok() && songAScan.entries.size() == 2U,
+        "Song A index must contain both independent versions");
+  check(songBScan.ok() && songBScan.entries.size() == 1U,
+        "Song B index must contain only Song B RAW data");
+
+  auto songBReloaded = load_take_file(songBTarget, error);
+  auto songASecondReloaded = load_take_file(songASecondTarget, error);
+  check(songBReloaded.has_value() && songBReloaded->song_id == "song-b" &&
+            songBReloaded->take.frames[0][0] == 42U,
+        "Song B payload must remain bound to Song B after Song A is recorded again");
+  check(songASecondReloaded.has_value() &&
+            songASecondReloaded->song_id == "song-aeyla-intro" &&
+            songASecondReloaded->take.frames[0][0] == 84U,
+        "new Song A version must retain its own payload and identity");
+
   // Regression: capture finalization must resolve the configured target, not
   // whichever entry happens to sort first by timestamp/filename.
   TakeLibraryScanResult ambiguous;
@@ -131,6 +176,14 @@ int main() {
         "checksum must reject a modified Take payload");
   check(error.find("checksum") != std::string::npos,
         "corruption rejection must identify checksum failure");
+
+  // The corrupted Song A version must not poison unrelated Song/version RAWs.
+  songBReloaded = load_take_file(songBTarget, error);
+  songASecondReloaded = load_take_file(songASecondTarget, error);
+  check(songBReloaded.has_value(),
+        "corrupting one Song A RAW must not affect Song B");
+  check(songASecondReloaded.has_value(),
+        "corrupting one Song A version must not affect another version");
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
