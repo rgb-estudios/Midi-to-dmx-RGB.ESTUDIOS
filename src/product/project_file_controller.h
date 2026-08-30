@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace aeyla::product {
@@ -44,6 +45,15 @@ class ProjectFileController final {
     return status_;
   }
 
+  [[nodiscard]] const project::LiveMemoryPersistentState& live_memory_state()
+      const noexcept {
+    return live_memory_state_;
+  }
+
+  void set_live_memory_state(project::LiveMemoryPersistentState state) {
+    live_memory_state_ = std::move(state);
+  }
+
  private:
   ProjectFileStatus save_to(const std::filesystem::path& path,
                             std::string timestamp_utc,
@@ -57,6 +67,7 @@ class ProjectFileController final {
   ApplicationModel& model_;
   std::filesystem::path current_path_;
   ProjectFileStatus status_{};
+  project::LiveMemoryPersistentState live_memory_state_{};
 };
 
 }  // namespace aeyla::product
