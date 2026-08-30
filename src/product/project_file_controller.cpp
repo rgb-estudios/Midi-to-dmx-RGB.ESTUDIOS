@@ -60,6 +60,7 @@ ProjectFileStatus ProjectFileController::new_project(
   }
 
   current_path_.clear();
+  live_memory_state_ = project::LiveMemoryPersistentState{};
   model_.mark_project_unsaved();
   return publish_success(ProjectFileOperation::new_project,
                          "New project created in blackout and disarmed");
@@ -83,7 +84,8 @@ ProjectFileStatus ProjectFileController::open(
   }
 
   // Preflight the complete document+show bundle in an isolated runtime. Failed
-  // Open must never partially replace the current valid runtime state.
+  // Open must never partially replace the current valid runtime state or the
+  // live-memory configuration belonging to it.
   ApplicationModel candidate;
   const auto preflight = candidate.load_project_bundle(
       *loaded.document, *loaded.show_program);
@@ -101,12 +103,23 @@ ProjectFileStatus ProjectFileController::open(
                            flatten(validation));
   }
 
+  // Publish live-memory state only after project+show publication succeeds.
+  // Runtime levels are not part of this DTO and therefore always restore OFF.
+  live_memory_state_ = loaded.live_memory_state;
   current_path_ = path;
+  if (loaded.legacy_project_only) {
+    return publish_success(
+        ProjectFileOperation::open,
+        "Legacy project opened safely; musical show and live memories start empty");
+  }
+  if (loaded.legacy_without_live_memory) {
+    return publish_success(
+        ProjectFileOperation::open,
+        "Project and show opened safely; legacy package has no live memories, so they start empty/OFF");
+  }
   return publish_success(
       ProjectFileOperation::open,
-      loaded.legacy_project_only
-          ? "Legacy project opened safely; musical show program starts empty"
-          : "Project and show opened in blackout and disarmed");
+      "Project, show and live memories opened in blackout and disarmed");
 }
 
 ProjectFileStatus ProjectFileController::save(std::string timestamp_utc) {
@@ -132,7 +145,7 @@ ProjectFileStatus ProjectFileController::save_to(
   const auto document = model_.project_document_for_save(timestamp_utc);
   const auto show_program = model_.show_program_for_save();
   const auto saved = project::save_project_package_atomic(
-      path, document, show_program);
+      path, document, show_program, live_memory_state_);
   if (!saved.ok()) {
     return publish_failure(operation,
                            "Could not save AEYLA project package",
@@ -143,8 +156,8 @@ ProjectFileStatus ProjectFileController::save_to(
   model_.mark_project_saved(std::move(timestamp_utc));
   return publish_success(operation,
                          operation == ProjectFileOperation::save
-                             ? "Project and show package saved and verified"
-                             : "Project and show package saved to a new path and verified");
+                             ? "Project, show and live-memory package saved and verified"
+                             : "Project, show and live-memory package saved to a new path and verified");
 }
 
 ProjectFileStatus ProjectFileController::publish_failure(
