@@ -566,6 +566,10 @@ private:
   std::atomic<std::uint64_t> mAudioAdvanceSequence{0U};
   std::atomic<bool> mShowTransportMutation{false};
   std::atomic<std::uint64_t> mShowMidiMappingPacked{0U};
+  std::atomic<std::uint8_t> mShowMidiCaptureStartNote{
+      aeyla::runtime::kShowMidiCaptureStartNote};
+  std::atomic<std::uint8_t> mShowMidiCaptureStopNote{
+      aeyla::runtime::kShowMidiCaptureStopNote};
   std::atomic<std::uint32_t> mPendingMidiLearnPacked{0U};
   std::atomic<aeyla::runtime::ShowMidiLearnTarget> mShowMidiLearnTarget{
       aeyla::runtime::ShowMidiLearnTarget::none};

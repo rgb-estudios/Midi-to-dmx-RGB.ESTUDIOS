@@ -12,7 +12,7 @@
 namespace aeyla::runtime {
 
 inline constexpr std::uint16_t kPluginStateFormatMajor = 1;
-inline constexpr std::uint16_t kPluginStateFormatMinor = 3;
+inline constexpr std::uint16_t kPluginStateFormatMinor = 4;
 inline constexpr std::size_t kMaxProjectLocatorBytes = 4096;
 inline constexpr std::size_t kMaxTakeLibraryLocatorBytes = 4096;
 inline constexpr std::size_t kMaxTakeFileNameBytes = 512;

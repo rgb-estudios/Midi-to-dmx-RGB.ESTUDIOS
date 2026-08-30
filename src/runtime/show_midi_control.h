@@ -11,8 +11,9 @@
 namespace aeyla::runtime {
 
 inline constexpr std::size_t kShowMidiSongCapacity = 15U;
-// Fixed operational safety/recording controls remain outside the persisted
-// legacy MIDI map. They intentionally shadow any restored legacy collision.
+// PANIC remains a fixed one-way safety reservation. Capture notes use 42/43
+// only as defaults; R09.1 makes REC START and REC STOP independently learnable
+// and persistent so the DAW session can own the capture boundary explicitly.
 inline constexpr std::uint8_t kShowMidiPanicNote = 41U;
 inline constexpr std::uint8_t kShowMidiCaptureStartNote = 42U;
 inline constexpr std::uint8_t kShowMidiCaptureStopNote = 43U;
@@ -36,14 +37,15 @@ enum class ShowMidiLearnTarget : std::uint8_t {
   play_retrigger,
   pause_resume,
   stop_reset,
+  capture_start,
+  capture_stop,
   launch_song_base,
 };
 
 // Defaults deliberately live on MIDI channel 16 and remain disabled until the
 // operator explicitly enables Show control. Direct Song launch occupies 15
-// consecutive notes. Configurable artistic values are persisted in VST3
-// component state; PANIC N41, REC START N42 and REC STOP N43 are fixed runtime
-// reservations so recording commands are unambiguous and fail-safe.
+// consecutive notes. PANIC N41 is fixed; REC START/STOP default to N42/N43 but
+// are independently learnable. All configurable values persist in host state.
 struct ShowMidiMapping {
   bool enabled{false};
   std::uint8_t channel{16U};
@@ -52,6 +54,8 @@ struct ShowMidiMapping {
   std::uint8_t play_note{38U};
   std::uint8_t pause_note{39U};
   std::uint8_t stop_note{40U};
+  std::uint8_t capture_start_note{kShowMidiCaptureStartNote};
+  std::uint8_t capture_stop_note{kShowMidiCaptureStopNote};
   std::uint8_t launch_base_note{48U};
 
   bool operator==(const ShowMidiMapping&) const = default;

@@ -131,6 +131,10 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   mShowMidiMappingPacked.store(aeyla::runtime::pack_show_midi_mapping(
                                    mHostStateCache.show_midi),
                                std::memory_order_release);
+  mShowMidiCaptureStartNote.store(mHostStateCache.show_midi.capture_start_note,
+                                  std::memory_order_release);
+  mShowMidiCaptureStopNote.store(mHostStateCache.show_midi.capture_stop_note,
+                                 std::memory_order_release);
 
 #if IPLUG_EDITOR
   mMakeGraphicsFunc = [&]() {
@@ -275,8 +279,7 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
     }
 
     aeyla::runtime::ShowMidiMatch showMatch{};
-    const auto showMapping = aeyla::runtime::unpack_show_midi_mapping(
-        mShowMidiMappingPacked.load(std::memory_order_acquire));
+    const auto showMapping = ShowMidiMapping();
     const bool mappedShowNote = aeyla::runtime::match_show_midi_note(
         showMapping, channel, midiNote, 127U, showMatch);
     if(mappedShowNote)
@@ -961,6 +964,10 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   mShowMidiMappingPacked.store(
       aeyla::runtime::pack_show_midi_mapping(pending->show_midi),
       std::memory_order_release);
+  mShowMidiCaptureStartNote.store(pending->show_midi.capture_start_note,
+                                  std::memory_order_release);
+  mShowMidiCaptureStopNote.store(pending->show_midi.capture_stop_note,
+                                 std::memory_order_release);
   mMidiPreflightCursor.store(pending->show_midi.enabled ? 0 : -1,
                              std::memory_order_release);
   SetShowMidiMessage(pending->show_midi.enabled

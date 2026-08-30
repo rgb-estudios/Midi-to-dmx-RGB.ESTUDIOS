@@ -41,7 +41,8 @@ public:
     const IRECT verifyBadge(mRECT.L + 14.0F, mRECT.T + 55.0F,
                             mRECT.L + 292.0F, mRECT.T + 78.0F);
     const bool recording = mPlug.TakeRecording();
-    const bool midiShowEnabled = mPlug.ShowMidiMapping().enabled;
+    const auto midiMapping = mPlug.ShowMidiMapping();
+    const bool midiShowEnabled = midiMapping.enabled;
     g.FillRoundRect(recording ? IColor(46, 231, 45, 55)
                               : IColor(38, 68, 214, 255),
                     verifyAura, 9.0F);
@@ -50,11 +51,14 @@ public:
                     verifyBadge, 6.0F);
     g.DrawRoundRect(recording ? danger : verify,
                     verifyBadge, 6.0F, nullptr, 1.4F);
+    const std::string captureKeys =
+        "N" + std::to_string(midiMapping.capture_start_note) + " START / N" +
+        std::to_string(midiMapping.capture_stop_note) + " STOP";
     const std::string verifyLabel = recording
-        ? "R09 PRETEST  ·  N42 START / N43 STOP  ·  CAPTURANDO"
+        ? "R09.1 PRETEST  ·  " + captureKeys + "  ·  CAPTURANDO"
         : (midiShowEnabled
-              ? "R09 PRETEST  ·  N42 START / N43 STOP  ·  LISTO"
-              : "R09 PRETEST  ·  N42 START / N43 STOP  ·  MIDI SHOW OFF");
+              ? "R09.1 PRETEST  ·  " + captureKeys + "  ·  LISTO"
+              : "R09.1 PRETEST  ·  " + captureKeys + "  ·  MIDI SHOW OFF");
     g.DrawText(IText(10.5F, recording ? danger : verify,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                verifyLabel.c_str(), verifyBadge.GetPadded(-5.0F));
@@ -171,10 +175,10 @@ public:
                state.c_str(), authorityLine);
 
     const std::string midiRecState = recording
-        ? "N42 START · N43 STOP · CAPTURANDO"
+        ? captureKeys + " · CAPTURANDO"
         : (midiShowEnabled
-              ? "N42 START · N43 STOP · LISTO"
-              : "N42 START · N43 STOP · ACTIVA MIDI SHOW");
+              ? captureKeys + " · LISTO"
+              : captureKeys + " · ACTIVA MIDI SHOW");
     g.DrawText(IText(9.5F,
                      recording ? danger :
                          (midiShowEnabled ? verify : muted),

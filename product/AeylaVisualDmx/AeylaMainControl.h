@@ -206,12 +206,14 @@ public:
         SetDirty(false);
         return;
       }
-      constexpr std::array<aeyla::runtime::ShowMidiLearnTarget, 6U> targets{
+      constexpr std::array<aeyla::runtime::ShowMidiLearnTarget, 8U> targets{
           aeyla::runtime::ShowMidiLearnTarget::previous_song,
           aeyla::runtime::ShowMidiLearnTarget::next_song,
           aeyla::runtime::ShowMidiLearnTarget::play_retrigger,
           aeyla::runtime::ShowMidiLearnTarget::pause_resume,
           aeyla::runtime::ShowMidiLearnTarget::stop_reset,
+          aeyla::runtime::ShowMidiLearnTarget::capture_start,
+          aeyla::runtime::ShowMidiLearnTarget::capture_stop,
           aeyla::runtime::ShowMidiLearnTarget::launch_song_base};
       for(std::size_t index = 0U; index < mMidiLearnButtons.size(); ++index)
       {
@@ -790,12 +792,14 @@ private:
     // Reserve every inter-row gap, both state rows, the message and all three
     // safety/sync footer lines. At the nominal 1280x800 canvas this keeps the
     // final warning inside the card. The compact 960x620 branch combines its
-    // capture/safety footer into two lines while retaining all six controls.
-    const float midiFixedBelowRows = mCompactMidi ? 163.0F : 264.0F;
+    // capture/safety footer into two lines while retaining all eight controls.
+    const float midiFixedBelowRows = mCompactMidi ? 154.0F : 224.0F;
+    const float rowSpace = midi.B - rowTop - midiFixedBelowRows -
+        rowGap * static_cast<float>(mMidiRows.size() - 1U);
     const float midiRowHeight = std::clamp(
-        (midi.B - rowTop - midiFixedBelowRows) / 6.0F,
-        mCompactMidi ? 28.0F : 34.0F,
-        mCompactMidi ? 34.0F : 44.0F);
+        rowSpace / static_cast<float>(mMidiRows.size()),
+        mCompactMidi ? 24.0F : 28.0F,
+        mCompactMidi ? 31.0F : 36.0F);
     for(std::size_t index = 0U; index < mMidiRows.size(); ++index)
     {
       const float topRow = rowTop + static_cast<float>(index) *
@@ -1169,22 +1173,27 @@ private:
            kText);
     Button(g, mMidiChannelNext, ">", kPanelRaised, kLineStrong);
 
-    constexpr std::array<const char*, 6U> labels{
+    constexpr std::array<const char*, 8U> labels{
         "CANCIÓN ANTERIOR",
         "SIGUIENTE CANCIÓN",
         "PLAY / REINICIAR DESDE CERO",
         "PAUSA / REANUDAR",
         "STOP / RESET A CERO",
+        "REC START · INICIO CAPTURA",
+        "REC STOP · FIN CAPTURA",
         "LANZAR CANCIONES 01–15"};
-    const std::array<std::uint8_t, 6U> notes{
+    const std::array<std::uint8_t, 8U> notes{
         mapping.previous_note, mapping.next_note, mapping.play_note,
-        mapping.pause_note, mapping.stop_note, mapping.launch_base_note};
-    constexpr std::array<aeyla::runtime::ShowMidiLearnTarget, 6U> targets{
+        mapping.pause_note, mapping.stop_note, mapping.capture_start_note,
+        mapping.capture_stop_note, mapping.launch_base_note};
+    constexpr std::array<aeyla::runtime::ShowMidiLearnTarget, 8U> targets{
         aeyla::runtime::ShowMidiLearnTarget::previous_song,
         aeyla::runtime::ShowMidiLearnTarget::next_song,
         aeyla::runtime::ShowMidiLearnTarget::play_retrigger,
         aeyla::runtime::ShowMidiLearnTarget::pause_resume,
         aeyla::runtime::ShowMidiLearnTarget::stop_reset,
+        aeyla::runtime::ShowMidiLearnTarget::capture_start,
+        aeyla::runtime::ShowMidiLearnTarget::capture_stop,
         aeyla::runtime::ShowMidiLearnTarget::launch_song_base};
     const auto learning = mPlug.ShowMidiLearnTarget();
     for(std::size_t index = 0U; index < mMidiRows.size(); ++index)
@@ -1199,7 +1208,7 @@ private:
                  labels[index],
                  IRECT(row.L + 12.0F, row.T, row.L + row.W() * 0.52F, row.B));
       std::string note = "NOTA " + std::to_string(notes[index]);
-      if(index == 5U)
+      if(index == 7U)
         note += "–" + std::to_string(
             static_cast<unsigned>(notes[index]) + 14U);
       g.DrawText(IText(12.0F, waiting ? kWarn : kGood, "AeylaUI",
@@ -1249,14 +1258,19 @@ private:
     if(mCompactMidi)
     {
       g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
-                 "CAPTURA: N42 REC START · N43 REC STOP · CERO = REC START",
+                 ("CAPTURA: N" + std::to_string(mapping.capture_start_note) +
+                  " REC START · N" + std::to_string(mapping.capture_stop_note) +
+                  " REC STOP · CERO = REC START").c_str(),
                  IRECT(mWorkspace.L + 18.0F, footerTop + 19.0F,
                        mWorkspace.R - 18.0F, footerTop + 42.0F));
     }
     else
     {
       g.DrawText(IText(12.0F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Top),
-                 "CAPTURA DMX: N42 REC START fija CERO · N43 REC STOP finaliza · AEYLA no usa MTC.",
+                 ("CAPTURA DMX: N" + std::to_string(mapping.capture_start_note) +
+                  " REC START fija CERO · N" +
+                  std::to_string(mapping.capture_stop_note) +
+                  " REC STOP finaliza · AEYLA no usa MTC.").c_str(),
                  IRECT(mWorkspace.L + 18.0F, footerTop + 23.0F,
                        mWorkspace.R - 18.0F, footerTop + 52.0F));
       g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
@@ -1499,8 +1513,8 @@ private:
   IRECT mMidiChannelPrevious{};
   IRECT mMidiChannelField{};
   IRECT mMidiChannelNext{};
-  std::array<IRECT, 6U> mMidiRows{};
-  std::array<IRECT, 6U> mMidiLearnButtons{};
+  std::array<IRECT, 8U> mMidiRows{};
+  std::array<IRECT, 8U> mMidiLearnButtons{};
   IRECT mMidiPreparedStatus{};
   IRECT mMidiActiveStatus{};
   IRECT mMidiMessageStatus{};

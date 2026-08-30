@@ -190,7 +190,7 @@ PluginStateEncodeResult encode_plugin_component_state(
                           binding.file_name.size() + 8U + 8U;
   const auto payload_size = static_cast<std::uint32_t>(
       kFixedPayloadSize + locator_size + binding_bytes + 8U +
-      take_binding_bytes);
+      take_binding_bytes + 2U);
   const auto total_size = kHeaderSize + static_cast<std::size_t>(payload_size);
   if (total_size > kMaxPluginStateBytes) {
     result.error = PluginStateError::locator_too_large;
@@ -242,6 +242,10 @@ PluginStateEncodeResult encode_plugin_component_state(
       append_u64(result.bytes, binding.start_frame);
       append_u64(result.bytes, binding.end_frame_exclusive);
     }
+    // State 1.4: learned capture boundary notes. Appended so 1.3 readers can
+    // safely ignore them while 1.4 restores them exactly.
+    result.bytes.push_back(state.show_midi.capture_start_note);
+    result.bytes.push_back(state.show_midi.capture_stop_note);
   } catch (const std::bad_alloc&) {
     result.bytes.clear();
     result.error = PluginStateError::allocation_failure;
@@ -441,6 +445,15 @@ PluginStateDecodeResult decode_plugin_component_state(
       result.error = PluginStateError::allocation_failure;
       return result;
     }
+  }
+
+  if (format_minor >= 4U) {
+    if (offset + 2U > payload_end) {
+      result.error = PluginStateError::invalid_show_midi_mapping;
+      return result;
+    }
+    result.state.show_midi.capture_start_note = bytes[offset++];
+    result.state.show_midi.capture_stop_note = bytes[offset++];
   }
 
   // Same-major future minor versions may append fields inside payload_size.

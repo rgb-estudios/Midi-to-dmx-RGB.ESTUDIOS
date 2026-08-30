@@ -45,6 +45,8 @@ int main() {
   state.show_midi.enabled = true;
   state.show_midi.channel = 12U;
   state.show_midi.play_note = 72U;
+  state.show_midi.capture_start_note = 74U;
+  state.show_midi.capture_stop_note = 75U;
   state.take_library_locator = "C:/AEYLA/Takes";
   state.take_bindings = {
       SessionTakeBinding{"song-intro", "Intro_Toma_2.aeylatake", 44U, 440U},
@@ -233,14 +235,14 @@ int main() {
     legacy_state.take_bindings.clear();
     auto bytes = aeyla::runtime::encode_plugin_component_state(legacy_state).bytes;
     check(bytes.size() >= 16U, "current state must contain 1.1/1.2/1.3 tails");
-    bytes.resize(bytes.size() - 16U);
+    bytes.resize(bytes.size() - 18U);
     bytes[10] = 0U;
     bytes[11] = 0U;
     std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
                                  (static_cast<std::uint32_t>(bytes[13]) << 8U) |
                                  (static_cast<std::uint32_t>(bytes[14]) << 16U) |
                                  (static_cast<std::uint32_t>(bytes[15]) << 24U);
-    payload_size -= 16U;
+    payload_size -= 18U;
     bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
     bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
     bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
@@ -259,14 +261,14 @@ int main() {
     legacy11.take_library_locator.clear();
     legacy11.take_bindings.clear();
     auto bytes = aeyla::runtime::encode_plugin_component_state(legacy11).bytes;
-    bytes.resize(bytes.size() - 14U);
+    bytes.resize(bytes.size() - 16U);
     bytes[10] = 1U;
     bytes[11] = 0U;
     std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
                                  (static_cast<std::uint32_t>(bytes[13]) << 8U) |
                                  (static_cast<std::uint32_t>(bytes[14]) << 16U) |
                                  (static_cast<std::uint32_t>(bytes[15]) << 24U);
-    payload_size -= 14U;
+    payload_size -= 16U;
     bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
     bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
     bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
@@ -284,21 +286,48 @@ int main() {
     legacy12.take_library_locator.clear();
     legacy12.take_bindings.clear();
     auto bytes = aeyla::runtime::encode_plugin_component_state(legacy12).bytes;
-    bytes.resize(bytes.size() - 6U);
+    bytes.resize(bytes.size() - 8U);
     bytes[10] = 2U;
     bytes[11] = 0U;
     std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
                                  (static_cast<std::uint32_t>(bytes[13]) << 8U) |
                                  (static_cast<std::uint32_t>(bytes[14]) << 16U) |
                                  (static_cast<std::uint32_t>(bytes[15]) << 24U);
-    payload_size -= 6U;
+    payload_size -= 8U;
     bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
     bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
     bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
     bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
     const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
-    check(result.ok() && result.state == legacy12,
-          "legacy 1.2 state must migrate with empty take bindings");
+    auto expected = legacy12;
+    expected.show_midi.capture_start_note = aeyla::runtime::kShowMidiCaptureStartNote;
+    expected.show_midi.capture_stop_note = aeyla::runtime::kShowMidiCaptureStopNote;
+    check(result.ok() && result.state == expected,
+          "legacy 1.2 state must migrate with default capture notes and empty take bindings");
+  }
+
+  // R08 state 1.3 contains take bindings but predates learned REC notes. It
+  // restores N42/N43 defaults without changing any existing take selection.
+  {
+    auto bytes = encoded.bytes;
+    bytes.resize(bytes.size() - 2U);
+    bytes[10] = 3U;
+    bytes[11] = 0U;
+    std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
+                                 (static_cast<std::uint32_t>(bytes[13]) << 8U) |
+                                 (static_cast<std::uint32_t>(bytes[14]) << 16U) |
+                                 (static_cast<std::uint32_t>(bytes[15]) << 24U);
+    payload_size -= 2U;
+    bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
+    bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
+    bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
+    const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    auto expected = state;
+    expected.show_midi.capture_start_note = aeyla::runtime::kShowMidiCaptureStartNote;
+    expected.show_midi.capture_stop_note = aeyla::runtime::kShowMidiCaptureStopNote;
+    check(result.ok() && result.state == expected,
+          "legacy 1.3 state must migrate to default capture notes");
   }
 
   // Same-major future minor payloads may append fields and remain readable.

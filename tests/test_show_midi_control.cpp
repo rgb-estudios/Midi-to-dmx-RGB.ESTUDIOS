@@ -81,13 +81,13 @@ int main() {
             mapping == before_collision && error.find("PANIC") != std::string::npos,
         "PANIC note must not be learnable by another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::stop_reset,
-                               12U, kShowMidiCaptureStartNote, error) &&
-            mapping == before_collision && error.find("REC START") != std::string::npos,
-        "N42 REC START must not be learnable by another command");
+                               12U, mapping.capture_start_note, error) &&
+            mapping == before_collision && !error.empty(),
+        "REC START note must not collide with another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::stop_reset,
-                               12U, kShowMidiCaptureStopNote, error) &&
-            mapping == before_collision && error.find("REC STOP") != std::string::npos,
-        "N43 REC STOP must not be learnable by another command");
+                               12U, mapping.capture_stop_note, error) &&
+            mapping == before_collision && !error.empty(),
+        "REC STOP note must not collide with another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,
                                12U, 120U, error),
         "launch base must reserve all 15 direct Song notes");
@@ -103,37 +103,32 @@ int main() {
           "new Song launch bank must not cross a fixed operational note");
   }
 
-  // Restored legacy collisions remain decodable; fixed operational commands
-  // shadow them at runtime for backward compatibility.
+  // R09.1: REC boundaries are independently learnable. START/STOP remain
+  // idempotent commands; learning one may never collide with another control.
   {
-    ShowMidiMapping legacy = mapping;
-    legacy.stop_note = kShowMidiPanicNote;
-    check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
-          "legacy N41 collision must remain state-compatible");
-    check(match_show_midi_note(legacy, legacy.channel, kShowMidiPanicNote,
-                               127U, match) &&
-              match.command == ShowMidiCommand::panic_blackout,
-          "PANIC must shadow a legacy N41 assignment");
-  }
-  {
-    ShowMidiMapping legacy = mapping;
-    legacy.stop_note = kShowMidiCaptureStartNote;
-    check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
-          "legacy N42 collision must remain state-compatible");
-    check(match_show_midi_note(legacy, legacy.channel,
-                               kShowMidiCaptureStartNote, 127U, match) &&
+    ShowMidiMapping learned = mapping;
+    check(assign_show_midi_note(learned, ShowMidiLearnTarget::capture_start,
+                                12U, 74U, error) &&
+              learned.capture_start_note == 74U,
+          "REC START must be MIDI-learnable");
+    check(assign_show_midi_note(learned, ShowMidiLearnTarget::capture_stop,
+                                12U, 75U, error) &&
+              learned.capture_stop_note == 75U,
+          "REC STOP must be MIDI-learnable");
+    check(match_show_midi_note(learned, 12U, 74U, 127U, match) &&
               match.command == ShowMidiCommand::capture_start,
-          "REC START must shadow a legacy N42 assignment");
-  }
-  {
-    ShowMidiMapping legacy = mapping;
-    legacy.stop_note = kShowMidiCaptureStopNote;
-    check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
-          "legacy N43 collision must remain state-compatible");
-    check(match_show_midi_note(legacy, legacy.channel,
-                               kShowMidiCaptureStopNote, 127U, match) &&
+          "learned REC START note must trigger capture start");
+    check(match_show_midi_note(learned, 12U, 75U, 127U, match) &&
               match.command == ShowMidiCommand::capture_stop,
-          "REC STOP must shadow a legacy N43 assignment");
+          "learned REC STOP note must trigger capture stop");
+    const auto before = learned;
+    check(!assign_show_midi_note(learned, ShowMidiLearnTarget::capture_stop,
+                                 12U, 74U, error) && learned == before,
+          "REC START/STOP collision must be rejected atomically");
+    check(!assign_show_midi_note(learned, ShowMidiLearnTarget::capture_start,
+                                 12U, kShowMidiPanicNote, error) &&
+              learned == before && error.find("PANIC") != std::string::npos,
+          "PANIC must remain unavailable to capture MIDI Learn");
   }
 
   const auto stamped = make_show_midi_event(

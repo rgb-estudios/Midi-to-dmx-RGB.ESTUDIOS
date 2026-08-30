@@ -41,6 +41,8 @@ const char* LearnTargetName(aeyla::runtime::ShowMidiLearnTarget target) {
     case Target::play_retrigger: return "PLAY / REINICIAR";
     case Target::pause_resume: return "PAUSA / REANUDAR";
     case Target::stop_reset: return "STOP / RESET";
+    case Target::capture_start: return "REC START";
+    case Target::capture_stop: return "REC STOP";
     case Target::launch_song_base: return "BASE DE 15 CANCIONES";
     case Target::none: return "NINGUNO";
   }
@@ -51,8 +53,13 @@ const char* LearnTargetName(aeyla::runtime::ShowMidiLearnTarget target) {
 
 aeyla::runtime::ShowMidiMapping AeylaVisualDmx::ShowMidiMapping() const noexcept
 {
-  return aeyla::runtime::unpack_show_midi_mapping(
+  auto mapping = aeyla::runtime::unpack_show_midi_mapping(
       mShowMidiMappingPacked.load(std::memory_order_acquire));
+  mapping.capture_start_note = mShowMidiCaptureStartNote.load(
+      std::memory_order_acquire);
+  mapping.capture_stop_note = mShowMidiCaptureStopNote.load(
+      std::memory_order_acquire);
+  return mapping;
 }
 
 void AeylaVisualDmx::SetShowMidiMessage(std::string message)
@@ -77,6 +84,10 @@ void AeylaVisualDmx::SyncShowMidiMappingToState(
   mShowMidiMappingPacked.store(
       aeyla::runtime::pack_show_midi_mapping(mapping),
       std::memory_order_release);
+  mShowMidiCaptureStartNote.store(mapping.capture_start_note,
+                                  std::memory_order_release);
+  mShowMidiCaptureStopNote.store(mapping.capture_stop_note,
+                                 std::memory_order_release);
   const std::scoped_lock lock(mHostStateMutex);
   mHostStateCache.show_midi = mapping;
 }
@@ -158,7 +169,9 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleShowMidiFromUI()
     mMidiPreflightCursor.store(-1, std::memory_order_release);
   const std::string message = mapping.enabled
       ? "MIDI SHOW ACTIVO · canal " + std::to_string(mapping.channel) +
-            " · N41 PANIC · N42 REC START · N43 REC STOP · reloj por muestras del DAW"
+            " · N41 PANIC · N" + std::to_string(mapping.capture_start_note) +
+            " REC START · N" + std::to_string(mapping.capture_stop_note) +
+            " REC STOP · reloj por muestras del DAW"
       : "MIDI SHOW DESACTIVADO · las notas vuelven a los Cues normales";
   SetShowMidiMessage(message);
   return {true, {}, message};
