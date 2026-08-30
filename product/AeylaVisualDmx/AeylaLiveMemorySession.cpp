@@ -34,6 +34,7 @@ constexpr std::array<const char*, kOperatorMemoryCount> kMemoryNames{
     "FRONTAL", "HUMO / HAZE", "BASE BLANCA", "TEST LUMINARIAS"};
 
 void initialize_slot(std::size_t index, SlotState& slot) {
+  slot = SlotState{};
   slot.definition.memory_id = kMemoryIds[index];
   slot.definition.name = kMemoryNames[index];
   slot.definition.fade_ms = 1000U;
@@ -42,12 +43,16 @@ void initialize_slot(std::size_t index, SlotState& slot) {
       : output::LiveMemoryControlMode::toggle;
 }
 
+void initialize_session(SessionState& session) {
+  session = SessionState{};
+  for(std::size_t index = 0U; index < session.slots.size(); ++index)
+    initialize_slot(index, session.slots[index]);
+}
+
 SessionState& ensure_session_locked(const void* owner) {
   auto [iterator, inserted] = gSessions.try_emplace(owner);
-  if(inserted) {
-    for(std::size_t index = 0U; index < iterator->second.slots.size(); ++index)
-      initialize_slot(index, iterator->second.slots[index]);
-  }
+  if(inserted)
+    initialize_session(iterator->second);
   return iterator->second;
 }
 
@@ -72,6 +77,13 @@ bool reconfigure_locked(SessionState& session,
       index, slot.definition, error);
 }
 
+void clear_worker_definitions(SessionState& session) noexcept {
+  if(session.output_worker == nullptr) return;
+  session.output_worker->reset_live_memories();
+  for(std::size_t index = 0U; index < session.slots.size(); ++index)
+    session.output_worker->clear_live_memory(index);
+}
+
 }  // namespace
 
 void register_runtime(const void* owner,
@@ -80,19 +92,32 @@ void register_runtime(const void* owner,
   if(owner == nullptr) return;
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+
+  // Normal UI polling may call this on every frame. Re-registering the exact
+  // same runtime must therefore be a strict no-op; otherwise simply drawing the
+  // EN VIVO page would reset an active fade to OFF.
+  if(session.output_worker == output_worker &&
+     session.capture_worker == capture_worker)
+    return;
+
+  // If a DAW reused the same object address for a new plugin instance, stale
+  // learned state must never leak into the new runtime. Different member
+  // pointers are treated as a new instance identity and start from safe OFF.
+  if(session.output_worker != nullptr || session.capture_worker != nullptr) {
+    clear_worker_definitions(session);
+    initialize_session(session);
+  }
+
   session.output_worker = output_worker;
   session.capture_worker = capture_worker;
+  if(session.output_worker == nullptr) return;
 
-  // Re-registering after a socket/runtime restart preserves learned definitions
-  // for this plugin lifetime but always restores them at level OFF.
-  if(session.output_worker != nullptr) {
-    session.output_worker->reset_live_memories();
-    for(std::size_t index = 0U; index < session.slots.size(); ++index) {
-      if(!session.slots[index].configured) continue;
-      std::string ignored;
-      (void)session.output_worker->configure_live_memory(
-          index, session.slots[index].definition, ignored);
-    }
+  session.output_worker->reset_live_memories();
+  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+    if(!session.slots[index].configured) continue;
+    std::string ignored;
+    (void)session.output_worker->configure_live_memory(
+        index, session.slots[index].definition, ignored);
   }
 }
 
@@ -101,8 +126,7 @@ void clear(const void* owner) noexcept {
   const std::scoped_lock lock(gMutex);
   const auto iterator = gSessions.find(owner);
   if(iterator == gSessions.end()) return;
-  if(iterator->second.output_worker != nullptr)
-    iterator->second.output_worker->reset_live_memories();
+  clear_worker_definitions(iterator->second);
   gSessions.erase(iterator);
 }
 
@@ -155,8 +179,8 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
     slot.learn_pending = true;
     return {true,
             slot.definition.name +
-                " · PASO 1/2 listo: deja esta memoria OFF como referencia, "
-                "actívala en Avolites y presiona APRENDER nuevamente"};
+                " · PASO 1/2 listo: referencia Avolites capturada. "
+                "Activa sólo esta memoria en Avolites y presiona APRENDER nuevamente"};
   }
 
   output::LiveMemoryMask mask;
