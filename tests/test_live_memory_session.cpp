@@ -127,8 +127,8 @@ int main() {
   require(composed[100] == songBase[100],
           "unrelated Avolites baseline value leaked into memory mask");
 
-  // R10.1 — toggle memories learn MIDI Notes. The learned note is consumed by
-  // the EN VIVO layer and NoteOff must not trigger a second toggle/release.
+  // MIDI Learn is deliberately non-destructive: the event used to bind the
+  // control must never move live DMX. The next matching event operates it.
   reset_levels(&owner);
   const auto noteLearn = arm_midi_learn(&owner, 0U);
   require(noteLearn.succeeded, noteLearn.message);
@@ -143,8 +143,13 @@ int main() {
   require(frontMidi.midi_kind == MidiBindingKind::note &&
               frontMidi.midi_channel == 3U && frontMidi.midi_number == 64U,
           "FRONTAL did not retain learned MIDI note/channel");
-  require(frontMidi.target_level > 0.99F,
-          "learned NoteOn did not toggle FRONTAL target ON");
+  require(frontMidi.target_level < 0.01F,
+          "MIDI Learn note unexpectedly changed FRONTAL target");
+
+  require(process_midi_event(&owner, noteOn),
+          "mapped NoteOn was not consumed");
+  require(view(&owner, 0U).target_level > 0.99F,
+          "second NoteOn did not toggle FRONTAL target ON");
 
   runtime::HostEvent noteOff = noteOn;
   noteOff.type = runtime::HostEventType::note_off;
@@ -154,8 +159,8 @@ int main() {
   require(view(&owner, 0U).target_level > 0.99F,
           "NoteOff unexpectedly toggled FRONTAL a second time");
 
-  // Learn HUMO/HAZE as a real continuous fader. Its DMX target differs only on
-  // channel 2 (index 1), then CC74 controls interpolation 0..100%.
+  // HUMO/HAZE is a real continuous fader. Learn must not move it; the next
+  // CC74 value controls interpolation from the current song frame to target.
   avolites.publish_latest(avolitesOff, 3U);
   acceptedBefore = aeylaRx.stats().packets_accepted;
   require(wait_until([&]() {
@@ -190,9 +195,13 @@ int main() {
   require(hazeMidi.midi_kind == MidiBindingKind::control_change &&
               hazeMidi.midi_channel == 2U && hazeMidi.midi_number == 74U,
           "HAZE did not retain learned MIDI CC/channel");
-  require(hazeMidi.level > 0.24F && hazeMidi.level < 0.26F,
-          "learned CC did not set HAZE fader to 25 percent");
+  require(hazeMidi.level < 0.01F,
+          "MIDI Learn CC unexpectedly moved HAZE fader");
 
+  require(process_midi_event(&owner, cc),
+          "mapped CC 25 percent was not consumed");
+  require(view(&owner, 1U).level > 0.24F && view(&owner, 1U).level < 0.26F,
+          "mapped CC did not set HAZE fader to 25 percent");
   require(wait_until([&]() {
     DmxUniverse frame{};
     return sink.latest_frame(frame) && frame[1] == 68U;
@@ -226,6 +235,6 @@ int main() {
   sink.stop();
   aeylaRx.stop();
 
-  std::cout << "AEYLA live-memory session PASS: sparse Avolites learn + MIDI Note/CC control\n";
+  std::cout << "AEYLA live-memory session PASS: sparse Avolites learn + safe MIDI Note/CC control\n";
   return EXIT_SUCCESS;
 }
