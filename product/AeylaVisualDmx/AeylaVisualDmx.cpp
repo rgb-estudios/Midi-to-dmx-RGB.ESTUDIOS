@@ -122,9 +122,6 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   GetParam(kParamAmberExtract)->InitPercentage("Extracción de ámbar", 15.0);
   GetParam(kParamUV)->InitPercentage("UV manual", 0.0);
 
-  // The application model starts with a valid development document but a
-  // disconnected diagnostic backend. Preview is available; real output cannot
-  // be armed until a named backend is configured and healthy.
   CaptureAllParameterValuesFromHost();
   SyncSnapshotToAtomicsLocked();
   RefreshHostStateCacheLocked();
@@ -182,6 +179,7 @@ AeylaVisualDmx::~AeylaVisualDmx()
   StopRuntimeWorker();
   mNetworkConfiguration.Shutdown();
   mArtNetOutput.stop();
+  aeyla::live_memory_session::clear(this);
   aeyla::take_library_session::clear(this);
 }
 
@@ -190,18 +188,9 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
 {
   (void) inputs;
 
-  // Publish the newest host snapshot for liveness/safety, then advance the
-  // artistic Take clock by the exact amount of audio processed. Both calls are
-  // bounded and lock-free; no file, network or UI work occurs here. Absolute
-  // Arrangement position is deliberately NOT used as the Take clock: Stop,
-  // Seek and Loop must never relocate or duplicate a relative DMX clip.
   const bool renderingOffline = GetRenderingOffline();
   const bool transportRunning = GetTransportIsRunning();
 
-  // Timestamp the capture cursor before publishing RUNNING to the host mailbox.
-  // If RuntimeTick observes the new transport state, this release sequence makes
-  // the corresponding 44 Hz capture marker visible first. Only atomics are used
-  // here; the non-realtime worker owns the sync state machine itself.
   const bool transportWasRunning = mAudioTransportRunning.exchange(
       transportRunning, std::memory_order_acq_rel);
   if(!transportWasRunning && transportRunning &&
@@ -225,9 +214,6 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
       if(!mShowTransportMutation.load(std::memory_order_acquire))
         mTakeScheduler.advance_samples(static_cast<std::uint32_t>(nFrames),
                                        renderingOffline);
-      // This counter advances even when a transport mutation temporarily
-      // suppresses the scheduler increment: the runtime catches that exact
-      // interval up after the atomic command boundary.
       mProcessedTransportSamples.fetch_add(
           static_cast<std::uint64_t>(nFrames), std::memory_order_release);
     }
@@ -236,8 +222,6 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
     mAudioAdvanceSequence.fetch_add(1U, std::memory_order_release);
   }
 
-  // Silent MIDI-controlled lighting runtime: the host callback only clears the
-  // advertised bus. It performs no project, graphics, DMX, network or file work.
   for(int channel = 0; channel < 2; ++channel)
   {
     if(outputs[channel])
@@ -292,10 +276,6 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
             std::memory_order_acquire);
         const auto offset = static_cast<std::uint32_t>(
             std::max(msg.mOffset, 0));
-        // Capture the deterministic 44 Hz recorder cursor at MIDI ingress. The
-        // runtime thread intentionally consumes the command later, after the
-        // event's audio block has completed; reading the cursor there moved the
-        // auto-IN by one or more frames. This load is atomic and lock-free.
         const auto captureFrame = mArtNetCapture.recorded_frames_fast();
         const auto showEvent = aeyla::runtime::make_show_midi_event(
             showMatch.command, showMatch.song_index, channel, midiNote,
@@ -309,8 +289,6 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
     event.type = status == IMidiMsg::kNoteOn && velocity > 0
                      ? aeyla::runtime::HostEventType::note_on
                      : aeyla::runtime::HostEventType::note_off;
-    // iPlug reports channels as 0..15. AEYLA's authored show contract uses
-    // conventional MIDI channels 1..16, so normalize at the wrapper boundary.
     event.channel = channel;
     event.note = midiNote;
     event.value = static_cast<float>(std::clamp(velocity, 0, 127)) / 127.0F;
@@ -328,23 +306,36 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
                              static_cast<std::int64_t>(nonNegativeOffset);
     }
 
-    (void) mHostIngress.try_submit(event);
+    (void)mHostIngress.try_submit(event);
+    return;
+  }
+
+  if(status == IMidiMsg::kControlChange)
+  {
+    // R10.1: a CC is copied as a compact queue event only. No live-memory
+    // lookup, mutex, Art-Net call or UI work is allowed in the host callback.
+    mMidiEventCount.fetch_add(1, std::memory_order_relaxed);
+    aeyla::runtime::HostEvent event{};
+    event.type = aeyla::runtime::HostEventType::note_on;
+    event.channel = static_cast<std::uint8_t>(
+        std::clamp(msg.Channel() + 1, 1, 16));
+    event.note = static_cast<std::uint8_t>(std::clamp<int>(msg.mData1, 0, 127));
+    event.reserved = 1U;
+    event.value = static_cast<float>(std::clamp<int>(msg.mData2, 0, 127)) / 127.0F;
+    event.sample_offset = msg.mOffset;
+    (void)mHostIngress.try_submit(event);
   }
 }
 
 void AeylaVisualDmx::OnReset()
 {
   mLastMidiNote.store(-1, std::memory_order_relaxed);
-  // Ableton may call OnReset when its audio engine/device/sample rate is
-  // rebuilt. Never perform scheduler locks or file I/O here. Mark the next
-  // transport callback as a fresh edge and ask the runtime worker to
-  // invalidate any file-backed take that was calibrated to the old rate.
   mAudioTransportRunning.store(false, std::memory_order_release);
   mHostResetPending.store(true, std::memory_order_release);
 
   aeyla::runtime::HostEvent event{};
   event.type = aeyla::runtime::HostEventType::all_notes_off;
-  (void) mHostIngress.try_submit(event);
+  (void)mHostIngress.try_submit(event);
 }
 
 void AeylaVisualDmx::OnActivate(bool active)
@@ -355,9 +346,6 @@ void AeylaVisualDmx::OnActivate(bool active)
 
 void AeylaVisualDmx::OnParamChange(int paramIdx)
 {
-  // Parameter callbacks may originate from host processing. Only mirror the
-  // changed scalar into lock-free atomics; the independent runtime worker
-  // applies it to the model outside the audio callback and outside UI OnIdle.
   CaptureParameterValueFromHost(paramIdx);
   mParameterUpdatePending.store(true, std::memory_order_release);
 }
@@ -384,8 +372,6 @@ bool AeylaVisualDmx::SerializeState(IByteChunk& chunk) const
     if(!encoded.bytes.empty())
       chunk.PutBytes(encoded.bytes.data(), static_cast<int>(encoded.bytes.size()));
 
-    // iPlug parameters follow the AEYLA component block. Output Arm is not a
-    // parameter and is deliberately absent from both state sections.
     return SerializeParams(chunk);
   }
   catch(...)
@@ -444,9 +430,6 @@ int AeylaVisualDmx::UnserializeState(const IByteChunk& chunk, int startPos)
 
 void AeylaVisualDmx::OnIdle()
 {
-  // Functional runtime work intentionally does not live here. Hosts are free
-  // to suspend UI idle callbacks when the editor is closed; OnIdle only asks
-  // visible controls to redraw snapshots already published by RuntimeLoop().
   const bool blackout = mParamBlackout.load(std::memory_order_acquire);
   if(GetParam(kParamBlackout)->Bool() != blackout)
     GetParam(kParamBlackout)->Set(blackout ? 1.0 : 0.0);
@@ -567,17 +550,11 @@ void AeylaVisualDmx::RuntimeTick() noexcept
         mLastCaptureTransportMarkerRevision = markerRevision;
       }
 
-      // Legacy fallback for hosts that suspend ProcessBlock while stopped or do
-      // not deliver a clean STOP->PLAY callback edge. It runs only after the
-      // callback marker above, so worker scheduling can never replace a more
-      // precise callback timestamp.
       const auto capture = mArtNetCapture.stats();
       (void)mCaptureSyncAnchor.observe(host, capture.recorded_frames);
     }
     else
     {
-      // Baseline every inactive period. A marker from a previous recording can
-      // therefore never be inherited by the next N42 capture session.
       mLastCaptureTransportMarkerRevision =
           mCaptureTransportMarkerRevision.load(std::memory_order_acquire);
     }
@@ -597,10 +574,6 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 
     if(mHostResetPending.exchange(false, std::memory_order_acq_rel))
     {
-      // A host audio-engine reset may change sample rate. A loaded clip's
-      // sample-domain conversion is therefore no longer authoritative.
-      // Fail closed now; the next PLAY/preflight reloads the .aeylatake with
-      // the current GetSampleRate() instead of continuing with stale timing.
       ClearShowMidiCommandsLocked();
       mTakeScheduler.stop_reset();
       mTakeScheduler.disarm();
@@ -705,8 +678,6 @@ void AeylaVisualDmx::RuntimeTick() noexcept
         }
         else
         {
-          // Missing/out-of-range timing cannot inherit an old cue. Seeking to
-          // the explicit song end resolves to no scene and therefore black.
           mModel.seek_active_song_tick(activeSong->length_ticks);
           mLastProjectedSongId = activeSong->song_id;
           mLastProjectedTick = activeSong->length_ticks;
@@ -714,8 +685,6 @@ void AeylaVisualDmx::RuntimeTick() noexcept
       }
       else if(!mLastHostRunning || mLastProjectedSongId != activeSong->song_id)
       {
-        // ADR 0002 forbids silently assuming host PPQ zero. A running unbound
-        // Song is a deterministic safe state until SET SONG START is used.
         mModel.seek_active_song_tick(activeSong->length_ticks);
         mLastProjectedSongId = activeSong->song_id;
         mLastProjectedTick = activeSong->length_ticks;
@@ -731,15 +700,9 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     }
     mLastHostRunning = host.running;
 
-    // Discrete live MIDI is applied after absolute Play/Seek/Loop
-    // reconstruction so a note arriving in the first running block is not
-    // erased by the same tick's authoritative transport transition.
     DrainHostEventsLocked();
     if(host.running && activeSong != nullptr && !hostSongPositionSafe)
     {
-      // A running but unbound/before/after Song is a hard non-output state.
-      // Discard any live latch that arrived in this tick so missing placement
-      // data can never produce a short artistic flash between worker frames.
       mModel.seek_active_song_tick(activeSong->length_ticks);
     }
 
@@ -756,8 +719,6 @@ void AeylaVisualDmx::RuntimeTick() noexcept
   }
   catch(...)
   {
-    // Runtime exceptions latch safe. The worker stays alive only to keep
-    // publishing blackout; plugin reload is required before ARM can recover.
     mRuntimeFaulted.store(true, std::memory_order_release);
     mParamBlackout.store(true, std::memory_order_release);
     mOutputArmed.store(false, std::memory_order_release);
@@ -980,10 +941,6 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
 
   if(uuidMismatch || schemaMismatch || checksumMismatch)
   {
-    // The Set identifies a project that is not the currently loaded package.
-    // Until locator-based asynchronous loading is implemented, expose an
-    // invalid project and publish only the safe frame. Never carry Take
-    // bindings from a different project identity into the current session.
     mModel.set_project_valid(false);
     mModel.set_blackout(true);
     mParamBlackout.store(true, std::memory_order_release);
@@ -998,17 +955,11 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   }
   else
   {
-    // State 1.3 restores only non-destructive Take/library state. This never
-    // arms Art-Net and never starts playback. A missing cross-platform path
-    // remains pending until the operator selects the destination library once.
     aeyla::take_library_session::stage_persisted_state(
         this, mModel.project_document().project_id,
         pending->take_library_locator, pending->take_bindings);
   }
 
-  // UnserializeParams already restored host-visible preferences. Applying them
-  // is deferred here, outside the host processing callback. Output remains
-  // disarmed regardless of the saved Set.
   mParameterUpdatePending.store(true, std::memory_order_release);
 }
 
@@ -1053,9 +1004,21 @@ void AeylaVisualDmx::DrainHostEventsLocked()
   if(mHostIngress.consume_transient_release_request())
     mModel.release_transients();
 
+  aeyla::live_memory_session::register_runtime(
+      this, &mArtNetOutput, &mArtNetCapture);
+
   aeyla::runtime::HostEvent event{};
   while(mHostIngress.try_consume(event))
+  {
+    if(aeyla::live_memory_session::process_midi_event(this, event))
+      continue;
+    // `reserved == 1` is an EN VIVO CC. Unmapped CC did not reach the legacy
+    // artistic model before R10.1 and must remain inert rather than masquerade
+    // as a NoteOn.
+    if(event.reserved == 1U)
+      continue;
     mModel.handle_host_event(event);
+  }
 }
 
 void AeylaVisualDmx::RefreshHostStateCacheLocked()
@@ -1068,8 +1031,6 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   if(!DecodeCanonicalUuid(snapshot.project_id, uuid))
     return;
 
-  // Snapshot Take state before taking mHostStateMutex to keep lock order
-  // deterministic. Only the 15 show Songs can enter host component state.
   aeyla::take_library_session::ensure_scope(this, snapshot.project_id);
   std::vector<std::string> songIds;
   const auto& show = mModel.show_program();
@@ -1100,8 +1061,6 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   mHostStateCache.project_schema_minor =
       mModel.project_document().schema_version.minor;
   mHostStateCache.grand_master = snapshot.grand_master;
-  // Persist the global operator/safety latch, never a transient artistic
-  // blackout caused by a missing/out-of-range Cue.
   mHostStateCache.blackout = snapshot.global_blackout;
   mHostStateCache.take_library_locator =
       std::move(hostTakeState.library_locator);
@@ -1232,8 +1191,6 @@ bool AeylaVisualDmx::SetActiveSongStartFromPlayheadFromUI()
     }
   }
 
-  // A placement change changes which cue owns the current DAW position. Force
-  // a safe boundary and require explicit operator recovery.
   mModel.release_transients();
   mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
   mModel.set_blackout(true);
@@ -1624,10 +1581,6 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
     return;
   }
 
-  // Handle each fail-closed transition once. Reapplying APAGÓN on every
-  // runtime tick made explicit recovery impossible: the worker could re-latch
-  // blackout between the operator's APAGÓN OFF and ARMAR clicks. The worker
-  // itself remains latched until ARMAR calls prepare_explicit_rearm().
   if(stats.fail_closed_events <= mLastHandledArtNetFailClosedEvents)
   {
     mArtNetOutput.set_enabled(false);
