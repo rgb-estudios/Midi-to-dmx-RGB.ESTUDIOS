@@ -182,6 +182,23 @@ endif()
 add_test(NAME aeyla_take_library_session_tests
          COMMAND aeyla_take_library_session_tests)
 
+add_executable(aeyla_live_memory_session_tests
+  tests/test_live_memory_session.cpp
+  product/AeylaVisualDmx/AeylaLiveMemorySession.cpp
+)
+target_include_directories(aeyla_live_memory_session_tests PRIVATE
+  product/AeylaVisualDmx
+)
+target_link_libraries(aeyla_live_memory_session_tests PRIVATE aeyla_runtime)
+if(MSVC)
+  target_compile_options(aeyla_live_memory_session_tests PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(aeyla_live_memory_session_tests PRIVATE
+    -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME aeyla_live_memory_session_tests
+         COMMAND aeyla_live_memory_session_tests)
+
 option(AEYLA_BUILD_STANDALONE_PROOF "Build the AEYLA shared-runtime standalone diagnostic" OFF)
 if(AEYLA_BUILD_STANDALONE_PROOF)
   add_executable(AeylaVisualDmxStandalone apps/standalone/main.cpp)
