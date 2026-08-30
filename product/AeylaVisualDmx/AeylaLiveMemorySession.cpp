@@ -434,9 +434,6 @@ bool process_midi_event(const void* owner,
     slot.midi_number = event.note;
     remove_duplicate_binding(session, index, slot.midi_kind,
                              slot.midi_channel, slot.midi_number);
-
-    if(validCc)
-      (void)set_fader_locked(session, index, event.value);
     return true;
   }
 
