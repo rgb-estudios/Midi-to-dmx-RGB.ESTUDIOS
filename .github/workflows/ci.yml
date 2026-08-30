@@ -20,14 +20,16 @@ jobs:
           fetch-depth: 0
 
       - name: Sanitize and apply runtime patch
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
           p = Path('tools/dev/r09_apply_rec_start_stop.py')
           text = p.read_text(encoding='utf-8')
           text = text.replace('text = text.replace("N42 REC", "N42 REC START · N43 REC STOP")\n', '')
           p.write_text(text, encoding='utf-8')
-          exec(compile(text, str(p), 'exec'))
+          PY
+          python tools/dev/r09_apply_rec_start_stop.py
 
       - name: Reject stale toggle and transport-zero logic
         shell: bash
