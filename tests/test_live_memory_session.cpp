@@ -77,6 +77,33 @@ int main() {
   int owner = 0;
   register_runtime(&owner, &aeylaTx, &aeylaRx);
 
+  // R10.3: MIDI authoring is independent of Avolites DMX authoring. This lets
+  // the show be mapped before the console look exists. The event used for
+  // Learn is non-destructive, and subsequent mapped events remain physically
+  // inert until the memory owns a validated sparse DMX definition.
+  const auto preDmxMidiLearn = arm_midi_learn(&owner, 0U);
+  require(preDmxMidiLearn.succeeded,
+          "MIDI Learn must be available before DMX Learn: " + preDmxMidiLearn.message);
+  runtime::HostEvent preDmxNote{};
+  preDmxNote.type = runtime::HostEventType::note_on;
+  preDmxNote.channel = 1U;
+  preDmxNote.note = 60U;
+  preDmxNote.value = 1.0F;
+  require(process_midi_event(&owner, preDmxNote),
+          "pre-DMX MIDI Learn note was not consumed");
+  auto preDmxView = view(&owner, 0U);
+  require(!preDmxView.configured &&
+              preDmxView.midi_kind == MidiBindingKind::note &&
+              preDmxView.midi_channel == 1U &&
+              preDmxView.midi_number == 60U,
+          "pre-DMX MIDI binding was not retained independently");
+  require(preDmxView.target_level < 0.01F,
+          "MIDI Learn before DMX unexpectedly changed target level");
+  require(process_midi_event(&owner, preDmxNote),
+          "mapped pre-DMX NoteOn should still be consumed");
+  require(view(&owner, 0U).target_level < 0.01F,
+          "mapped pre-DMX NoteOn unexpectedly generated physical live-memory state");
+
   DmxUniverse avolitesOff{};
   avolitesOff[100] = 5U;
   avolites.publish_latest(avolitesOff, 1U);
@@ -254,6 +281,6 @@ int main() {
   sink.stop();
   aeylaRx.stop();
 
-  std::cout << "AEYLA live-memory session PASS: sparse Avolites learn + safe MIDI Note/CC control\n";
+  std::cout << "RGB Live Control live-memory PASS: pre-DMX MIDI Learn + sparse Avolites learn + safe Note/CC control\n";
   return EXIT_SUCCESS;
 }
