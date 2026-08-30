@@ -29,6 +29,8 @@ iplug_add_plugin(${PROJECT_NAME}
     AeylaTakeTrimIntegration.cpp
     AeylaTakeLibrarySession.cpp
     AeylaTakeLibrarySession.h
+    AeylaLiveMemorySession.cpp
+    AeylaLiveMemorySession.h
     AeylaNetworkConfiguration.cpp
     AeylaNetworkConfiguration.h
     AeylaVisualDmx.h
@@ -66,6 +68,7 @@ iplug_add_plugin(${PROJECT_NAME}
     ../../src/capture/dmx_take_scheduler.cpp
     ../../src/capture/dmx_take_stream_writer.cpp
     ../../src/capture/dmx_take_transport.cpp
+    ../../src/output/dmx_live_memory.cpp
     ../../src/output/artnet_output_worker.cpp
   FORMATS
     ${AEYLA_PLUGIN_FORMATS}
