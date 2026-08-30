@@ -44,6 +44,14 @@ struct PersistentLiveMemory {
 
 struct LiveMemoryPersistentState {
   std::array<PersistentLiveMemory, kPersistentLiveMemoryCount> memories{};
+
+  LiveMemoryPersistentState() {
+    // Match the operator workspace defaults exactly: HUMO/HAZE is a continuous
+    // fader even before it has learned any DMX channels. This keeps legacy
+    // packages and fresh projects identical to a freshly initialized session.
+    memories[1].mode = PersistentLiveMemoryMode::fader;
+  }
+
   bool operator==(const LiveMemoryPersistentState&) const = default;
 };
 
