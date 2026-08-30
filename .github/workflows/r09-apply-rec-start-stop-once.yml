@@ -1,0 +1,64 @@
+name: r09-apply-rec-start-stop-once
+
+on:
+  push:
+    branches:
+      - aeyla/r08-capture-zero-midi-rec-20260829
+    paths:
+      - .github/workflows/r09-apply-rec-start-stop-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-r09-rec-start-stop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: aeyla/r08-capture-zero-midi-rec-20260829
+          fetch-depth: 0
+
+      - name: Sanitize one-shot patcher
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('tools/dev/r09_apply_rec_start_stop.py')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace('text = text.replace("N42 REC", "N42 REC START · N43 REC STOP")\n', '')
+          p.write_text(text, encoding='utf-8')
+
+      - name: Apply REC START STOP runtime patch
+        run: python tools/dev/r09_apply_rec_start_stop.py
+
+      - name: Reject stale toggle implementation
+        shell: bash
+        run: |
+          if grep -R --line-number --exclude='r09_apply_rec_start_stop.py' 'ShowMidiCommand::capture_toggle\|apply_midi_capture_toggle' src product tests; then
+            echo 'stale capture toggle implementation remains'
+            exit 1
+          fi
+          if grep -R --line-number 'PLAY/N38 fijará el cero\|usa N38 para fijar el cero' product/AeylaVisualDmx; then
+            echo 'stale capture-zero transport wording remains'
+            exit 1
+          fi
+
+      - name: Configure
+        run: cmake -S . -B build
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test Show MIDI and capture core
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Commit product integration and remove one-shot engineering files
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r09-apply-rec-start-stop-once.yml tools/dev/r09_apply_rec_start_stop.py
+          git add product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp
+          git diff --cached --check
+          git commit -m "R09 make MIDI capture explicit start stop"
+          git push origin HEAD:aeyla/r08-capture-zero-midi-rec-20260829
