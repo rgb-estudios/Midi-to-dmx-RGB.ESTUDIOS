@@ -1,0 +1,63 @@
+name: r09-1-learn-capture-notes-once
+
+on:
+  push:
+    branches:
+      - aeyla/r08-capture-zero-midi-rec-20260829
+    paths:
+      - .github/workflows/r09-1-learn-capture-notes-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-r09-1-capture-midi-learn:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: aeyla/r08-capture-zero-midi-rec-20260829
+          fetch-depth: 0
+
+      - name: Apply R09.1 learnable capture notes
+        run: python tools/dev/r09_1_learn_capture_notes.py
+
+      - name: Static contract checks
+        shell: bash
+        run: |
+          grep -q 'capture_start_note' src/runtime/show_midi_control.h
+          grep -q 'capture_stop_note' src/runtime/show_midi_control.h
+          grep -q 'ShowMidiLearnTarget::capture_start' product/AeylaVisualDmx/AeylaMainControl.h
+          grep -q 'ShowMidiLearnTarget::capture_stop' product/AeylaVisualDmx/AeylaMainControl.h
+          grep -q 'kPluginStateFormatMinor = 4' src/runtime/plugin_state.h
+          grep -q '0.3.6-alpha' product/AeylaVisualDmx/config.h
+          if grep -R --line-number 'N42 REC START · N43 REC STOP · CERO = REC START' product/AeylaVisualDmx; then
+            echo 'stale fixed-note capture footer remains'
+            exit 1
+          fi
+
+      - name: Configure
+        run: cmake -S . -B build
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Commit clean R09.1 integration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r09-1-learn-capture-notes-once.yml tools/dev/r09_1_learn_capture_notes.py
+          git add src/runtime/show_midi_control.h src/runtime/show_midi_control.cpp
+          git add src/runtime/plugin_state.h src/runtime/plugin_state.cpp
+          git add product/AeylaVisualDmx/AeylaVisualDmx.h product/AeylaVisualDmx/AeylaVisualDmx.cpp
+          git add product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp
+          git add product/AeylaVisualDmx/AeylaMainControl.h product/AeylaVisualDmx/AeylaRuntimeStatusControl.h
+          git add product/AeylaVisualDmx/config.h
+          git add tests/test_show_midi_control.cpp tests/test_plugin_state.cpp
+          git diff --cached --check
+          git commit -m "R09.1 make capture START STOP MIDI-learnable and persistent"
+          git push origin HEAD:aeyla/r08-capture-zero-midi-rec-20260829
