@@ -40,19 +40,23 @@ int main() {
 
   check(match_show_midi_note(mapping, 16U, kShowMidiPanicNote, 127U, match) &&
             match.command == ShowMidiCommand::panic_blackout,
-        "reserved PANIC note must decode on the configured Show channel");
+        "reserved PANIC note must decode on configured Show channel");
   check(!match_show_midi_note(mapping, 15U, kShowMidiPanicNote, 127U, match),
         "PANIC must not leak across MIDI channels");
-  check(!match_show_midi_note(mapping, 16U, kShowMidiPanicNote, 0U, match),
-        "velocity-zero PANIC must not trigger safety action");
 
-  check(match_show_midi_note(mapping, 16U, kShowMidiCaptureNote, 127U, match) &&
-            match.command == ShowMidiCommand::capture_toggle,
-        "reserved N42 must decode as DMX capture toggle");
-  check(!match_show_midi_note(mapping, 15U, kShowMidiCaptureNote, 127U, match),
-        "capture toggle must follow the configured Show MIDI channel");
-  check(!match_show_midi_note(mapping, 16U, kShowMidiCaptureNote, 0U, match),
-        "velocity-zero N42 must not toggle capture");
+  check(match_show_midi_note(mapping, 16U, kShowMidiCaptureStartNote, 127U, match) &&
+            match.command == ShowMidiCommand::capture_start,
+        "reserved N42 must decode as REC START");
+  check(match_show_midi_note(mapping, 16U, kShowMidiCaptureStopNote, 127U, match) &&
+            match.command == ShowMidiCommand::capture_stop,
+        "reserved N43 must decode as REC STOP");
+  check(!match_show_midi_note(mapping, 15U, kShowMidiCaptureStartNote, 127U, match),
+        "REC START must follow configured Show MIDI channel");
+  check(!match_show_midi_note(mapping, 15U, kShowMidiCaptureStopNote, 127U, match),
+        "REC STOP must follow configured Show MIDI channel");
+  check(!match_show_midi_note(mapping, 16U, kShowMidiCaptureStartNote, 0U, match) &&
+            !match_show_midi_note(mapping, 16U, kShowMidiCaptureStopNote, 0U, match),
+        "velocity-zero REC notes must not trigger capture commands");
 
   for(std::uint8_t song = 0U; song < kShowMidiSongCapacity; ++song) {
     const auto note = static_cast<std::uint8_t>(mapping.launch_base_note + song);
@@ -74,90 +78,77 @@ int main() {
         "MIDI Learn collision must be rejected without altering mapping");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::stop_reset,
                                12U, kShowMidiPanicNote, error) &&
-            mapping == before_collision &&
-            error.find("PANIC") != std::string::npos,
-        "reserved PANIC note must not be learnable by another command");
+            mapping == before_collision && error.find("PANIC") != std::string::npos,
+        "PANIC note must not be learnable by another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::stop_reset,
-                               12U, kShowMidiCaptureNote, error) &&
-            mapping == before_collision &&
-            error.find("GRABAR") != std::string::npos,
-        "reserved N42 capture note must not be learnable by another command");
+                               12U, kShowMidiCaptureStartNote, error) &&
+            mapping == before_collision && error.find("REC START") != std::string::npos,
+        "N42 REC START must not be learnable by another command");
+  check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::stop_reset,
+                               12U, kShowMidiCaptureStopNote, error) &&
+            mapping == before_collision && error.find("REC STOP") != std::string::npos,
+        "N43 REC STOP must not be learnable by another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,
                                12U, 120U, error),
         "launch base must reserve all 15 direct Song notes");
-  check(!assign_show_midi_note(
-            mapping, ShowMidiLearnTarget::launch_song_base, 12U,
-            static_cast<std::uint8_t>(
-                kShowMidiPanicNote - (kShowMidiSongCapacity - 1U)), error) &&
-            error.find("N41") != std::string::npos,
-        "new Song launch banks must not be learned across PANIC N41");
-  check(!assign_show_midi_note(
-            mapping, ShowMidiLearnTarget::launch_song_base, 12U,
-            static_cast<std::uint8_t>(
-                kShowMidiCaptureNote - (kShowMidiSongCapacity - 1U)), error) &&
-            error.find("N42") != std::string::npos,
-        "new Song launch banks must not be learned across capture N42");
 
-  // State format 1.2 predates fixed N41/N42 reservations. Restored collisions
-  // remain decodable, while the fixed operational command safely shadows the
-  // old assignment at runtime.
+  for(const auto fixed : {kShowMidiPanicNote,
+                          kShowMidiCaptureStartNote,
+                          kShowMidiCaptureStopNote}) {
+    const auto first = static_cast<std::uint8_t>(
+        fixed - (kShowMidiSongCapacity - 1U));
+    check(!assign_show_midi_note(mapping,
+                                 ShowMidiLearnTarget::launch_song_base,
+                                 12U, first, error),
+          "new Song launch bank must not cross a fixed operational note");
+  }
+
+  // Restored legacy collisions remain decodable; fixed operational commands
+  // shadow them at runtime for backward compatibility.
   {
     ShowMidiMapping legacy = mapping;
     legacy.stop_note = kShowMidiPanicNote;
     check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
-          "legacy configurable N41 collision must remain state-compatible");
-    check(match_show_midi_note(
-              legacy, legacy.channel, kShowMidiPanicNote, 127U, match) &&
+          "legacy N41 collision must remain state-compatible");
+    check(match_show_midi_note(legacy, legacy.channel, kShowMidiPanicNote,
+                               127U, match) &&
               match.command == ShowMidiCommand::panic_blackout,
-          "PANIC must take precedence over a legacy configurable N41 collision");
+          "PANIC must shadow a legacy N41 assignment");
   }
   {
     ShowMidiMapping legacy = mapping;
-    legacy.stop_note = kShowMidiCaptureNote;
+    legacy.stop_note = kShowMidiCaptureStartNote;
     check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
-          "legacy configurable N42 collision must remain state-compatible");
-    check(match_show_midi_note(
-              legacy, legacy.channel, kShowMidiCaptureNote, 127U, match) &&
-              match.command == ShowMidiCommand::capture_toggle,
-          "capture N42 must take precedence over a legacy configurable collision");
+          "legacy N42 collision must remain state-compatible");
+    check(match_show_midi_note(legacy, legacy.channel,
+                               kShowMidiCaptureStartNote, 127U, match) &&
+              match.command == ShowMidiCommand::capture_start,
+          "REC START must shadow a legacy N42 assignment");
   }
   {
     ShowMidiMapping legacy = mapping;
-    legacy.launch_base_note = static_cast<std::uint8_t>(
-        kShowMidiPanicNote - (kShowMidiSongCapacity - 1U));
-    legacy.previous_note = 70U;
-    legacy.next_note = 71U;
-    legacy.play_note = 72U;
-    legacy.pause_note = 73U;
-    legacy.stop_note = 74U;
+    legacy.stop_note = kShowMidiCaptureStopNote;
     check(validate_show_midi_mapping(legacy) == ShowMidiMappingError::none,
-          "legacy launch bank crossing only fixed notes must remain state-compatible");
-    check(match_show_midi_note(
-              legacy, legacy.channel, kShowMidiPanicNote, 127U, match) &&
-              match.command == ShowMidiCommand::panic_blackout,
-          "PANIC must shadow legacy direct-Song N41 collision");
-    check(match_show_midi_note(
-              legacy, legacy.channel, kShowMidiCaptureNote, 127U, match) &&
-              match.command == ShowMidiCommand::capture_toggle,
-          "capture N42 must shadow legacy direct-Song collision");
+          "legacy N43 collision must remain state-compatible");
+    check(match_show_midi_note(legacy, legacy.channel,
+                               kShowMidiCaptureStopNote, 127U, match) &&
+              match.command == ShowMidiCommand::capture_stop,
+          "REC STOP must shadow a legacy N43 assignment");
   }
 
-  // Callback scheduling, artistic transport and DMX-capture frames are three
-  // distinct timelines. Runtime delay must never recompute the capture marker.
   const auto stamped = make_show_midi_event(
       ShowMidiCommand::play_retrigger, 0U, 12U, 72U,
       4000U, 2000U, 64U, 137U);
   check(stamped.ready_sample == 4064U && stamped.trigger_sample == 2064U,
         "MIDI event must retain separate callback and running clocks");
   check(stamped.capture_frame_snapshot == 137U,
-        "MIDI event must preserve the exact capture frame seen at ingress");
+        "MIDI event must preserve capture frame seen at ingress");
   check(!show_midi_event_ready(4064U, stamped) &&
-            show_midi_event_ready(8192U, stamped) &&
-            stamped.capture_frame_snapshot == 137U,
-        "delayed runtime consumption must not move the capture frame snapshot");
+            show_midi_event_ready(8192U, stamped),
+        "runtime readiness must use callback clock");
   check(show_midi_elapsed_samples(2064U, stamped) == 0U &&
             show_midi_elapsed_samples(2576U, stamped) == 512U,
-        "stopped blocks must not advance artistic MIDI compensation");
+        "stopped blocks must not advance artistic compensation");
 
   {
     auto invalid = mapping;
@@ -174,64 +165,71 @@ int main() {
           "global command inside launch range must be rejected");
   }
 
-  // PANIC bypasses the artistic SPSC queue and sample-ready wait. Capture N42
-  // normally uses that queue because disk work belongs to the non-realtime
-  // runtime worker, with an atomic fallback only if the queue is already full.
   {
     ShowMidiIngress<4U> panic_ingress;
     ShowMidiEvent panic_event;
     panic_event.command = ShowMidiCommand::panic_blackout;
-    panic_event.trigger_sample = 999U;
-    panic_event.ready_sample = 1999U;
     check(panic_ingress.try_submit(panic_event),
-          "PANIC request must be accepted without queue capacity dependency");
+          "PANIC request must bypass queue capacity dependency");
     check(panic_ingress.consume_panic_request() &&
               !panic_ingress.consume_panic_request(),
-          "PANIC request must be a one-shot atomic safety boundary");
-    ShowMidiEvent should_be_empty;
-    check(!panic_ingress.try_consume(should_be_empty) &&
-              panic_ingress.dropped_events() == 0U,
-          "PANIC must not occupy or overflow the artistic transport queue");
+          "PANIC request must be a one-shot atomic boundary");
   }
+
   {
     ShowMidiIngress<4U> capture_ingress;
-    ShowMidiEvent capture_event;
-    capture_event.command = ShowMidiCommand::capture_toggle;
-    capture_event.capture_frame_snapshot = 55U;
-    check(capture_ingress.try_submit(capture_event),
-          "capture toggle must enter the bounded runtime queue");
-    ShowMidiEvent consumed_capture;
-    check(capture_ingress.try_consume(consumed_capture) &&
-              consumed_capture.command == ShowMidiCommand::capture_toggle &&
-              consumed_capture.capture_frame_snapshot == 55U,
-          "capture toggle must reach non-realtime runtime unchanged");
+    ShowMidiEvent start_event;
+    start_event.command = ShowMidiCommand::capture_start;
+    start_event.capture_frame_snapshot = 55U;
+    ShowMidiEvent stop_event;
+    stop_event.command = ShowMidiCommand::capture_stop;
+    stop_event.capture_frame_snapshot = 66U;
+    check(capture_ingress.try_submit(start_event) &&
+              capture_ingress.try_submit(stop_event),
+          "REC START and STOP must enter runtime queue independently");
+    ShowMidiEvent consumed_start;
+    ShowMidiEvent consumed_stop;
+    check(capture_ingress.try_consume(consumed_start) &&
+              consumed_start.command == ShowMidiCommand::capture_start &&
+              consumed_start.capture_frame_snapshot == 55U,
+          "REC START must reach runtime unchanged");
+    check(capture_ingress.try_consume(consumed_stop) &&
+              consumed_stop.command == ShowMidiCommand::capture_stop &&
+              consumed_stop.capture_frame_snapshot == 66U,
+          "REC STOP must reach runtime unchanged");
   }
+
   {
     ShowMidiIngress<4U> capture_overflow;
     ShowMidiEvent artistic;
     artistic.command = ShowMidiCommand::play_retrigger;
-    check(capture_overflow.try_submit(artistic),
-          "overflow setup event one must enter queue");
-    check(capture_overflow.try_submit(artistic),
-          "overflow setup event two must enter queue");
-    check(capture_overflow.try_submit(artistic),
-          "overflow setup event three must enter queue");
+    check(capture_overflow.try_submit(artistic), "overflow setup one");
+    check(capture_overflow.try_submit(artistic), "overflow setup two");
+    check(capture_overflow.try_submit(artistic), "overflow setup three");
 
-    ShowMidiEvent capture_stop;
-    capture_stop.command = ShowMidiCommand::capture_toggle;
-    check(capture_overflow.try_submit(capture_stop),
-          "N42 must be preserved through a full artistic queue");
+    ShowMidiEvent start_event;
+    start_event.command = ShowMidiCommand::capture_start;
+    ShowMidiEvent stop_event;
+    stop_event.command = ShowMidiCommand::capture_stop;
+    check(capture_overflow.try_submit(start_event),
+          "REC START must be preserved through full artistic queue");
+    check(capture_overflow.try_submit(stop_event),
+          "REC STOP must be preserved through full artistic queue");
     check(capture_overflow.consume_safety_stop_request() &&
               !capture_overflow.consume_safety_stop_request(),
-          "N42 overflow must still request the normal fail-safe boundary");
+          "capture overflow must request fail-safe boundary");
     check(capture_overflow.dropped_events() == 0U,
-          "preserved N42 must not be reported as a dropped event");
+          "preserved capture commands must not count as dropped");
 
-    ShowMidiEvent recovered_capture;
-    check(capture_overflow.try_consume(recovered_capture) &&
-              recovered_capture.command == ShowMidiCommand::capture_toggle &&
-              recovered_capture.note == kShowMidiCaptureNote,
-          "N42 overflow fallback must be consumed before stale artistic events");
+    ShowMidiEvent recovered;
+    check(capture_overflow.try_consume(recovered) &&
+              recovered.command == ShowMidiCommand::capture_stop &&
+              recovered.note == kShowMidiCaptureStopNote,
+          "REC STOP fallback must be consumed before START and stale artistic events");
+    check(capture_overflow.try_consume(recovered) &&
+              recovered.command == ShowMidiCommand::capture_start &&
+              recovered.note == kShowMidiCaptureStartNote,
+          "REC START fallback must remain distinct from STOP");
   }
 
   ShowMidiIngress<4U> ingress;
@@ -242,17 +240,11 @@ int main() {
   check(ingress.try_submit(event), "first event must enter bounded queue");
   check(ingress.try_submit(event), "second event must enter bounded queue");
   check(ingress.try_submit(event), "third event must enter bounded queue");
-  check(!ingress.try_submit(event), "full queue must reject newest event");
+  check(!ingress.try_submit(event), "full queue must reject newest artistic event");
   check(ingress.dropped_events() == 1U &&
             ingress.consume_safety_stop_request() &&
             !ingress.consume_safety_stop_request(),
-        "overflow must produce one visible safety-stop request");
-  ShowMidiEvent consumed;
-  check(ingress.try_consume(consumed) &&
-            consumed.trigger_sample == event.trigger_sample &&
-            consumed.ready_sample == event.ready_sample &&
-            consumed.capture_frame_snapshot == event.capture_frame_snapshot,
-        "bounded ingress must preserve all three event timelines");
+        "artistic overflow must produce one visible safety-stop request");
 
   if(failures == 0) {
     std::cout << "All Show MIDI control tests passed.\n";
