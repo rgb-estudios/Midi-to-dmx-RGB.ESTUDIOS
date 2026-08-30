@@ -7,9 +7,7 @@ on:
       - "src/**"
       - "tools/maintenance/macos/**"
       - "tools/packaging/macos/**"
-      - "docs/AEYLA_R08_ABLETON_MACOS_PRETEST_ES.md"
-      - "docs/AEYLA_R08_FIELD_PRETEST_ES.md"
-      - "docs/AEYLA_R08_HANDOFF_ES.md"
+      - "docs/AEYLA_R10_FIELD_PRETEST_ES.md"
       - ".github/workflows/ableton-macos-pretest.yml"
   workflow_dispatch:
 
@@ -118,13 +116,13 @@ jobs:
           sleep 2
           auval -v aumu AyVD RGBE
 
-      - name: Stage Ableton macOS PRETEST bundle
+      - name: Stage Ableton macOS R10 PRETEST bundle
         shell: bash
         run: |
           set -euo pipefail
           vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
           au="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
-          stage="$GITHUB_WORKSPACE/AEYLA-R08-ABLETON-macOS-PRETEST"
+          stage="$GITHUB_WORKSPACE/AEYLA-R10.0-ABLETON-macOS-PRETEST"
           mkdir -p "$stage/VST3" "$stage/AUv2"
           ditto "$vst3" "$stage/VST3/AeylaVisualDmx.vst3"
           ditto "$au" "$stage/AUv2/AeylaVisualDmx.component"
@@ -134,10 +132,32 @@ jobs:
           cp tools/packaging/macos/UNINSTALL_AEYLA.command "$stage/"
           cp tools/packaging/macos/AUDIT_AEYLA.command "$stage/"
           cp tools/packaging/macos/AEYLA_NETWORK_PREFLIGHT.command "$stage/"
-          cp docs/AEYLA_R08_ABLETON_MACOS_PRETEST_ES.md "$stage/README_ABLETON_MACOS_ES.md"
-          cp docs/AEYLA_R08_FIELD_PRETEST_ES.md "$stage/R08_FIELD_PRETEST_ES.md"
-          cp docs/AEYLA_R08_HANDOFF_ES.md "$stage/R08_HANDOFF_ES.md"
-          printf 'SOURCE_COMMIT=%s\nFORMAT_PRIMARY=VST3\nFORMAT_SECONDARY=AUv2\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\nHOST_STATE_SCHEMA=1.3\nSTATUS=PRETEST_NOT_SHOW_CANDIDATE\n' \
+          cp docs/AEYLA_R10_FIELD_PRETEST_ES.md "$stage/R10_FIELD_PRETEST_ES.md"
+
+          cat > "$stage/README_ABLETON_MACOS_ES.md" <<'EOF'
+          # AEYLA Visual DMX R10.0 — Ableton macOS PRETEST
+
+          **Estado:** PRETEST_NOT_SHOW_CANDIDATE.
+
+          ## Instalación
+          1. Cierra Ableton, Logic y cualquier host de audio.
+          2. Ejecuta `INSTALL_AEYLA_ABLETON.command` para VST3, o el instalador general si necesitas también AUv2.
+          3. Confirma `BUILD_ID.txt`: SOURCE_COMMIT correcto, arm64+x86_64 y HOST_STATE_SCHEMA=1.4.
+
+          ## Contrato actual
+          - REC START y REC STOP son separados: defaults N42/N43.
+          - AEYLA no usa MTC para fijar ZERO.
+          - N41 PANIC nunca rearma.
+          - ARM es manual y el carrier debe permanecer transmitiendo ~44 Hz durante STOP/PAUSA normal del DAW.
+          - PREPARADA no sustituye AL AIRE hasta PLAY/GO explícito.
+          - EN VIVO usa memorias masked/LTP: FRONTAL, HUMO / HAZE, BASE BLANCA y TEST LUMINARIAS.
+          - Aprendizaje desde Avolites: snapshot OFF, luego snapshot ON; sólo canales modificados entran en la máscara.
+          - MIDI Learn y persistencia de memorias R10 todavía no están cerrados.
+
+          Ejecuta `R10_FIELD_PRETEST_ES.md` completo. CI/auval/validator en PASS no equivalen a Show Ready.
+          EOF
+
+          printf 'SOURCE_COMMIT=%s\nFORMAT_PRIMARY=VST3\nFORMAT_SECONDARY=AUv2\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\nHOST_STATE_SCHEMA=1.4\nBUILD_KIND=R10_ABLETON_MACOS_PRETEST\nSTATUS=PRETEST_NOT_SHOW_CANDIDATE\n' \
             "$AEYLA_SOURCE_SHA" > "$stage/BUILD_ID.txt"
           chmod +x "$stage"/*.command "$stage"/*.sh
           (
@@ -150,7 +170,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AEYLA-R08-ABLETON-macOS-Universal-PRETEST
-          path: AEYLA-R08-ABLETON-macOS-PRETEST
+          name: AEYLA-R10.0-ABLETON-macOS-Universal-PRETEST
+          path: AEYLA-R10.0-ABLETON-macOS-PRETEST
           if-no-files-found: error
           retention-days: 90
