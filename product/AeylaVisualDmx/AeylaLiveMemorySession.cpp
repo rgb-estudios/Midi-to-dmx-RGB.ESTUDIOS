@@ -11,6 +11,7 @@ namespace aeyla::live_memory_session {
 namespace {
 
 constexpr std::uint8_t kLiveCcMarker = 1U;
+constexpr float kEditIdleEpsilon = 0.0001F;
 
 struct SlotState {
   output::LiveMemoryDefinition definition{};
@@ -133,6 +134,22 @@ bool set_fader_locked(SessionState& session,
   return session.output_worker->set_live_memory_level(index, normalized, true);
 }
 
+bool edit_blocked_locked(SessionState& session,
+                         std::size_t index) noexcept {
+  if(index >= session.slots.size() || session.output_worker == nullptr ||
+     !session.slots[index].configured)
+    return false;
+  const auto runtime = session.output_worker->live_memory_snapshot(index);
+  return runtime.transitioning || runtime.level > kEditIdleEpsilon ||
+         runtime.target_level > kEditIdleEpsilon;
+}
+
+ActionResult active_edit_blocked(const SlotState& slot) {
+  return {false,
+          slot.definition.name +
+              " · edición bloqueada mientras la memoria está activa/fundiendo; llévala a OFF / 0% primero"};
+}
+
 }  // namespace
 
 void register_runtime(const void* owner,
@@ -210,6 +227,10 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   if(session.capture_worker == nullptr || session.output_worker == nullptr)
     return {false, "El runtime de red EN VIVO no está disponible"};
 
+  auto& slot = session.slots[index];
+  if(edit_blocked_locked(session, index))
+    return active_edit_blocked(slot);
+
   const auto stats = session.capture_worker->stats();
   if(!stats.running)
     return {false, "Art-Net RX no está activo · revisa RED / SALIDA"};
@@ -220,7 +241,6 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   if(!session.capture_worker->latest_frame(rx))
     return {false, "Avolites aún no entregó un frame DMX completo"};
 
-  auto& slot = session.slots[index];
   if(!slot.learn_pending) {
     slot.learn_baseline = rx;
     slot.learn_pending = true;
@@ -330,6 +350,9 @@ ActionResult cycle_fade(const void* owner,
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
+  if(edit_blocked_locked(session, index))
+    return active_edit_blocked(slot);
+
   const auto current = std::find(kFadePresetsMs.begin(),
                                  kFadePresetsMs.end(),
                                  slot.definition.fade_ms);
@@ -357,6 +380,9 @@ ActionResult toggle_mode(const void* owner, std::size_t index) {
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
+  if(edit_blocked_locked(session, index))
+    return active_edit_blocked(slot);
+
   slot.definition.mode =
       slot.definition.mode == output::LiveMemoryControlMode::toggle
           ? output::LiveMemoryControlMode::fader
