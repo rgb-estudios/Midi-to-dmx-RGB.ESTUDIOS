@@ -11,10 +11,11 @@
 namespace aeyla::runtime {
 
 inline constexpr std::size_t kShowMidiSongCapacity = 15U;
-// Fixed R08 operational controls intentionally do not expand the persisted MIDI
-// map. This keeps PRETEST state-format 1.2 readable across Windows/macOS.
+// Fixed operational safety/recording controls remain outside the persisted
+// legacy MIDI map. They intentionally shadow any restored legacy collision.
 inline constexpr std::uint8_t kShowMidiPanicNote = 41U;
-inline constexpr std::uint8_t kShowMidiCaptureNote = 42U;
+inline constexpr std::uint8_t kShowMidiCaptureStartNote = 42U;
+inline constexpr std::uint8_t kShowMidiCaptureStopNote = 43U;
 
 enum class ShowMidiCommand : std::uint8_t {
   previous_song = 0,
@@ -23,7 +24,8 @@ enum class ShowMidiCommand : std::uint8_t {
   pause_resume,
   stop_reset,
   panic_blackout,
-  capture_toggle,
+  capture_start,
+  capture_stop,
   launch_song,
 };
 
@@ -39,8 +41,9 @@ enum class ShowMidiLearnTarget : std::uint8_t {
 
 // Defaults deliberately live on MIDI channel 16 and remain disabled until the
 // operator explicitly enables Show control. Direct Song launch occupies 15
-// consecutive notes. All configurable values are persisted in VST3 component
-// state; PANIC N41 and CAPTURE N42 are fixed runtime reservations.
+// consecutive notes. Configurable artistic values are persisted in VST3
+// component state; PANIC N41, REC START N42 and REC STOP N43 are fixed runtime
+// reservations so recording commands are unambiguous and fail-safe.
 struct ShowMidiMapping {
   bool enabled{false};
   std::uint8_t channel{16U};
@@ -80,10 +83,9 @@ struct ShowMidiEvent {
   // offset. This lets the runtime wait for the event's block even when the DAW
   // is stopped, without contaminating the artistic cursor above.
   std::uint64_t ready_sample{0U};
-  // Snapshot of the deterministic 44 Hz capture timeline taken in the MIDI
-  // callback itself. The runtime may process this event milliseconds later;
-  // carrying the snapshot prevents that scheduling delay from moving the
-  // non-destructive capture IN marker by one or more DMX frames.
+  // Snapshot of the deterministic 44 Hz capture timeline taken at MIDI ingress.
+  // Kept for diagnostics/backward compatibility; REC START itself is the new
+  // capture origin and does not depend on MTC or a later transport marker.
   std::uint64_t capture_frame_snapshot{0U};
 };
 
@@ -143,13 +145,16 @@ class ShowMidiIngress final {
     if(queue_.try_push(event))
       return true;
 
-    // N42 is also operational rather than artistic. If the bounded queue is
-    // already saturated, preserve the toggle in a separate atomic fallback so
-    // a capture STOP cannot disappear and leave RAW writing indefinitely. The
-    // queue overflow still requests the normal fail-safe blackout/disarm. The
-    // runtime will consume this fallback on the next tick before queued events.
-    if(event.command == ShowMidiCommand::capture_toggle) {
-      capture_fallback_requests_.fetch_add(1U, std::memory_order_release);
+    // REC START/STOP are operational rather than artistic. Preserve their
+    // semantics separately on overflow so STOP can never turn into START (the
+    // principal risk of the former toggle design). STOP is consumed first.
+    if(event.command == ShowMidiCommand::capture_stop) {
+      capture_stop_fallback_requests_.fetch_add(1U, std::memory_order_release);
+      safety_stop_requested_.store(true, std::memory_order_release);
+      return true;
+    }
+    if(event.command == ShowMidiCommand::capture_start) {
+      capture_start_fallback_requests_.fetch_add(1U, std::memory_order_release);
       safety_stop_requested_.store(true, std::memory_order_release);
       return true;
     }
@@ -160,15 +165,28 @@ class ShowMidiIngress final {
   }
 
   [[nodiscard]] bool try_consume(ShowMidiEvent& event) noexcept {
-    auto pending_capture = capture_fallback_requests_.load(
+    auto pending_stop = capture_stop_fallback_requests_.load(
         std::memory_order_acquire);
-    while(pending_capture > 0U) {
-      if(capture_fallback_requests_.compare_exchange_weak(
-             pending_capture, pending_capture - 1U,
+    while(pending_stop > 0U) {
+      if(capture_stop_fallback_requests_.compare_exchange_weak(
+             pending_stop, pending_stop - 1U,
              std::memory_order_acq_rel, std::memory_order_acquire)) {
         event = {};
-        event.command = ShowMidiCommand::capture_toggle;
-        event.note = kShowMidiCaptureNote;
+        event.command = ShowMidiCommand::capture_stop;
+        event.note = kShowMidiCaptureStopNote;
+        return true;
+      }
+    }
+
+    auto pending_start = capture_start_fallback_requests_.load(
+        std::memory_order_acquire);
+    while(pending_start > 0U) {
+      if(capture_start_fallback_requests_.compare_exchange_weak(
+             pending_start, pending_start - 1U,
+             std::memory_order_acq_rel, std::memory_order_acquire)) {
+        event = {};
+        event.command = ShowMidiCommand::capture_start;
+        event.note = kShowMidiCaptureStartNote;
         return true;
       }
     }
@@ -190,7 +208,8 @@ class ShowMidiIngress final {
  private:
   SpscQueue<ShowMidiEvent, StorageCapacity> queue_{};
   std::atomic<std::uint64_t> dropped_events_{0U};
-  std::atomic<std::uint32_t> capture_fallback_requests_{0U};
+  std::atomic<std::uint32_t> capture_start_fallback_requests_{0U};
+  std::atomic<std::uint32_t> capture_stop_fallback_requests_{0U};
   std::atomic<bool> panic_requested_{false};
   std::atomic<bool> safety_stop_requested_{false};
 };
