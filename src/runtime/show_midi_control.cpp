@@ -85,9 +85,9 @@ ShowMidiMappingError validate_show_midi_mapping(
      }))
     return ShowMidiMappingError::invalid_note;
 
-  // State format 1.2 predates fixed N41/N42 reservations. Legacy component
-  // state must remain decodable; fixed commands shadow collisions at runtime.
-  // MIDI Learn below prevents creating new collisions.
+  // Legacy state predates fixed N41/N42/N43 reservations. Restored collisions
+  // remain decodable; fixed operational commands shadow them at runtime. MIDI
+  // Learn below prevents creating new collisions.
   for(std::size_t left = 0U; left < notes.size(); ++left) {
     if(inside_launch_range(mapping, notes[left]))
       return ShowMidiMappingError::duplicate_note;
@@ -111,8 +111,10 @@ bool match_show_midi_note(const ShowMidiMapping& mapping,
   // Fixed operational controls always win over a legacy mapping collision.
   if(note == kShowMidiPanicNote)
     match.command = ShowMidiCommand::panic_blackout;
-  else if(note == kShowMidiCaptureNote)
-    match.command = ShowMidiCommand::capture_toggle;
+  else if(note == kShowMidiCaptureStartNote)
+    match.command = ShowMidiCommand::capture_start;
+  else if(note == kShowMidiCaptureStopNote)
+    match.command = ShowMidiCommand::capture_stop;
   else if(note == mapping.previous_note)
     match.command = ShowMidiCommand::previous_song;
   else if(note == mapping.next_note)
@@ -145,16 +147,22 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
 
   if(target == ShowMidiLearnTarget::launch_song_base) {
     if(range_contains_fixed_note(note, kShowMidiPanicNote) ||
-       range_contains_fixed_note(note, kShowMidiCaptureNote)) {
+       range_contains_fixed_note(note, kShowMidiCaptureStartNote) ||
+       range_contains_fixed_note(note, kShowMidiCaptureStopNote)) {
       error_message =
-          "El rango de canciones no puede incluir N41 PANIC ni N42 GRABAR";
+          "El rango de canciones no puede incluir N41 PANIC, N42 REC START ni N43 REC STOP";
       return false;
     }
   }
-  else if(note == kShowMidiPanicNote || note == kShowMidiCaptureNote) {
-    error_message = note == kShowMidiPanicNote
-        ? "La nota 41 está reservada para PANIC / APAGÓN"
-        : "La nota 42 está reservada para GRABAR / DETENER CAPTURA";
+  else if(note == kShowMidiPanicNote ||
+          note == kShowMidiCaptureStartNote ||
+          note == kShowMidiCaptureStopNote) {
+    if(note == kShowMidiPanicNote)
+      error_message = "La nota 41 está reservada para PANIC / APAGÓN";
+    else if(note == kShowMidiCaptureStartNote)
+      error_message = "La nota 42 está reservada para REC START";
+    else
+      error_message = "La nota 43 está reservada para REC STOP";
     return false;
   }
 
