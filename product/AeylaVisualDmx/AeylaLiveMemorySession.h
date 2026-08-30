@@ -59,6 +59,7 @@ void clear(const void* owner) noexcept;
 [[nodiscard]] ActionResult restore_persistent_state(
     const void* owner,
     const project::LiveMemoryPersistentState& state);
+[[nodiscard]] bool persistence_dirty(const void* owner) noexcept;
 [[nodiscard]] bool consume_persistence_dirty(const void* owner) noexcept;
 
 // Two-step learn from Avolites:
