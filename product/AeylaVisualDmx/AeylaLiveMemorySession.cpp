@@ -10,6 +10,8 @@
 namespace aeyla::live_memory_session {
 namespace {
 
+constexpr std::uint8_t kLiveCcMarker = 1U;
+
 struct SlotState {
   output::LiveMemoryDefinition definition{};
   bool configured{false};
@@ -70,16 +72,6 @@ std::string fade_label(std::uint32_t fade_ms) {
   if(fade_ms == 1000U) return "1.0 s";
   if(fade_ms == 1500U) return "1.5 s";
   return std::to_string(fade_ms) + " ms";
-}
-
-std::string midi_label(const SlotState& slot) {
-  if(slot.midi_kind == MidiBindingKind::note)
-    return "NOTE N" + std::to_string(slot.midi_number) + " CH" +
-           std::to_string(slot.midi_channel);
-  if(slot.midi_kind == MidiBindingKind::control_change)
-    return "CC" + std::to_string(slot.midi_number) + " CH" +
-           std::to_string(slot.midi_channel);
-  return "SIN MIDI";
 }
 
 bool reconfigure_locked(SessionState& session,
@@ -150,16 +142,10 @@ void register_runtime(const void* owner,
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
 
-  // Normal UI polling may call this on every frame. Re-registering the exact
-  // same runtime must therefore be a strict no-op; otherwise simply drawing the
-  // EN VIVO page would reset an active fade to OFF.
   if(session.output_worker == output_worker &&
      session.capture_worker == capture_worker)
     return;
 
-  // If a DAW reused the same object address for a new plugin instance, stale
-  // learned state must never leak into the new runtime. Different member
-  // pointers are treated as a new instance identity and start from safe OFF.
   if(session.output_worker != nullptr || session.capture_worker != nullptr) {
     clear_worker_definitions(session);
     initialize_session(session);
@@ -376,9 +362,6 @@ ActionResult toggle_mode(const void* owner, std::size_t index) {
           ? output::LiveMemoryControlMode::fader
           : output::LiveMemoryControlMode::toggle;
 
-  // Note and CC semantics are intentionally not interchangeable. Changing the
-  // operator control type invalidates its old MIDI mapping instead of silently
-  // interpreting a note as a continuous fader or vice versa.
   clear_binding(slot);
 
   std::string error;
@@ -429,19 +412,17 @@ bool process_midi_event(const void* owner,
   const auto iterator = gSessions.find(owner);
   if(iterator == gSessions.end()) return false;
   auto& session = iterator->second;
+  const bool isLiveCc = event.reserved == kLiveCcMarker;
 
-  // Learn has priority inside the live-memory domain, but reserved SHOW/PANIC
-  // MIDI never reaches this function because ProcessMidiMsg routes it first.
   for(std::size_t index = 0U; index < session.slots.size(); ++index) {
     auto& slot = session.slots[index];
     if(!slot.midi_learn_pending) continue;
 
     const bool wantsNote =
         slot.definition.mode == output::LiveMemoryControlMode::toggle;
-    const bool validNote = wantsNote &&
+    const bool validNote = wantsNote && !isLiveCc &&
         event.type == runtime::HostEventType::note_on && event.value > 0.0F;
-    const bool validCc = !wantsNote &&
-        event.type == runtime::HostEventType::control_change;
+    const bool validCc = !wantsNote && isLiveCc;
     if(!validNote && !validCc)
       return false;
 
@@ -466,18 +447,15 @@ bool process_midi_event(const void* owner,
        slot.midi_number != event.note)
       continue;
 
-    if(slot.midi_kind == MidiBindingKind::note &&
+    if(slot.midi_kind == MidiBindingKind::note && !isLiveCc &&
        (event.type == runtime::HostEventType::note_on ||
         event.type == runtime::HostEventType::note_off)) {
       if(event.type == runtime::HostEventType::note_on && event.value > 0.0F)
         (void)toggle_locked(session, index);
-      // Consume note-off too so a learned live-memory Note cannot also release
-      // an unrelated authored cue/executor in the underlying show runtime.
       return true;
     }
 
-    if(slot.midi_kind == MidiBindingKind::control_change &&
-       event.type == runtime::HostEventType::control_change) {
+    if(slot.midi_kind == MidiBindingKind::control_change && isLiveCc) {
       (void)set_fader_locked(session, index, event.value);
       return true;
     }
