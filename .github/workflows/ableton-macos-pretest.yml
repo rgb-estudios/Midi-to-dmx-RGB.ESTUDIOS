@@ -140,9 +140,13 @@ jobs:
           printf 'SOURCE_COMMIT=%s\nFORMAT_PRIMARY=VST3\nFORMAT_SECONDARY=AUv2\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\nHOST_STATE_SCHEMA=1.3\nSTATUS=PRETEST_NOT_SHOW_CANDIDATE\n' \
             "$AEYLA_SOURCE_SHA" > "$stage/BUILD_ID.txt"
           chmod +x "$stage"/*.command "$stage"/*.sh
-          shasum -a 256 "$stage/VST3/AeylaVisualDmx.vst3/Contents/MacOS/"* \
-            "$stage/AUv2/AeylaVisualDmx.component/Contents/MacOS/"* \
-            > "$stage/SHA256SUMS.txt"
+          (
+            cd "$stage"
+            shasum -a 256 \
+              "VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx" \
+              "AUv2/AeylaVisualDmx.component/Contents/MacOS/AeylaVisualDmx" \
+              > "SHA256SUMS.txt"
+          )
 
       - uses: actions/upload-artifact@v4
         with:
