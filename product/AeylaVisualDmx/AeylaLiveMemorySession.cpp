@@ -292,7 +292,7 @@ ActionResult restore_persistent_state(
     const void* owner,
     const project::LiveMemoryPersistentState& state) {
   if(owner == nullptr)
-    return {false, "No hay instancia AEYLA para restaurar memorias EN VIVO"};
+    return {false, "No hay instancia RGB Live Control para restaurar memorias EN VIVO"};
 
   const auto diagnostics = project::validate_live_memory_persistent_state(state);
   if(!diagnostics.empty())
@@ -377,7 +377,7 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
 
   const auto stats = session.capture_worker->stats();
   if(!stats.running)
-    return {false, "Art-Net RX no está activo · revisa RED / SALIDA"};
+    return {false, "Art-Net RX no está activo · revisa SISTEMA"};
   if(!stats.signal_present)
     return {false, "No hay señal Art-Net de Avolites para aprender la memoria"};
 
@@ -390,8 +390,7 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
     slot.learn_pending = true;
     return {true,
             slot.definition.name +
-                " · PASO 1/2 listo: referencia Avolites capturada. "
-                "Activa sólo esta memoria en Avolites y presiona APRENDER nuevamente"};
+                " · PASO 1/2 CAPTURADO (OFF). Activa sólo esta memoria en Avolites y ejecuta PASO 2/2 CAPTURAR ON"};
   }
 
   output::LiveMemoryMask mask;
@@ -402,8 +401,7 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   if(!mask.any()) {
     return {false,
             slot.definition.name +
-                " · no se detectaron cambios DMX. Mantengo el PASO 1; "
-                "activa la memoria en Avolites y vuelve a presionar APRENDER"};
+                " · PASO 2/2 sin cambios DMX. Mantengo el OFF capturado; activa sólo la memoria objetivo en Avolites y repite CAPTURAR ON"};
   }
 
   auto learned = slot.definition;
@@ -419,7 +417,7 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   session.persistence_dirty = true;
   const auto changed = mask.count();
   return {true,
-          slot.definition.name + " APRENDIDA · " +
+          slot.definition.name + " · DMX OK · " +
               std::to_string(changed) + " canales · fade " +
               fade_label(slot.definition.fade_ms) +
               " · estado inicial OFF"};
@@ -432,7 +430,7 @@ ActionResult cancel_learn(const void* owner, std::size_t index) {
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
   slot.learn_pending = false;
-  return {true, slot.definition.name + " · aprendizaje cancelado"};
+  return {true, slot.definition.name + " · aprendizaje DMX cancelado"};
 }
 
 ActionResult toggle(const void* owner, std::size_t index) {
@@ -442,7 +440,7 @@ ActionResult toggle(const void* owner, std::size_t index) {
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
   if(!slot.configured)
-    return {false, slot.definition.name + " · primero APRENDER desde Avolites"};
+    return {false, slot.definition.name + " · SIN DMX: configura 1/2 OFF y 2/2 ON antes de operar"};
   if(session.output_worker == nullptr)
     return {false, "La salida Art-Net EN VIVO no está disponible"};
   if(!toggle_locked(session, index))
@@ -465,7 +463,7 @@ ActionResult set_fader_level(const void* owner,
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
   if(!slot.configured)
-    return {false, slot.definition.name + " · primero APRENDER desde Avolites"};
+    return {false, slot.definition.name + " · SIN DMX: configura 1/2 OFF y 2/2 ON antes de operar"};
   if(slot.definition.mode != output::LiveMemoryControlMode::fader)
     return {false, slot.definition.name + " está configurada como BOTÓN / TOGGLE"};
   if(session.output_worker == nullptr)
@@ -554,9 +552,11 @@ ActionResult arm_midi_learn(const void* owner, std::size_t index) {
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
-  if(!slot.configured)
-    return {false, slot.definition.name + " · primero APRENDER DMX desde Avolites"};
 
+  // MIDI is configuration metadata, not physical output authority. It can be
+  // authored before DMX Learn so the operator can prepare all controls without
+  // requiring the Avolites source to be in a particular state. A learned MIDI
+  // event remains inert physically until the slot has a valid sparse DMX mask.
   for(auto& candidate : session.slots)
     candidate.midi_learn_pending = false;
   slot.midi_learn_pending = true;
@@ -564,8 +564,9 @@ ActionResult arm_midi_learn(const void* owner, std::size_t index) {
   return {true,
           slot.definition.name +
               (slot.definition.mode == output::LiveMemoryControlMode::toggle
-                   ? " · MIDI LEARN: presiona una NOTA"
-                   : " · MIDI LEARN: mueve un FADER/KNOB CC")};
+                   ? " · MIDI LEARN: presiona una NOTA; el primer gesto sólo asigna"
+                   : " · MIDI LEARN: mueve un FADER/KNOB CC; el primer gesto sólo asigna") +
+              (slot.configured ? "" : " · DMX puede aprenderse después")};
 }
 
 ActionResult clear_midi_binding(const void* owner, std::size_t index) {
