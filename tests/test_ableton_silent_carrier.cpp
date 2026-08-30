@@ -108,9 +108,8 @@ int main() {
   require(output.stats().sent_packets >= packets_before_silence + 20U,
           "Art-Net carrier did not continue while stopped callbacks were stale");
 
-  // A fresh running callback re-establishes the sample clock. Once playback
-  // actually consumes that clock, losing it is a real synchronization fault
-  // and must fail closed.
+  // A fresh running callback re-establishes the sample clock. Playback owns a
+  // relative sample cursor, while ARM owns physical Art-Net authority.
   host.publish(true, false, 0.0, 0.0, 120.0);
   require(wait_until([&]() { return scheduler.status().host_heartbeat_ok; }),
           "fresh host callback did not restore heartbeat");
@@ -119,9 +118,49 @@ int main() {
   require(wait_until([&]() { return scheduler.status().playing; }),
           "sample-clock playback did not enter PLAYING");
 
+  // This is the live-show regression that R09.1 did not cover: PLAY -> DAW
+  // STOP/PAUSE -> suspended callbacks -> DAW PLAY, repeated. RUNNING=false is
+  // an intentional clock hold, not a host failure. The cursor must freeze and
+  // the Art-Net endpoint must remain leased and continuously transmitting.
+  for(int cycle = 0; cycle < 3; ++cycle) {
+    const auto before_stop = scheduler.status();
+    const auto packets_before_stop = output.stats().sent_packets;
+    host.publish(false, false,
+                 static_cast<double>((cycle + 1) * 4800),
+                 0.0, 120.0);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(850));
+    const auto held = scheduler.status();
+    require(held.armed,
+            "intentional DAW STOP/PAUSE disarmed the Take authority");
+    require(!held.host_heartbeat_ok,
+            "stopped-host fixture did not age the literal heartbeat");
+    require(output.override_enabled(),
+            "Art-Net override disappeared during intentional DAW STOP/PAUSE");
+    require(held.current_frame == before_stop.current_frame,
+            "DMX cursor moved while the DAW sample clock was stopped");
+    require(output.stats().sent_packets >= packets_before_stop + 15U,
+            "Art-Net carrier stopped retransmitting the held frame");
+
+    host.publish(true, false,
+                 static_cast<double>((cycle + 1) * 4800),
+                 0.0, 120.0);
+    require(wait_until([&]() { return scheduler.status().host_heartbeat_ok; }),
+            "DAW PLAY did not restore the sample-clock heartbeat");
+    scheduler.advance_samples(2400U, false);
+    require(wait_until([&]() {
+      return scheduler.status().current_frame > held.current_frame;
+    }), "DMX cursor did not continue after DAW PLAY resumed");
+    require(scheduler.status().armed && output.override_enabled(),
+            "DAW PLAY required an illegal manual Art-Net re-arm");
+  }
+
+  // Distinguish an intentional stopped host from a real failure. Here the last
+  // authoritative snapshot still says RUNNING=true and callbacks disappear;
+  // the sample clock is genuinely lost, so fail-closed remains mandatory.
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   require(wait_until([&]() { return !scheduler.status().armed; }),
-          "PLAYING sample-clock take did not fail closed after heartbeat loss");
+          "PLAYING sample-clock take did not fail closed after real heartbeat loss");
   require(!output.override_enabled(),
           "Art-Net override remained authoritative after PLAY clock loss");
 
@@ -130,6 +169,6 @@ int main() {
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
 
-  std::cout << "AEYLA Ableton silent-carrier PASS: stopped authority survives DSP suspension; PLAY clock loss fails closed\n";
+  std::cout << "AEYLA silent-carrier PASS: repeated DAW STOP/PLAY keeps carrier; real PLAY heartbeat loss fails closed\n";
   return EXIT_SUCCESS;
 }
