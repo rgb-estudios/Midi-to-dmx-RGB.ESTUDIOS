@@ -1,6 +1,7 @@
 #pragma once
 
 #include "capture/dmx_take_activity.h"
+#include "runtime/plugin_state.h"
 
 #include <array>
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace aeyla::take_library_session {
 
@@ -31,6 +33,17 @@ struct TakeEditState {
   std::size_t activity_count{0U};
 };
 
+struct HostTakeStateSnapshot {
+  std::string library_locator;
+  std::vector<aeyla::runtime::SessionTakeBinding> bindings;
+};
+
+struct PersistedRestoreStatus {
+  bool library_resolved{false};
+  std::size_t restored_bindings{0U};
+  std::size_t missing_bindings{0U};
+};
+
 void clear(const void* owner) noexcept;
 
 // Evita heredar rutas/ediciones de otra instancia si el host reutiliza la
@@ -50,6 +63,21 @@ void set_edit_state(const void* owner, std::string_view song_id,
 [[nodiscard]] std::optional<TakeEditState> edit_state(
     const void* owner, std::string_view song_id);
 void clear_edit_state(const void* owner, std::string_view song_id) noexcept;
+
+// Host-state 1.3 bridge. The saved locator is attempted only when that exact
+// directory exists on the current machine. A cross-platform move therefore
+// remains fail-closed; selecting the Take library once on the destination
+// machine re-applies the persisted basename + IN/OUT bindings automatically.
+void stage_persisted_state(
+    const void* owner,
+    std::string_view project_id,
+    std::string library_locator,
+    std::vector<aeyla::runtime::SessionTakeBinding> bindings);
+[[nodiscard]] PersistedRestoreStatus restore_persisted_state(
+    const void* owner);
+[[nodiscard]] HostTakeStateSnapshot snapshot_for_host(
+    const void* owner,
+    const std::vector<std::string>& song_ids);
 
 // Caches an unavailable/empty lookup so a Song without Takes does not
 // enumerate the library twice per UI frame. Loading or setting an edit state

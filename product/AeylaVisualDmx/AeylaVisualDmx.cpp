@@ -131,6 +131,10 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   mShowMidiMappingPacked.store(aeyla::runtime::pack_show_midi_mapping(
                                    mHostStateCache.show_midi),
                                std::memory_order_release);
+  mShowMidiCaptureStartNote.store(mHostStateCache.show_midi.capture_start_note,
+                                  std::memory_order_release);
+  mShowMidiCaptureStopNote.store(mHostStateCache.show_midi.capture_stop_note,
+                                 std::memory_order_release);
 
 #if IPLUG_EDITOR
   mMakeGraphicsFunc = [&]() {
@@ -193,6 +197,21 @@ void AeylaVisualDmx::ProcessBlock(sample** inputs, sample** outputs, int nFrames
   // Seek and Loop must never relocate or duplicate a relative DMX clip.
   const bool renderingOffline = GetRenderingOffline();
   const bool transportRunning = GetTransportIsRunning();
+
+  // Timestamp the capture cursor before publishing RUNNING to the host mailbox.
+  // If RuntimeTick observes the new transport state, this release sequence makes
+  // the corresponding 44 Hz capture marker visible first. Only atomics are used
+  // here; the non-realtime worker owns the sync state machine itself.
+  const bool transportWasRunning = mAudioTransportRunning.exchange(
+      transportRunning, std::memory_order_acq_rel);
+  if(!transportWasRunning && transportRunning &&
+     mArtNetCapture.streamed_recording_active())
+  {
+    mPendingCaptureTransportFrame.store(
+        mArtNetCapture.recorded_frames_fast(), std::memory_order_release);
+    mCaptureTransportMarkerRevision.fetch_add(1U, std::memory_order_release);
+  }
+
   mHostTransport.publish(transportRunning,
                          renderingOffline,
                          GetSamplePos(),
@@ -260,8 +279,7 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
     }
 
     aeyla::runtime::ShowMidiMatch showMatch{};
-    const auto showMapping = aeyla::runtime::unpack_show_midi_mapping(
-        mShowMidiMappingPacked.load(std::memory_order_acquire));
+    const auto showMapping = ShowMidiMapping();
     const bool mappedShowNote = aeyla::runtime::match_show_midi_note(
         showMapping, channel, midiNote, 127U, showMatch);
     if(mappedShowNote)
@@ -274,9 +292,14 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
             std::memory_order_acquire);
         const auto offset = static_cast<std::uint32_t>(
             std::max(msg.mOffset, 0));
+        // Capture the deterministic 44 Hz recorder cursor at MIDI ingress. The
+        // runtime thread intentionally consumes the command later, after the
+        // event's audio block has completed; reading the cursor there moved the
+        // auto-IN by one or more frames. This load is atomic and lock-free.
+        const auto captureFrame = mArtNetCapture.recorded_frames_fast();
         const auto showEvent = aeyla::runtime::make_show_midi_event(
             showMatch.command, showMatch.song_index, channel, midiNote,
-            completed, transportCompleted, offset);
+            completed, transportCompleted, offset, captureFrame);
         (void)mShowMidiIngress.try_submit(showEvent);
       }
       return;
@@ -312,6 +335,12 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
 void AeylaVisualDmx::OnReset()
 {
   mLastMidiNote.store(-1, std::memory_order_relaxed);
+  // Ableton may call OnReset when its audio engine/device/sample rate is
+  // rebuilt. Never perform scheduler locks or file I/O here. Mark the next
+  // transport callback as a fresh edge and ask the runtime worker to
+  // invalidate any file-backed take that was calibrated to the old rate.
+  mAudioTransportRunning.store(false, std::memory_order_release);
+  mHostResetPending.store(true, std::memory_order_release);
 
   aeyla::runtime::HostEvent event{};
   event.type = aeyla::runtime::HostEventType::all_notes_off;
@@ -528,9 +557,31 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     const auto host = mHostTransport.latest();
     if(mArtNetCapture.streamed_recording_active())
     {
+      const auto markerRevision = mCaptureTransportMarkerRevision.load(
+          std::memory_order_acquire);
+      if(markerRevision != mLastCaptureTransportMarkerRevision)
+      {
+        const auto markerFrame = mPendingCaptureTransportFrame.load(
+            std::memory_order_acquire);
+        (void)mCaptureSyncAnchor.anchor_transport_snapshot(markerFrame);
+        mLastCaptureTransportMarkerRevision = markerRevision;
+      }
+
+      // Legacy fallback for hosts that suspend ProcessBlock while stopped or do
+      // not deliver a clean STOP->PLAY callback edge. It runs only after the
+      // callback marker above, so worker scheduling can never replace a more
+      // precise callback timestamp.
       const auto capture = mArtNetCapture.stats();
-      (void) mCaptureSyncAnchor.observe(host, capture.recorded_frames);
+      (void)mCaptureSyncAnchor.observe(host, capture.recorded_frames);
     }
+    else
+    {
+      // Baseline every inactive period. A marker from a previous recording can
+      // therefore never be inherited by the next N42 capture session.
+      mLastCaptureTransportMarkerRevision =
+          mCaptureTransportMarkerRevision.load(std::memory_order_acquire);
+    }
+
     const std::scoped_lock lock(mModelMutex);
     if(mRuntimeFaulted.load(std::memory_order_acquire))
     {
@@ -543,6 +594,27 @@ void AeylaVisualDmx::RuntimeTick() noexcept
       return;
     }
     ApplyPendingHostStateLocked();
+
+    if(mHostResetPending.exchange(false, std::memory_order_acq_rel))
+    {
+      // A host audio-engine reset may change sample rate. A loaded clip's
+      // sample-domain conversion is therefore no longer authoritative.
+      // Fail closed now; the next PLAY/preflight reloads the .aeylatake with
+      // the current GetSampleRate() instead of continuing with stale timing.
+      ClearShowMidiCommandsLocked();
+      mTakeScheduler.stop_reset();
+      mTakeScheduler.disarm();
+      mLoadedTakeSongIndex.store(-1, std::memory_order_release);
+      mActiveTakeSongIndex.store(-1, std::memory_order_release);
+      if(ShowMidiMapping().enabled)
+        mMidiPreflightCursor.store(0, std::memory_order_release);
+      mModel.release_transients();
+      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
+      mModel.set_blackout(true);
+      mParamBlackout.store(true, std::memory_order_release);
+      SetShowMidiMessage(
+          "HOST RESET · SALIDA DESARMADA · toma invalidada y pendiente de recarga");
+    }
 
     if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
     {
@@ -892,6 +964,10 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   mShowMidiMappingPacked.store(
       aeyla::runtime::pack_show_midi_mapping(pending->show_midi),
       std::memory_order_release);
+  mShowMidiCaptureStartNote.store(pending->show_midi.capture_start_note,
+                                  std::memory_order_release);
+  mShowMidiCaptureStopNote.store(pending->show_midi.capture_stop_note,
+                                 std::memory_order_release);
   mMidiPreflightCursor.store(pending->show_midi.enabled ? 0 : -1,
                              std::memory_order_release);
   SetShowMidiMessage(pending->show_midi.enabled
@@ -906,13 +982,28 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
   {
     // The Set identifies a project that is not the currently loaded package.
     // Until locator-based asynchronous loading is implemented, expose an
-    // invalid project and publish only the safe frame.
+    // invalid project and publish only the safe frame. Never carry Take
+    // bindings from a different project identity into the current session.
     mModel.set_project_valid(false);
     mModel.set_blackout(true);
     mParamBlackout.store(true, std::memory_order_release);
     mHostStateRestoreErrors.fetch_add(1U, std::memory_order_relaxed);
-    const std::scoped_lock stateLock(mHostStateMutex);
-    mHostStateCache.song_bindings.clear();
+    {
+      const std::scoped_lock stateLock(mHostStateMutex);
+      mHostStateCache.song_bindings.clear();
+      mHostStateCache.take_library_locator.clear();
+      mHostStateCache.take_bindings.clear();
+    }
+    aeyla::take_library_session::clear(this);
+  }
+  else
+  {
+    // State 1.3 restores only non-destructive Take/library state. This never
+    // arms Art-Net and never starts playback. A missing cross-platform path
+    // remains pending until the operator selects the destination library once.
+    aeyla::take_library_session::stage_persisted_state(
+        this, mModel.project_document().project_id,
+        pending->take_library_locator, pending->take_bindings);
   }
 
   // UnserializeParams already restored host-visible preferences. Applying them
@@ -977,6 +1068,22 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   if(!DecodeCanonicalUuid(snapshot.project_id, uuid))
     return;
 
+  // Snapshot Take state before taking mHostStateMutex to keep lock order
+  // deterministic. Only the 15 show Songs can enter host component state.
+  aeyla::take_library_session::ensure_scope(this, snapshot.project_id);
+  std::vector<std::string> songIds;
+  const auto& show = mModel.show_program();
+  songIds.reserve(std::min(
+      show.songs.size(), aeyla::runtime::kMaxSessionTakeBindings));
+  for(const auto& song : show.songs)
+  {
+    if(songIds.size() >= aeyla::runtime::kMaxSessionTakeBindings)
+      break;
+    songIds.push_back(song.song_id);
+  }
+  auto hostTakeState =
+      aeyla::take_library_session::snapshot_for_host(this, songIds);
+
   const std::scoped_lock lock(mHostStateMutex);
   if(mHostStateCache.project_uuid != uuid)
   {
@@ -984,6 +1091,8 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
     mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
     mHostStateCache.project_locator.clear();
     mHostStateCache.song_bindings.clear();
+    mHostStateCache.take_library_locator.clear();
+    mHostStateCache.take_bindings.clear();
   }
   mHostStateCache.project_uuid = uuid;
   mHostStateCache.project_schema_major =
@@ -994,6 +1103,9 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   // Persist the global operator/safety latch, never a transient artistic
   // blackout caused by a missing/out-of-range Cue.
   mHostStateCache.blackout = snapshot.global_blackout;
+  mHostStateCache.take_library_locator =
+      std::move(hostTakeState.library_locator);
+  mHostStateCache.take_bindings = std::move(hostTakeState.bindings);
 }
 
 void AeylaVisualDmx::CaptureParameterValueFromHost(int paramIdx) noexcept
@@ -1162,8 +1274,7 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
   {
     const std::scoped_lock stateLock(mHostStateMutex);
     bound = std::any_of(
-        mHostStateCache.song_bindings.begin(),
-        mHostStateCache.song_bindings.end(),
+        mHostStateCache.song_bindings.begin(), mHostStateCache.song_bindings.end(),
         [&](const aeyla::runtime::SessionSongBinding& candidate) {
           return candidate.song_id == mModel.snapshot().active_song_id;
         });

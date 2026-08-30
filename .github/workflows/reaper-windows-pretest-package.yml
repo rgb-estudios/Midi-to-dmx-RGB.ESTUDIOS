@@ -7,6 +7,8 @@ on:
       - src/**
       - tests/**
       - docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md
+      - docs/AEYLA_R08_FIELD_PRETEST_ES.md
+      - docs/AEYLA_R08_HANDOFF_ES.md
       - tools/maintenance/windows/**
       - tools/network/**
       - .github/workflows/reaper-windows-pretest-package.yml
@@ -23,9 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # A pull_request workflow otherwise checks out GitHub's temporary
-          # merge commit. The PRETEST identity must resolve to the exact branch
-          # source that was reviewed and will be handed to the operator.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Validate AEYLA maintenance tools
@@ -92,91 +91,59 @@ jobs:
           Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $root
           Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $root
           Copy-Item docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md (Join-Path $root "UI_INTERACTION_CONTRACT.md")
+          Copy-Item docs/AEYLA_R08_FIELD_PRETEST_ES.md (Join-Path $root "R08_FIELD_PRETEST_ES.md")
+          Copy-Item docs/AEYLA_R08_HANDOFF_ES.md (Join-Path $root "R08_HANDOFF_ES.md")
 
           @'
           AEYLA Visual DMX 0.3 — REAPER WINDOWS PRETEST
 
-          OBJETIVO
-          Este paquete contiene el VST3 integrado 0.3 y herramientas de mantenimiento
-          quirurgicas para pruebas repetibles en REAPER/Windows.
-
-          FLUJO RECOMENDADO PARA CADA BUILD NUEVO
+          INSTALACION
           1. Cierra REAPER, Ableton y cualquier host VST3.
           2. Ejecuta CLEAN_INSTALL_AEYLA.cmd.
-          3. El script elimina SOLO AeylaVisualDmx.vst3 de rutas conocidas.
-          4. Retira SOLO la entrada AEYLA del cache VST de REAPER y crea backup del INI.
-          5. Instala el bundle VST3 incluido en este mismo paquete.
-          6. Abre REAPER.
-          7. Preferences > Plug-ins > VST > Re-scan si AEYLA no aparece automaticamente.
+          3. Abre REAPER y re-scan VST3 si AEYLA no aparece automaticamente.
+          4. Confirma que BUILD_ID.txt corresponde al mismo SOURCE_COMMIT del paquete macOS.
+
+          CAPTURA R08
+          1. Selecciona cancion y biblioteca; confirma Art-Net RX valido.
+          2. Con DAW detenido, N42 inicia RAW.
+          3. PLAY fija el CERO automatico dentro de la granularidad de 44 Hz.
+          4. Si existe pre-roll, N38 en el inicio artistico refina el CERO.
+          5. N42 detiene/finaliza. RAW debe conservarse.
+
+          MIDI SHOW
+          N36 anterior | N37 siguiente | N38 PLAY/marcador | N39 pausa
+          N40 STOP/reset | N41 PANIC blackout+disarm | N42 REC | N48-N62 canciones 1-15.
+          MIDI nunca puede ARMAR la salida ni quitar APAGON.
+
+          REAPERTURA / ESTADO 1.3
+          1. Carga una toma, ajusta IN/OUT y guarda el .RPP.
+          2. Cierra REAPER y vuelve a abrirlo.
+          3. Deben restaurarse biblioteca/toma/trims si la carpeta guardada existe.
+          4. La salida debe volver segura: no se admite auto-ARM ni auto-PLAY.
+          5. Si el proyecto se mueve a otro sistema/ruta, selecciona la biblioteca una vez;
+             AEYLA debe resolver la toma por basename validado y conservar trims.
+
+          CARRIER / SAFETY
+          - APAGON OFF y ARM son manuales.
+          - Una toma armada mantiene carrier al detenerse si el host sigue vivo.
+          - N41 siempre produce APAGON + DESARME y nunca rearma.
+          - Perdida del pulso del host durante PLAY debe desarmar fail-closed.
 
           HERRAMIENTAS
-          AUDIT_AEYLA.cmd
-            Solo informa instalaciones AEYLA y entradas AEYLA detectadas en cache REAPER.
+          AUDIT_AEYLA.cmd: informa instalaciones/cache AEYLA.
+          CLEAN_AEYLA.cmd: elimina SOLO AEYLA y su entrada de cache REAPER con backup.
+          INSTALL_AEYLA.cmd: instala el bundle incluido.
+          CLEAN_INSTALL_AEYLA.cmd: flujo recomendado para cada build nuevo.
 
-          CLEAN_AEYLA.cmd
-            Desinstala SOLO AEYLA y limpia SOLO su entrada del cache REAPER con backup.
-
-          INSTALL_AEYLA.cmd
-            Instala el bundle AEYLA incluido sin tocar el cache REAPER.
-
-          CLEAN_INSTALL_AEYLA.cmd
-            Opcion recomendada para desarrollo: limpia AEYLA anterior, limpia su entrada
-            de cache REAPER e instala el build actual.
-
-          GARANTIAS DEL LIMPIADOR
-          - No elimina archivos .aeylashow.
-          - No elimina proyectos .RPP.
-          - No elimina otros VST/VST3.
-          - No borra el cache VST completo de REAPER.
-          - No mata REAPER ni Ableton: si estan abiertos, aborta.
-          - No modifica configuracion MIDI/audio del host.
-
-          PRUEBA DE INTERACCION — OBLIGATORIA
-          Render correcto NO equivale a UI funcional. Probar con mouse/entrada real:
-          A. NUEVO crea proyecto o pide confirmar descarte si corresponde.
-          B. ABRIR abre dialogo y carga un .aeylashow valido.
-          C. GUARDAR y GUARDAR COMO responden y actualizan el estado del proyecto.
-          D. APAGON cambia inmediatamente de estado visual/runtime.
-          E. RIG 10/14 cambia el mapa de luminarias habilitadas.
-          F. COLOR PLANO / DEGRADADO / ONDA / RUIDO / SECUENCIA cambian la vista previa.
-          G. Clic en luminarias 1, 7, 8 y 14 cambia claramente la seleccion visual.
-          H. Master general, Velocidad, Blanco, Ambar y UV responden a clic y arrastre.
-          I. Los 8 ejecutores responden por mouse y liberan al soltar.
-          J. MIDI fisico incrementa contador y activa el runtime correspondiente.
-          K. RED / SALIDA detecta el Ethernet fisico y permite editar IPv4 / mascara.
-          L. APLICAR IP solicita UAC, agrega la IPv4 AEYLA sin borrar la red previa y
-             deja APAGON activo / salida DESARMADA. Confirmar ambas IPv4 con ipconfig.
-          M. Una IPv4 invalida, duplicada o no confirmada se rechaza o revierte y nunca arma TX.
-          N. Secuencia operativa: desactivar APAGON, ARMAR SALIDA DE TOMA y REPRODUCIR.
-             El contador TX debe subir continuamente y un receptor externo debe ver U1 a 44 Hz.
-          O. Minimizar o cerrar la ventana del plugin durante 5 minutos no cambia la cadencia,
-             no incrementa errores TX y no desarma la toma mientras REAPER sigue procesando audio.
-          P. Abrir/cerrar UI 5 veces mantiene todas las interacciones.
-          Q. Ajustar ENTRADA/SALIDA y pulsar CONSOLIDAR CLIP crea otro .aeylatake.
-          R. El clip consolidado comienza en 00:00 y la TOMA ORIGINAL no cambia.
-          S. La actividad DMX visible coincide con zonas encendidas y cambios de la toma.
-          T. Clic/arrastre mueve libremente el cabezal; MARCAR IN/OUT fija puntos no redondos.
-          U. Los grips IN/OUT se arrastran desde toda su etiqueta, no sólo desde la línea.
-          V. Los campos MM:SS.mmm y ±1f actualizan tiempos con precisión de cuadro DMX.
-          W. Rueda/controles de zoom y Shift+arrastre navegan horizontalmente la toma.
-          X. Con salida DESARMADA, clic/arrastre del cabezal previsualiza la posicion.
-          Y. Con salida ARMADA, el scrub queda bloqueado y muestra la causa.
-          Z. Las flechas recorren versiones y VOLVER A RAW recupera la toma original.
-
-          PRUEBA HOST / ESTADO
-          1. Guarda el proyecto .RPP, cierra REAPER y vuelve a abrirlo.
-          2. La instancia sigue presente y vuelve DESARMADA/APAGON.
-          3. Mueve el cursor, reproduce/deten y usa loop; registra cualquier desviacion.
-
-          IMPORTANTE
-          PRETEST NO significa Show Candidate. No dependas todavia de este build para
-          salida fisica durante un show. Art-Net real y los gates de hardware siguen
-          pendientes hasta validacion explicita.
+          GATES FISICOS
+          Ejecutar completos R08_FIELD_PRETEST_ES.md y R08_HANDOFF_ES.md.
+          PRETEST NO significa Show Candidate.
           '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
 
           $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
           $helper = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
-          if (-not $helper) { throw "AeylaNetworkHelper.exe missing from package" }
+          if (-not $binary -or -not $helper) { throw "Critical binary missing from package" }
+
           $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $helperHash = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $sourceCommit = (git rev-parse HEAD).Trim()
@@ -184,11 +151,19 @@ jobs:
           "NETWORK_HELPER_SHA256=$helperHash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "BUILD_KIND=REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
-          "MAINTENANCE_SCRIPT=AEYLA_VST3_MAINTENANCE.ps1" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
-          "UI_INTERACTION_CONTRACT=UI_INTERACTION_CONTRACT.md" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "HOST_STATE_SCHEMA=1.3" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "STATUS=PRETEST_NOT_SHOW_CANDIDATE" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+
+          $binaryRel = [System.IO.Path]::GetRelativePath($root, $binary.FullName).Replace('\','/')
+          $helperRel = [System.IO.Path]::GetRelativePath($root, $helper.FullName).Replace('\','/')
+          @(
+            "$hash  $binaryRel",
+            "$helperHash  $helperRel"
+          ) | Set-Content -Encoding ASCII (Join-Path $root "SHA256SUMS.txt")
 
       - uses: actions/upload-artifact@v4
         with:
           name: AEYLA-0.3-REAPER-Windows-PRETEST
           path: reaper-pretest/**
           if-no-files-found: error
+          retention-days: 90

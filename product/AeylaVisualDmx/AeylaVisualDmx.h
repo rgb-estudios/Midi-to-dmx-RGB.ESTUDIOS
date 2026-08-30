@@ -513,6 +513,16 @@ private:
   // stop path indexes this exact target instead of guessing from timestamps.
   std::filesystem::path mActiveCaptureTarget;
 
+  // Realtime capture synchronization bridge. ProcessBlock snapshots the 44 Hz
+  // recorder cursor exactly on the host STOP->PLAY boundary, then publishes a
+  // monotonically increasing marker revision. RuntimeTick commits the frame to
+  // the non-realtime sync state machine. No mutex/file/network work is added to
+  // the audio callback.
+  std::atomic<bool> mAudioTransportRunning{false};
+  std::atomic<std::uint64_t> mPendingCaptureTransportFrame{0U};
+  std::atomic<std::uint64_t> mCaptureTransportMarkerRevision{0U};
+  std::uint64_t mLastCaptureTransportMarkerRevision{0U};
+
   std::thread mRuntimeThread;
   std::atomic<bool> mRuntimeStopRequested{false};
   std::atomic<bool> mRuntimeExited{true};
@@ -537,6 +547,11 @@ private:
   std::atomic<bool> mParameterUpdatePending{true};
   std::atomic<bool> mLookParameterUiSyncPending{false};
   std::atomic<bool> mHostDeactivationPending{false};
+  // OnReset may execute on a host processing thread. It only raises this
+  // lock-free request; RuntimeTick performs the destructive scheduler/model
+  // reset outside the audio callback. This prevents a take loaded at an old
+  // sample rate from surviving an Ableton audio-engine reset.
+  std::atomic<bool> mHostResetPending{false};
   std::atomic<bool> mHostStateRestoreRejected{false};
   std::atomic<bool> mOutputArmed{false};
   std::atomic<bool> mGlobalBlackout{true};
@@ -551,6 +566,10 @@ private:
   std::atomic<std::uint64_t> mAudioAdvanceSequence{0U};
   std::atomic<bool> mShowTransportMutation{false};
   std::atomic<std::uint64_t> mShowMidiMappingPacked{0U};
+  std::atomic<std::uint8_t> mShowMidiCaptureStartNote{
+      aeyla::runtime::kShowMidiCaptureStartNote};
+  std::atomic<std::uint8_t> mShowMidiCaptureStopNote{
+      aeyla::runtime::kShowMidiCaptureStopNote};
   std::atomic<std::uint32_t> mPendingMidiLearnPacked{0U};
   std::atomic<aeyla::runtime::ShowMidiLearnTarget> mShowMidiLearnTarget{
       aeyla::runtime::ShowMidiLearnTarget::none};

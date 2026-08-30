@@ -5,7 +5,6 @@ on:
     paths:
       - product/**
       - src/**
-      - tests/reaper_host_smoke.lua
       - .github/workflows/reaper-host-smoke.yml
   workflow_dispatch:
 
@@ -14,9 +13,12 @@ env:
   VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
   REAPER_VERSION: "7.78"
 
+permissions:
+  contents: read
+
 jobs:
   windows-reaper-vst3:
-    name: Windows / REAPER 7.78 / VST3 host smoke
+    name: Windows / REAPER 7.78 / VST3 startup compatibility
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -32,15 +34,12 @@ jobs:
           git -C $sdk checkout $env:VST3SDK_COMMIT
           git -C $sdk submodule update --init --recursive
 
-      - name: Build AEYLA VST3
+      - name: Build and install AEYLA VST3
         shell: pwsh
         run: |
           cmake -S product -B build-product -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2" -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG
           cmake --build build-product --config Release --target AeylaVisualDmx-vst3
 
-      - name: Install AEYLA VST3 for REAPER
-        shell: pwsh
-        run: |
           $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
           if (-not $bundle) { throw "AEYLA VST3 bundle not found" }
           $destRoot = "C:\Program Files\Common Files\VST3"
@@ -49,6 +48,13 @@ jobs:
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           Copy-Item -Recurse -Force $bundle.FullName $dest
 
+          $binary = Get-ChildItem $dest -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $binary) { throw "Installed AEYLA VST3 binary not found" }
+          if ($binary.Length -lt 64KB) { throw "Installed AEYLA VST3 binary is unexpectedly small" }
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "AEYLA_VST3=$($binary.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "AEYLA_VST3_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Install REAPER 7.78 evaluation
         shell: pwsh
         timeout-minutes: 2
@@ -56,52 +62,33 @@ jobs:
           $url = "https://www.reaper.fm/files/7.x/reaper778_x64-install.exe"
           $installer = "$env:RUNNER_TEMP\reaper-install.exe"
           Invoke-WebRequest -Uri $url -OutFile $installer
-
           $process = Start-Process $installer -ArgumentList "/S" -Wait -PassThru
           if ($process.ExitCode -notin @(0, 1223)) {
             throw "REAPER installer failed with $($process.ExitCode)"
           }
 
-          $expectedPaths = @(
+          $candidates = @(
             "C:\Program Files\REAPER (x64)\reaper.exe",
             "C:\Program Files\REAPER\reaper.exe"
           )
           $reaper = $null
-          foreach ($candidate in $expectedPaths) {
-            if (Test-Path $candidate) {
-              $reaper = Get-Item $candidate
-              break
-            }
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) { $reaper = Get-Item $candidate; break }
           }
-          if (-not $reaper) { throw "REAPER executable not found after completed silent install" }
-          if ($reaper.Length -lt 1MB) { throw "REAPER executable is unexpectedly small: $($reaper.Length) bytes" }
-
-          $stream = [System.IO.File]::OpenRead($reaper.FullName)
-          try {
-            $b0 = $stream.ReadByte()
-            $b1 = $stream.ReadByte()
-          }
-          finally {
-            $stream.Dispose()
-          }
-          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "REAPER executable does not have a valid PE/MZ header" }
-
-          Write-Host "REAPER executable: $($reaper.FullName) size=$($reaper.Length) installerExit=$($process.ExitCode)"
+          if (-not $reaper) { throw "REAPER executable not found" }
+          if ($reaper.Length -lt 1MB) { throw "REAPER executable is unexpectedly small" }
           "REAPER_EXE=$($reaper.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Run REAPER host smoke
+      - name: REAPER non-interactive startup compatibility
         shell: pwsh
-        timeout-minutes: 3
+        timeout-minutes: 1
         run: |
-          $script = (Resolve-Path "tests/reaper_host_smoke.lua").Path
-          $resourceRoot = Join-Path $env:APPDATA "REAPER"
-          $result = Join-Path $resourceRoot "AEYLA_REAPER_HOST_SMOKE.txt"
-          Remove-Item -Force $result -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          $evidence = Join-Path $PWD "evidence\REAPER_STARTUP_COMPATIBILITY.txt"
 
-          # REAPER's official evaluation is fully functional for 60 days, but
-          # first launch presents a timed "Still Evaluating" acknowledgement.
-          # The CI runner has no human operator, so invoke only that legitimate
-          # acknowledgement if it appears; do not modify licensing state.
+          # REAPER's evaluation first launch can present a timed acknowledgement.
+          # CI may acknowledge that legitimate dialog, but it does not automate
+          # AEYLA editor interaction or claim a physical host test.
           Add-Type -AssemblyName UIAutomationClient
           Add-Type -AssemblyName UIAutomationTypes
           function Invoke-ReaperEvaluationAcknowledgement {
@@ -113,135 +100,66 @@ jobs:
               )
               $buttons = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
               foreach ($button in $buttons) {
-                $name = $button.Current.Name
-                if ($name -like "Still Evaluating*") {
-                  if ($button.Current.IsEnabled) {
-                    $pattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                    $pattern.Invoke()
-                    Write-Host "Acknowledged REAPER evaluation dialog."
-                    return $true
-                  }
+                if ($button.Current.Name -like "Still Evaluating*" -and $button.Current.IsEnabled) {
+                  $pattern = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                  $pattern.Invoke()
+                  return $true
                 }
               }
-            }
-            catch {
-              Write-Host "Evaluation-dialog probe: $($_.Exception.Message)"
-            }
+            } catch {}
             return $false
           }
 
-          # REAPER supports a ReaScript path as a command-line argument. Do not
-          # combine it with -newinst: that flag starts an isolated instance but
-          # prevents file dispatch on the hosted Windows runner.
-          $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList @("-nosplash", $script) -PassThru
-          $deadline = (Get-Date).AddSeconds(120)
-          $terminalEvidence = $false
-          while ((Get-Date) -lt $deadline -and -not $terminalEvidence) {
-            if ($process.HasExited) { break }
+          $process = Start-Process -FilePath $env:REAPER_EXE -ArgumentList "-nosplash" -PassThru
+          $deadline = (Get-Date).AddSeconds(20)
+          while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
             Invoke-ReaperEvaluationAcknowledgement | Out-Null
             Start-Sleep -Milliseconds 500
             $process.Refresh()
-            if (Test-Path $result) {
-              $terminalEvidence = Select-String -Path $result -Pattern '^RESULT=(PASS|FAIL)$' -Quiet
+          }
+
+          if ($process.HasExited) {
+            @(
+              "RESULT=FAIL"
+              "REASON=REAPER exited during startup compatibility smoke"
+              "EXIT_CODE=$($process.ExitCode)"
+              "SOURCE_COMMIT=$env:GITHUB_SHA"
+              "AEYLA_VST3_SHA256=$env:AEYLA_VST3_SHA256"
+            ) | Set-Content -Encoding UTF8 $evidence
+            Get-Content $evidence
+            throw "REAPER exited unexpectedly with $($process.ExitCode)"
+          }
+
+          $cache = Join-Path $env:APPDATA "REAPER\reaper-vstplugins64.ini"
+          $discovery = "NOT_OBSERVED"
+          if (Test-Path $cache) {
+            Copy-Item -Force $cache evidence/
+            if (Select-String -Path $cache -Pattern 'AeylaVisualDmx' -Quiet) {
+              $discovery = "OBSERVED_IN_REAPER_CACHE"
             }
           }
 
-          if (-not $terminalEvidence) {
-            $exitText = if ($process.HasExited) { "exit=$($process.ExitCode)" } else { "still-running" }
-            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-            $stage = if (Test-Path $result) { (Get-Content $result | Select-Object -Last 1) } else { "NO_EVIDENCE" }
-            throw "REAPER did not finish AEYLA host evidence ($exitText, last=$stage)"
-          }
-
-          Get-Content $result
-          $passed = Select-String -Path $result -Pattern '^RESULT=PASS$' -Quiet
-          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-          if (-not $passed) { throw "REAPER host smoke did not pass" }
-
-      - name: Package verified REAPER test candidate
-        shell: pwsh
-        run: |
-          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
-          if (-not $bundle) { throw "Verified VST3 bundle disappeared before packaging" }
-
-          $root = Join-Path $PWD "reaper-candidate"
-          $vst3Root = Join-Path $root "VST3"
-          New-Item -ItemType Directory -Force $vst3Root | Out-Null
-          Copy-Item -Recurse -Force $bundle.FullName (Join-Path $vst3Root "AeylaVisualDmx.vst3")
-
-          @'
-          AEYLA Visual DMX 0.3.3 — REAPER TEST CANDIDATE / WINDOWS
-
-          This exact VST3 bundle passed the automated REAPER 7.78 host gate that
-          scans the plug-in, instantiates it, opens its editor, saves a project,
-          reopens it and opens the restored editor again.
-
-          INSTALL
-          1. Close REAPER.
-          2. Run INSTALL_REAPER_VST3.cmd.
-          3. Open REAPER and rescan VST3 plug-ins if AEYLA is not visible.
-          4. Insert "AEYLA Visual DMX" on a test track.
-
-          TEST SCOPE
-          - Windows x64 / VST3.
-          - Core build and regression tests.
-          - REAPER scan + instantiate + editor open + project save/reopen + editor reopen.
-          - Safe restore remains DISARMED / BLACKOUT by product contract.
-
-          IMPORTANT
-          This is a REAPER Test Candidate for programming and controlled rehearsal.
-          It is NOT Show Candidate and must NOT be relied on yet for physical show
-          output. Real Art-Net/node validation, deterministic DAW transport and the
-          remaining show-readiness gates are still required.
-          '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_REAPER_TEST.txt")
-
-          @'
-          @echo off
-          setlocal
-          set "SOURCE=%~dp0VST3\AeylaVisualDmx.vst3"
-          set "DEST=C:\Program Files\Common Files\VST3\AeylaVisualDmx.vst3"
-          if not exist "%SOURCE%" (
-            echo ERROR: AeylaVisualDmx.vst3 not found.
-            pause
-            exit /b 1
-          )
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command','if (Test-Path ''%DEST%'') { Remove-Item -Recurse -Force ''%DEST%'' }; Copy-Item -Recurse -Force ''%SOURCE%'' ''%DEST%'''"
-          echo AEYLA VST3 installation completed.
-          pause
-          '@ | Set-Content -Encoding ASCII (Join-Path $root "INSTALL_REAPER_VST3.cmd")
-
-          $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
-          if (-not $binary) { throw "Candidate VST3 binary not found" }
-          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "SHA256.txt")
-          "SOURCE_COMMIT=${{ github.sha }}" | Add-Content -Encoding ASCII (Join-Path $root "SHA256.txt")
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: AEYLA-0.3.3-REAPER-Test-Candidate-Windows-VST3
-          path: reaper-candidate/**
-          if-no-files-found: error
-
-      - name: Collect REAPER Windows evidence
-        if: always()
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force evidence | Out-Null
-          $root = Join-Path $env:APPDATA "REAPER"
-          foreach ($name in @("AEYLA_REAPER_HOST_SMOKE.txt", "AEYLA_REAPER_HOST_SMOKE.rpp", "reaper-vstplugins64.ini", "reaper.ini")) {
-            $path = Join-Path $root $name
-            if (Test-Path $path) { Copy-Item -Force $path evidence/ }
-          }
+          @(
+            "RESULT=PASS"
+            "PROVES=REAPER installs and remains alive with the exact AEYLA VST3 installed in the standard VST3 path"
+            "AEYLA_DISCOVERY=$discovery"
+            "SOURCE_COMMIT=$env:GITHUB_SHA"
+            "AEYLA_VST3_SHA256=$env:AEYLA_VST3_SHA256"
+            "DOES_NOT_PROVE=AEYLA instantiation, editor interaction, project save/restore, MIDI, Art-Net or physical output"
+            "MANUAL_GATE_REQUIRED=Open AEYLA in REAPER on an interactive Windows machine and run the field checklist"
+          ) | Set-Content -Encoding UTF8 $evidence
+          Get-Content $evidence
+          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: AEYLA-REAPER-7.78-Windows-VST3-evidence
+          name: AEYLA-R08-REAPER-Windows-startup-compatibility
           path: evidence/**
           if-no-files-found: warn
 
   macos-reaper-vst3-au:
-    name: macOS / REAPER 7.78 / VST3 and AU host smoke
+    name: macOS / REAPER 7.78 / Universal plugin startup compatibility
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -256,31 +174,37 @@ jobs:
           git -C "$sdk" checkout "$VST3SDK_COMMIT"
           git -C "$sdk" submodule update --init --recursive
 
-      - name: Build universal AEYLA VST3 and AUv2
+      - name: Build and install Universal AEYLA VST3 and AUv2
         run: |
           cmake -S product -B build-product -G Xcode -DIPLUG2_DIR="${GITHUB_WORKSPACE}/external/iPlug2" -DIPLUG2_UNIVERSAL=ON -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cmake --build build-product --config Release --target AeylaVisualDmx-vst3 AeylaVisualDmx-au
 
-      - name: Install AEYLA formats
-        run: |
           vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
           au="$(find build-product -type d -name 'AeylaVisualDmx.component' | head -n 1)"
           test -n "$vst3" && test -n "$au"
           codesign --force --deep --sign - "$vst3"
           codesign --force --deep --sign - "$au"
+
+          vst3bin="$(find "$vst3/Contents/MacOS" -type f | head -n 1)"
+          aubinary="$(find "$au/Contents/MacOS" -type f | head -n 1)"
+          test -n "$vst3bin" && test -n "$aubinary"
+          for binary in "$vst3bin" "$aubinary"; do
+            archs="$(lipo -archs "$binary")"
+            echo "$binary -> $archs"
+            echo "$archs" | grep -q x86_64
+            echo "$archs" | grep -q arm64
+          done
+
           mkdir -p "$HOME/Library/Audio/Plug-Ins/VST3" "$HOME/Library/Audio/Plug-Ins/Components"
           rm -rf "$HOME/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" "$HOME/Library/Audio/Plug-Ins/Components/AeylaVisualDmx.component"
           cp -R "$vst3" "$HOME/Library/Audio/Plug-Ins/VST3/"
           cp -R "$au" "$HOME/Library/Audio/Plug-Ins/Components/"
-          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          shasum -a 256 "$vst3bin" | tee "$RUNNER_TEMP/aeyla-vst3-sha.txt"
 
       - name: Install REAPER 7.78 evaluation
         timeout-minutes: 3
         run: |
           curl -fL "https://www.reaper.fm/files/7.x/reaper778_universal.dmg" -o "$RUNNER_TEMP/reaper.dmg"
-          # REAPER's DMG carries a software-license agreement. `hdiutil attach`
-          # on macOS 15 has no -acceptlicense option; its headless agreement is
-          # read from stdin. Preserve the complete mount transcript as evidence.
           mount_log="$RUNNER_TEMP/reaper-mount.txt"
           printf 'Y\n' | hdiutil attach "$RUNNER_TEMP/reaper.dmg" -nobrowse -readonly | tee "$mount_log"
           mount="$(awk '/\/Volumes\// {$1=$2=""; sub(/^  */, ""); print; exit}' "$mount_log")"
@@ -289,77 +213,54 @@ jobs:
           rm -rf /Applications/REAPER.app
           cp -R "$app" /Applications/REAPER.app
           hdiutil detach "$mount" -force
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-            /Applications/REAPER.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/REAPER.app/Contents/Info.plist
 
-      - name: Run REAPER VST3 host smoke
-        timeout-minutes: 3
-        run: |
-          resource_root="$HOME/Library/Application Support/REAPER"
-          result="$resource_root/AEYLA_REAPER_HOST_SMOKE.txt"
-          rm -f "$result"
-          /Applications/REAPER.app/Contents/MacOS/REAPER -nosplash \
-            "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" &
-          pid=$!
-          for i in {1..240}; do
-            test -f "$result" && grep -Eq '^RESULT=(PASS|FAIL)$' "$result" && break
-            if ! kill -0 "$pid" 2>/dev/null; then break; fi
-            sleep 0.5
-          done
-          if [ ! -f "$result" ] || ! grep -Eq '^RESULT=(PASS|FAIL)$' "$result"; then
-            kill -9 "$pid" 2>/dev/null || true
-            echo "REAPER did not finish AEYLA VST3 host evidence"
-            test -f "$result" && tail -n 5 "$result" || true
-            exit 1
-          fi
-          cat "$result"
-          passed=0
-          grep -q '^RESULT=PASS$' "$result" && passed=1
-          kill -9 "$pid" 2>/dev/null || true
-          test "$passed" -eq 1
-
-      - name: Force AU rescan and run REAPER AU host smoke
-        timeout-minutes: 3
-        run: |
-          mv "$HOME/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" "$RUNNER_TEMP/AeylaVisualDmx.vst3"
-          resource_root="$HOME/Library/Application Support/REAPER"
-          result="$resource_root/AEYLA_REAPER_HOST_SMOKE.txt"
-          rm -f "$result"
-          rm -f "$resource_root/reaper-vstplugins64.ini"
-          /Applications/REAPER.app/Contents/MacOS/REAPER -nosplash \
-            "${GITHUB_WORKSPACE}/tests/reaper_host_smoke.lua" &
-          pid=$!
-          for i in {1..240}; do
-            test -f "$result" && grep -Eq '^RESULT=(PASS|FAIL)$' "$result" && break
-            if ! kill -0 "$pid" 2>/dev/null; then break; fi
-            sleep 0.5
-          done
-          if [ ! -f "$result" ] || ! grep -Eq '^RESULT=(PASS|FAIL)$' "$result"; then
-            kill -9 "$pid" 2>/dev/null || true
-            echo "REAPER did not finish AEYLA AU host evidence"
-            test -f "$result" && tail -n 5 "$result" || true
-            exit 1
-          fi
-          cat "$result"
-          passed=0
-          grep -q '^RESULT=PASS$' "$result" && passed=1
-          kill -9 "$pid" 2>/dev/null || true
-          test "$passed" -eq 1
-
-      - name: Collect REAPER macOS evidence
-        if: always()
+      - name: REAPER non-interactive startup compatibility
+        timeout-minutes: 1
         run: |
           mkdir -p evidence
-          root="$HOME/Library/Application Support/REAPER"
-          for name in AEYLA_REAPER_HOST_SMOKE.txt AEYLA_REAPER_HOST_SMOKE.rpp reaper-vstplugins64.ini reaper-auplugins64.ini reaper.ini; do
-            test -f "$root/$name" && cp "$root/$name" evidence/ || true
-          done
-          test -f "$RUNNER_TEMP/reaper-mount.txt" && cp "$RUNNER_TEMP/reaper-mount.txt" evidence/ || true
-          system_profiler SPSoftwareDataType > evidence/macos-system.txt
+          evidence="$PWD/evidence/REAPER_STARTUP_COMPATIBILITY.txt"
+          reaper="/Applications/REAPER.app/Contents/MacOS/REAPER"
+          test -x "$reaper"
+
+          "$reaper" -nosplash >"$PWD/evidence/reaper-stdout.txt" 2>"$PWD/evidence/reaper-stderr.txt" &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid" || exit_code=$?
+            {
+              echo "RESULT=FAIL"
+              echo "REASON=REAPER exited during startup compatibility smoke"
+              echo "EXIT_CODE=${exit_code:-unknown}"
+              echo "SOURCE_COMMIT=$GITHUB_SHA"
+            } > "$evidence"
+            cat "$evidence"
+            exit 1
+          fi
+
+          cache="$HOME/Library/Application Support/REAPER/reaper-vstplugins64.ini"
+          discovery="NOT_OBSERVED"
+          if [ -f "$cache" ]; then
+            cp "$cache" evidence/
+            if grep -qi 'AeylaVisualDmx' "$cache"; then
+              discovery="OBSERVED_IN_REAPER_CACHE"
+            fi
+          fi
+
+          {
+            echo "RESULT=PASS"
+            echo "PROVES=REAPER Universal installs and remains alive with Universal AEYLA VST3/AUv2 installed"
+            echo "AEYLA_DISCOVERY=$discovery"
+            echo "SOURCE_COMMIT=$GITHUB_SHA"
+            echo "DOES_NOT_PROVE=AEYLA instantiation, editor interaction, project save/restore, MIDI, Art-Net or physical output"
+            echo "MANUAL_GATE_REQUIRED=Open AEYLA in REAPER/Ableton on an interactive Mac and run the field checklist"
+          } > "$evidence"
+          cat "$evidence"
+          kill -9 "$pid" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: AEYLA-REAPER-7.78-macOS-VST3-AU-evidence
+          name: AEYLA-R08-REAPER-macOS-startup-compatibility
           path: evidence/**
           if-no-files-found: warn

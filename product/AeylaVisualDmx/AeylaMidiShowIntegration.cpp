@@ -41,6 +41,8 @@ const char* LearnTargetName(aeyla::runtime::ShowMidiLearnTarget target) {
     case Target::play_retrigger: return "PLAY / REINICIAR";
     case Target::pause_resume: return "PAUSA / REANUDAR";
     case Target::stop_reset: return "STOP / RESET";
+    case Target::capture_start: return "REC START";
+    case Target::capture_stop: return "REC STOP";
     case Target::launch_song_base: return "BASE DE 15 CANCIONES";
     case Target::none: return "NINGUNO";
   }
@@ -51,8 +53,13 @@ const char* LearnTargetName(aeyla::runtime::ShowMidiLearnTarget target) {
 
 aeyla::runtime::ShowMidiMapping AeylaVisualDmx::ShowMidiMapping() const noexcept
 {
-  return aeyla::runtime::unpack_show_midi_mapping(
+  auto mapping = aeyla::runtime::unpack_show_midi_mapping(
       mShowMidiMappingPacked.load(std::memory_order_acquire));
+  mapping.capture_start_note = mShowMidiCaptureStartNote.load(
+      std::memory_order_acquire);
+  mapping.capture_stop_note = mShowMidiCaptureStopNote.load(
+      std::memory_order_acquire);
+  return mapping;
 }
 
 void AeylaVisualDmx::SetShowMidiMessage(std::string message)
@@ -77,6 +84,10 @@ void AeylaVisualDmx::SyncShowMidiMappingToState(
   mShowMidiMappingPacked.store(
       aeyla::runtime::pack_show_midi_mapping(mapping),
       std::memory_order_release);
+  mShowMidiCaptureStartNote.store(mapping.capture_start_note,
+                                  std::memory_order_release);
+  mShowMidiCaptureStopNote.store(mapping.capture_stop_note,
+                                 std::memory_order_release);
   const std::scoped_lock lock(mHostStateMutex);
   mHostStateCache.show_midi = mapping;
 }
@@ -158,9 +169,9 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleShowMidiFromUI()
     mMidiPreflightCursor.store(-1, std::memory_order_release);
   const std::string message = mapping.enabled
       ? "MIDI SHOW ACTIVO · canal " + std::to_string(mapping.channel) +
-            " · PANIC nota " +
-            std::to_string(aeyla::runtime::kShowMidiPanicNote) +
-            " · reloj por muestras del DAW"
+            " · N41 PANIC · N" + std::to_string(mapping.capture_start_note) +
+            " REC START · N" + std::to_string(mapping.capture_stop_note) +
+            " REC STOP · reloj por muestras del DAW"
       : "MIDI SHOW DESACTIVADO · las notas vuelven a los Cues normales";
   SetShowMidiMessage(message);
   return {true, {}, message};
@@ -344,9 +355,6 @@ bool AeylaVisualDmx::StartPreparedTakeFromMidiLocked(
   bool cursor_started = false;
   if(!same_clip) {
     if(preserve_arm) {
-      // Validate the candidate with a second reader while the active player
-      // keeps publishing its old frame. Only after validation succeeds is the
-      // reader swapped atomically and the cursor catches up to the MIDI sample.
       std::unique_ptr<aeyla::capture::DmxTakeFileReader> candidate;
       auto& prepared_reader = mPreparedMidiTakeReaders[song_index];
       auto& prepared_path = mPreparedMidiTakePaths[song_index];
@@ -465,8 +473,6 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     const aeyla::runtime::HostTransportSnapshot& host)
 {
   const auto apply_midi_panic = [&]() {
-    // One-way safety action: PANIC is allowed to remove authority and enter
-    // blackout, but no MIDI path can ever clear blackout or arm Art-Net.
     mPendingShowMidiEvent.reset();
     aeyla::runtime::ShowMidiEvent ignored{};
     while(mShowMidiIngress.try_consume(ignored))
@@ -481,6 +487,144 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     mParamBlackout.store(true, std::memory_order_release);
     SetShowMidiMessage(
         "PANIC MIDI · APAGÓN ACTIVO · salida desarmada · rearme manual");
+  };
+
+  // Called with mModelMutex already held by RuntimeTick. This capture path is
+  // intentionally implemented here instead of calling the UI toggle: it never
+  // opens a folder dialog and therefore remains valid with the plug-in window
+  // closed. Disk/network work stays on the non-realtime runtime thread.
+  const auto apply_midi_capture_command = [&](aeyla::runtime::ShowMidiCommand command) {
+    const bool request_start = command == aeyla::runtime::ShowMidiCommand::capture_start;
+    const bool request_stop = command == aeyla::runtime::ShowMidiCommand::capture_stop;
+    if(!request_start && !request_stop)
+      return;
+
+    if(NetworkConfigurationBusy()) {
+      SetShowMidiMessage("MIDI REC BLOQUEADO · espera a que termine el cambio de red");
+      return;
+    }
+
+    const auto snapshot = mModel.snapshot();
+    const std::string project_id = snapshot.project_id;
+    const std::string song_id = snapshot.active_song_id;
+    const std::string song_name = snapshot.active_song_name;
+    const std::uint16_t universe = mModel.project_document().output.universe;
+    aeyla::take_library_session::ensure_scope(this, project_id);
+
+    if(request_stop) {
+      if(!mArtNetCapture.streamed_recording_active()) {
+        SetShowMidiMessage("REC STOP IGNORADO · no existe una captura MIDI activa");
+        return;
+      }
+      const auto expected_target = mActiveCaptureTarget;
+      std::string error;
+      if(!mArtNetCapture.end_streamed_recording(error)) {
+        mActiveCaptureTarget.clear();
+        mCaptureSyncAnchor.reset();
+        aeyla::take_library_session::set_storage_message(this, "ERROR DE GRABACIÓN MIDI · " + error);
+        SetShowMidiMessage("REC STOP · no fue posible cerrar la toma · " + error);
+        return;
+      }
+      mActiveCaptureTarget.clear();
+      const auto library = aeyla::take_library_session::directory(this);
+      const auto scan = aeyla::capture::scan_take_directory(library, song_id);
+      const auto captured = aeyla::capture::find_take_entry_by_path(scan, expected_target);
+      if(!scan.ok() || !captured.has_value()) {
+        mCaptureSyncAnchor.reset();
+        SetShowMidiMessage("REC STOP · archivo final no verificable · " +
+            (scan.ok() ? std::string("no apareció en el índice") : scan.error));
+        return;
+      }
+      const auto& newest = *captured;
+      aeyla::take_library_session::TakeEditState edit;
+      edit.path = newest.path;
+      edit.take_name = newest.take_name;
+      edit.raw_source = true;
+      edit.start_frame = 0U;
+      edit.end_frame_exclusive = newest.frame_count;
+      edit.frame_count = newest.frame_count;
+      edit.frames_per_second = newest.frames_per_second;
+      edit.version_count = scan.entries.size();
+      edit.version_index = 0U;
+      aeyla::take_library_session::set_edit_state(this, song_id, edit);
+      aeyla::take_library_session::set_loaded_path(this, song_id, newest.path);
+      mCaptureSyncAnchor.reset();
+      mMidiPreflightCursor.store(ShowMidiMapping().enabled ? 0 : -1, std::memory_order_release);
+      const std::string sync_text = " · CERO = REC START · cuadro 0";
+      aeyla::take_library_session::set_storage_message(
+          this, "GUARDADA POR MIDI · " + newest.path.filename().string() + sync_text);
+      SetShowMidiMessage("REC STOP · " + newest.take_name + " · " +
+          std::to_string(newest.frame_count) + " cuadros" + sync_text + " · RAW preservado");
+      return;
+    }
+
+    if(mArtNetCapture.streamed_recording_active()) {
+      SetShowMidiMessage("REC START IGNORADO · la captura ya está activa · usa N43 para detener");
+      return;
+    }
+    if(mArtNetCapture.stats().recording) {
+      SetShowMidiMessage("REC START BLOQUEADO · existe otra captura activa; deténla desde su origen");
+      return;
+    }
+    if(OutputArmed() || TakeOutputArmed()) {
+      SetShowMidiMessage("REC START BLOQUEADO · desarma la salida física antes de capturar");
+      return;
+    }
+    if(TakePlaying()) {
+      SetShowMidiMessage("REC START BLOQUEADO · detén la reproducción de la toma actual");
+      return;
+    }
+    if(song_id.empty()) {
+      SetShowMidiMessage("REC START BLOQUEADO · selecciona primero una canción");
+      return;
+    }
+    const auto library = aeyla::take_library_session::directory(this);
+    if(library.empty()) {
+      SetShowMidiMessage("REC START BLOQUEADO · selecciona una vez la BIBLIOTECA desde la interfaz");
+      return;
+    }
+    std::string directory_error;
+    if(!aeyla::capture::prepare_take_directory(library, directory_error)) {
+      SetShowMidiMessage("REC START BLOQUEADO · biblioteca sin escritura · " + directory_error);
+      return;
+    }
+    const auto stats = mArtNetCapture.stats();
+    if(!stats.running) {
+      SetShowMidiMessage("REC START BLOQUEADO · RX Art-Net no está activo · REESCANEA la red");
+      return;
+    }
+    if(!stats.signal_present || stats.source_ipv4.empty()) {
+      SetShowMidiMessage("REC START BLOQUEADO · RX sin señal Art-Net válida de Avolites");
+      return;
+    }
+    const auto scan = aeyla::capture::scan_take_directory(library, song_id);
+    const std::size_t next_number = scan.ok() ? scan.entries.size() + 1U : 1U;
+    const std::string take_name = "Toma " + std::to_string(next_number);
+    const auto target = aeyla::capture::make_take_file_path(
+        library, song_name.empty() ? song_id : song_name, take_name);
+    aeyla::capture::DmxTakeStreamConfig stream;
+    stream.target_path = target;
+    stream.song_id = song_id;
+    stream.song_name = song_name;
+    stream.take_name = take_name;
+    stream.source_ipv4 = stats.source_ipv4;
+    stream.port_address = universe;
+    stream.frames_per_second = 44U;
+
+    // REC START itself is the capture origin. No MTC, PLAY edge or N38 marker
+    // is allowed to move CERO after recording begins.
+    mCaptureSyncAnchor.reset();
+    std::string error;
+    if(!mArtNetCapture.begin_streamed_recording(stream, error)) {
+      mActiveCaptureTarget.clear();
+      SetShowMidiMessage("REC START BLOQUEADO · no se pudo iniciar captura · " + error);
+      return;
+    }
+    mActiveCaptureTarget = target;
+    aeyla::take_library_session::set_storage_message(
+        this, "GRABANDO POR MIDI · " + target.filename().string() + " · CERO = REC START");
+    SetShowMidiMessage("REC START · " + take_name + " · " + stats.source_ipv4 +
+        " · 44 Hz · CERO fijado por la nota MIDI · N43 detiene");
   };
 
   if(mShowMidiIngress.consume_panic_request()) {
@@ -505,9 +649,6 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
   const int preflight_cursor = mMidiPreflightCursor.load(
       std::memory_order_acquire);
   if(preflight_cursor == 0 && ShowMidiMapping().enabled) {
-    // A fresh pass belongs to the current project/library/network contract.
-    // Drop every stale handle first so a shorter/new show cannot report or
-    // launch readers left over from an earlier project.
     for(std::size_t index = 0U;
         index < mPreparedMidiTakeReaders.size(); ++index) {
       mPreparedMidiTakeReaders[index].reset();
@@ -589,9 +730,6 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     }
   }
 
-  // Disabling MIDI Show is an immediate command boundary. Notes already in
-  // the bounded queue must not execute after the operator has disabled the
-  // mapping; learning remains available while disabled and is handled above.
   if(!ShowMidiMapping().enabled) {
     mPendingShowMidiEvent.reset();
     aeyla::runtime::ShowMidiEvent ignored{};
@@ -609,23 +747,28 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
       mPendingShowMidiEvent = next;
     }
 
+    const auto pending_command = mPendingShowMidiEvent->command;
     const std::uint64_t completed = mProcessedAudioSamples.load(
         std::memory_order_acquire);
-    // A note at offset zero may be delivered immediately before ProcessBlock
-    // publishes the DAW's first RUNNING snapshot. Wait until at least one
-    // sample beyond the trigger has completed; the transport mutation path
-    // then compensates the full elapsed interval back to trigger_sample. This
-    // removes the first-block race without moving the artistic cue.
-    if(!aeyla::runtime::show_midi_event_ready(
-           completed, *mPendingShowMidiEvent))
+    // REC START/STOP are operational disk commands, not artistic transport
+    // events. Execute them immediately on the runtime worker. Artistic commands
+    // retain sample-ready scheduling.
+    const bool capture_command =
+        pending_command == aeyla::runtime::ShowMidiCommand::capture_start ||
+        pending_command == aeyla::runtime::ShowMidiCommand::capture_stop;
+    if(!capture_command &&
+       !aeyla::runtime::show_midi_event_ready(completed, *mPendingShowMidiEvent))
       return;
     const auto event = *mPendingShowMidiEvent;
     mPendingShowMidiEvent.reset();
 
     if(event.command == aeyla::runtime::ShowMidiCommand::panic_blackout) {
-      // Compatibility fallback for any already-queued PANIC event created by an
-      // older ingress implementation before this runtime revision was loaded.
       apply_midi_panic();
+      continue;
+    }
+    if(event.command == aeyla::runtime::ShowMidiCommand::capture_start ||
+       event.command == aeyla::runtime::ShowMidiCommand::capture_stop) {
+      apply_midi_capture_command(event.command);
       continue;
     }
 
@@ -633,46 +776,9 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     const auto prepared = mModel.snapshot().active_song_index;
     std::string error;
 
-    // During DMX recording, MIDI SHOW becomes a synchronization-only surface.
-    // The universal PLAY note (or the direct launch note for the already
-    // selected Song) marks the real artistic boundary without attempting to
-    // play a previously recorded Take or changing Song selection mid-capture.
-    // This fixes DAW pre-roll: an earlier transport-start fallback may be
-    // refined once by the explicit marker, while later retriggers are ignored.
     if(TakeRecording()) {
-      const bool sync_command =
-          event.command == aeyla::runtime::ShowMidiCommand::play_retrigger ||
-          (event.command == aeyla::runtime::ShowMidiCommand::launch_song &&
-           event.song_index == prepared);
-      if(!sync_command) {
-        SetShowMidiMessage(
-            "MIDI SHOW IGNORADO · durante GRABAR sólo se acepta el marcador de inicio");
-        continue;
-      }
-      if(!host.running) {
-        SetShowMidiMessage(
-            "SYNC GRABACIÓN EN ESPERA · el DAW aún está detenido");
-        continue;
-      }
-
-      const auto capture = mArtNetCapture.stats();
-      const bool accepted =
-          mCaptureSyncAnchor.anchor_explicit(capture.recorded_frames);
-      const auto sync = mCaptureSyncAnchor.status();
-      if(accepted) {
-        SetShowMidiMessage(
-            "SYNC GRABACIÓN MIDI · inicio fijado en cuadro " +
-            std::to_string(sync.anchor_frame) + " · RAW preservado");
-      }
-      else if(sync.source ==
-              aeyla::capture::DmxCaptureSyncSource::show_midi_marker) {
-        SetShowMidiMessage(
-            "SYNC GRABACIÓN MIDI · marcador ya fijado · retrigger ignorado");
-      }
-      else {
-        SetShowMidiMessage(
-            "SYNC GRABACIÓN MIDI IGNORADO · no hay captura R07 activa");
-      }
+      SetShowMidiMessage(
+          "MIDI SHOW IGNORADO · durante REC sólo N43 REC STOP controla la captura");
       continue;
     }
 
@@ -762,6 +868,10 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
         break;
       case aeyla::runtime::ShowMidiCommand::panic_blackout:
         apply_midi_panic();
+        break;
+      case aeyla::runtime::ShowMidiCommand::capture_start:
+      case aeyla::runtime::ShowMidiCommand::capture_stop:
+        apply_midi_capture_command(event.command);
         break;
       case aeyla::runtime::ShowMidiCommand::launch_song:
         if(event.song_index >= song_count) {

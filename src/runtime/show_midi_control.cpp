@@ -11,10 +11,11 @@ namespace {
 constexpr std::uint8_t kMaximumLaunchBase =
     static_cast<std::uint8_t>(127U - (kShowMidiSongCapacity - 1U));
 
-std::array<std::uint8_t, 5U> global_notes(
+std::array<std::uint8_t, 7U> global_notes(
     const ShowMidiMapping& mapping) noexcept {
   return {mapping.previous_note, mapping.next_note, mapping.play_note,
-          mapping.pause_note, mapping.stop_note};
+          mapping.pause_note, mapping.stop_note, mapping.capture_start_note,
+          mapping.capture_stop_note};
 }
 
 bool inside_launch_range(const ShowMidiMapping& mapping,
@@ -22,6 +23,13 @@ bool inside_launch_range(const ShowMidiMapping& mapping,
   const auto first = static_cast<unsigned>(mapping.launch_base_note);
   const auto value = static_cast<unsigned>(note);
   return value >= first && value < first + kShowMidiSongCapacity;
+}
+
+bool range_contains_fixed_note(std::uint8_t first_note,
+                               std::uint8_t fixed_note) noexcept {
+  const auto first = static_cast<unsigned>(first_note);
+  const auto fixed = static_cast<unsigned>(fixed_note);
+  return fixed >= first && fixed < first + kShowMidiSongCapacity;
 }
 
 }  // namespace
@@ -33,7 +41,8 @@ ShowMidiEvent make_show_midi_event(
     std::uint8_t note,
     std::uint64_t completed_callback_samples,
     std::uint64_t completed_transport_samples,
-    std::uint32_t sample_offset) noexcept {
+    std::uint32_t sample_offset,
+    std::uint64_t capture_frame_snapshot) noexcept {
   const auto offset = static_cast<std::uint64_t>(sample_offset);
   const auto saturating_add = [offset](std::uint64_t value) noexcept {
     return value > std::numeric_limits<std::uint64_t>::max() - offset
@@ -47,6 +56,7 @@ ShowMidiEvent make_show_midi_event(
   event.note = note;
   event.trigger_sample = saturating_add(completed_transport_samples);
   event.ready_sample = saturating_add(completed_callback_samples);
+  event.capture_frame_snapshot = capture_frame_snapshot;
   return event;
 }
 
@@ -76,13 +86,13 @@ ShowMidiMappingError validate_show_midi_mapping(
      }))
     return ShowMidiMappingError::invalid_note;
 
-  // Deliberately do not reject legacy PRETEST maps that already used N41.
-  // Persisted format 1.2 predates the PANIC reservation; rejecting such a map
-  // here would reject the whole restored VST3 component state. At runtime PANIC
-  // has first-match priority, while MIDI Learn below prevents creating any new
-  // collision with the reserved note.
+  // PANIC stays fixed and may never be shadowed. Every other command,
+  // including REC START/STOP, is configurable but must remain unique and out
+  // of the 15-note direct-song bank.
+  if(range_contains_fixed_note(mapping.launch_base_note, kShowMidiPanicNote))
+    return ShowMidiMappingError::duplicate_note;
   for(std::size_t left = 0U; left < notes.size(); ++left) {
-    if(inside_launch_range(mapping, notes[left]))
+    if(notes[left] == kShowMidiPanicNote || inside_launch_range(mapping, notes[left]))
       return ShowMidiMappingError::duplicate_note;
     for(std::size_t right = left + 1U; right < notes.size(); ++right) {
       if(notes[left] == notes[right])
@@ -101,9 +111,13 @@ bool match_show_midi_note(const ShowMidiMapping& mapping,
      validate_show_midi_mapping(mapping) != ShowMidiMappingError::none)
     return false;
 
-  // Safety command always wins over a legacy mapping collision.
+  // PANIC always wins. Capture commands follow their learned persistent notes.
   if(note == kShowMidiPanicNote)
     match.command = ShowMidiCommand::panic_blackout;
+  else if(note == mapping.capture_start_note)
+    match.command = ShowMidiCommand::capture_start;
+  else if(note == mapping.capture_stop_note)
+    match.command = ShowMidiCommand::capture_stop;
   else if(note == mapping.previous_note)
     match.command = ShowMidiCommand::previous_song;
   else if(note == mapping.next_note)
@@ -133,19 +147,11 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
     error_message = "No existe una asignación MIDI esperando aprendizaje";
     return false;
   }
-
-  // N41 is a fixed one-way safety control in R07. Existing persisted maps may
-  // still contain an old collision and remain readable, but no new Learn
-  // operation is allowed to create one.
-  if(target == ShowMidiLearnTarget::launch_song_base) {
-    const auto first = static_cast<unsigned>(note);
-    const auto panic = static_cast<unsigned>(kShowMidiPanicNote);
-    if(panic >= first && panic < first + kShowMidiSongCapacity) {
-      error_message = "El rango de canciones no puede incluir la nota 41 reservada para PANIC";
-      return false;
-    }
+  if(channel < 1U || channel > 16U || note > 127U) {
+    error_message = "Canal o nota MIDI fuera de rango";
+    return false;
   }
-  else if(note == kShowMidiPanicNote) {
+  if(note == kShowMidiPanicNote) {
     error_message = "La nota 41 está reservada para PANIC / APAGÓN";
     return false;
   }
@@ -158,6 +164,8 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
     case ShowMidiLearnTarget::play_retrigger: candidate.play_note = note; break;
     case ShowMidiLearnTarget::pause_resume: candidate.pause_note = note; break;
     case ShowMidiLearnTarget::stop_reset: candidate.stop_note = note; break;
+    case ShowMidiLearnTarget::capture_start: candidate.capture_start_note = note; break;
+    case ShowMidiLearnTarget::capture_stop: candidate.capture_stop_note = note; break;
     case ShowMidiLearnTarget::launch_song_base: candidate.launch_base_note = note; break;
     case ShowMidiLearnTarget::none: break;
   }
@@ -166,13 +174,16 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
   if(validation != ShowMidiMappingError::none) {
     error_message = validation == ShowMidiMappingError::launch_range_overflow
         ? "La nota base debe dejar espacio para 15 canciones"
-        : "La nota coincide con otro comando o con el rango de canciones";
+        : "La nota coincide con otro comando, PANIC o el rango de canciones";
     return false;
   }
   mapping = candidate;
   return true;
 }
 
+// Legacy 64-bit realtime pack keeps the original artistic map. R09.1 stores
+// learned REC START/STOP separately in lock-free atomics and appends them to
+// host-state format 1.4, preserving compatibility with 1.2/1.3 sessions.
 std::uint64_t pack_show_midi_mapping(const ShowMidiMapping& mapping) noexcept {
   const std::array<std::uint8_t, 8U> bytes{
       static_cast<std::uint8_t>(mapping.enabled ? 1U : 0U), mapping.channel,

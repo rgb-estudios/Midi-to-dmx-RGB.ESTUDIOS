@@ -39,15 +39,23 @@ class DmxCaptureSyncAnchor final {
  public:
   void begin(const runtime::HostTransportSnapshot& initial_host) noexcept;
 
-  // Fallback path: returns true exactly once when a valid running transport
-  // fixes an initial anchor after recording began with the host stopped.
+  // Legacy non-realtime fallback. Kept for hosts where no callback-edge marker
+  // was published; an audio-callback transport snapshot below is preferred.
   [[nodiscard]] bool observe(
       const runtime::HostTransportSnapshot& host,
       std::uint64_t recorded_frames) noexcept;
 
-  // Preferred show path: the sample-accurate MIDI PLAY/launch marker identifies
-  // the actual Song boundary. It may replace a prior transport fallback anchor,
-  // but the first explicit marker wins so retriggers cannot move the edit point.
+  // Preferred automatic path for REC -> PLAY. The audio callback snapshots the
+  // 44 Hz capture cursor on the exact STOP->PLAY block boundary, then the
+  // non-realtime worker commits that frame here. An explicit MIDI marker may
+  // still refine this transport anchor later.
+  [[nodiscard]] bool anchor_transport_snapshot(
+      std::uint64_t recorded_frames) noexcept;
+
+  // Preferred explicit show path: MIDI PLAY/launch identifies the actual Song
+  // boundary. The capture frame itself was snapshotted at MIDI ingress. It may
+  // replace a prior transport anchor, but the first explicit marker wins so
+  // retriggers cannot move the edit point.
   [[nodiscard]] bool anchor_explicit(std::uint64_t recorded_frames) noexcept;
 
   void reset() noexcept;

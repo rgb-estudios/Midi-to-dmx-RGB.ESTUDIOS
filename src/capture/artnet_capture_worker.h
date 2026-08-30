@@ -126,6 +126,13 @@ class ArtNetCaptureWorker final {
 
   void discard_recording() noexcept;
 
+  // Realtime-safe capture timeline snapshot. This is intentionally much
+  // narrower than stats(): the MIDI/audio callback can timestamp a show marker
+  // against the DMX sampler without taking frame/string/storage locks. The
+  // value is the number of complete 44 Hz frames already accepted by the
+  // recording path at the instant of the load.
+  [[nodiscard]] std::uint64_t recorded_frames_fast() const noexcept;
+
   [[nodiscard]] bool latest_frame(DmxUniverse& frame) const noexcept;
   [[nodiscard]] ArtNetCaptureStats stats() const noexcept;
 

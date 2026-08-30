@@ -71,6 +71,19 @@ bool valid_binding_id(std::string_view value) noexcept {
   });
 }
 
+bool valid_take_file_name(std::string_view value) noexcept {
+  constexpr std::string_view suffix = ".aeylatake";
+  if (value.empty() || value.size() > kMaxTakeFileNameBytes ||
+      value == "." || value == ".." ||
+      value.find('\0') != std::string_view::npos ||
+      value.find('/') != std::string_view::npos ||
+      value.find('\\') != std::string_view::npos ||
+      value.size() < suffix.size() ||
+      value.substr(value.size() - suffix.size()) != suffix)
+    return false;
+  return true;
+}
+
 bool is_known_locator_mode(ProjectLocatorMode mode) noexcept {
   switch (mode) {
     case ProjectLocatorMode::none:
@@ -138,6 +151,23 @@ PluginStateError validate_state(const PluginComponentState& state) noexcept {
   if (validate_show_midi_mapping(state.show_midi) !=
       ShowMidiMappingError::none)
     return PluginStateError::invalid_show_midi_mapping;
+  if (state.take_library_locator.size() > kMaxTakeLibraryLocatorBytes ||
+      state.take_library_locator.find('\0') != std::string::npos)
+    return PluginStateError::invalid_take_binding;
+  if (state.take_bindings.size() > kMaxSessionTakeBindings)
+    return PluginStateError::invalid_take_binding;
+  std::set<std::string> take_song_ids;
+  for (const auto& binding : state.take_bindings) {
+    const bool full_file = binding.start_frame == 0U &&
+                           binding.end_frame_exclusive == 0U;
+    const bool valid_trim = binding.end_frame_exclusive > binding.start_frame &&
+                            binding.end_frame_exclusive - binding.start_frame >= 2U;
+    if (!valid_binding_id(binding.song_id) ||
+        !valid_take_file_name(binding.file_name) ||
+        (!full_file && !valid_trim) ||
+        !take_song_ids.insert(binding.song_id).second)
+      return PluginStateError::invalid_take_binding;
+  }
   return PluginStateError::none;
 }
 
@@ -153,8 +183,14 @@ PluginStateEncodeResult encode_plugin_component_state(
   std::size_t binding_bytes = 2U;
   for (const auto& binding : state.song_bindings)
     binding_bytes += 2U + binding.song_id.size() + 8U;
+  std::size_t take_binding_bytes =
+      4U + state.take_library_locator.size() + 2U;
+  for (const auto& binding : state.take_bindings)
+    take_binding_bytes += 2U + binding.song_id.size() + 2U +
+                          binding.file_name.size() + 8U + 8U;
   const auto payload_size = static_cast<std::uint32_t>(
-      kFixedPayloadSize + locator_size + binding_bytes + 8U);
+      kFixedPayloadSize + locator_size + binding_bytes + 8U +
+      take_binding_bytes + 2U);
   const auto total_size = kHeaderSize + static_cast<std::size_t>(payload_size);
   if (total_size > kMaxPluginStateBytes) {
     result.error = PluginStateError::locator_too_large;
@@ -188,6 +224,28 @@ PluginStateEncodeResult encode_plugin_component_state(
                  std::bit_cast<std::uint64_t>(binding.host_start_ppq));
     }
     append_u64(result.bytes, pack_show_midi_mapping(state.show_midi));
+    append_u32(result.bytes, static_cast<std::uint32_t>(
+        state.take_library_locator.size()));
+    result.bytes.insert(result.bytes.end(), state.take_library_locator.begin(),
+                        state.take_library_locator.end());
+    append_u16(result.bytes,
+               static_cast<std::uint16_t>(state.take_bindings.size()));
+    for (const auto& binding : state.take_bindings) {
+      append_u16(result.bytes,
+                 static_cast<std::uint16_t>(binding.song_id.size()));
+      result.bytes.insert(result.bytes.end(), binding.song_id.begin(),
+                          binding.song_id.end());
+      append_u16(result.bytes,
+                 static_cast<std::uint16_t>(binding.file_name.size()));
+      result.bytes.insert(result.bytes.end(), binding.file_name.begin(),
+                          binding.file_name.end());
+      append_u64(result.bytes, binding.start_frame);
+      append_u64(result.bytes, binding.end_frame_exclusive);
+    }
+    // State 1.4: learned capture boundary notes. Appended so 1.3 readers can
+    // safely ignore them while 1.4 restores them exactly.
+    result.bytes.push_back(state.show_midi.capture_start_note);
+    result.bytes.push_back(state.show_midi.capture_stop_note);
   } catch (const std::bad_alloc&) {
     result.bytes.clear();
     result.error = PluginStateError::allocation_failure;
@@ -327,6 +385,77 @@ PluginStateDecodeResult decode_plugin_component_state(
     result.state.show_midi = unpack_show_midi_mapping(packed_mapping);
   }
 
+  if (format_minor >= 3U) {
+    std::uint32_t take_locator_size = 0U;
+    if (!read_u32(bytes.first(payload_end), offset, take_locator_size) ||
+        take_locator_size > kMaxTakeLibraryLocatorBytes ||
+        offset + take_locator_size > payload_end) {
+      result.error = PluginStateError::invalid_take_binding;
+      return result;
+    }
+    try {
+      result.state.take_library_locator.assign(
+          reinterpret_cast<const char*>(bytes.data() + offset),
+          take_locator_size);
+    } catch (...) {
+      result.error = PluginStateError::allocation_failure;
+      return result;
+    }
+    offset += take_locator_size;
+
+    std::uint16_t take_count = 0U;
+    if (!read_u16(bytes.first(payload_end), offset, take_count) ||
+        take_count > kMaxSessionTakeBindings) {
+      result.error = PluginStateError::invalid_take_binding;
+      return result;
+    }
+    try {
+      result.state.take_bindings.reserve(take_count);
+      for (std::uint16_t index = 0U; index < take_count; ++index) {
+        std::uint16_t id_size = 0U;
+        std::uint16_t file_size = 0U;
+        if (!read_u16(bytes.first(payload_end), offset, id_size) ||
+            id_size == 0U || id_size > kMaxSessionSongIdBytes ||
+            offset + id_size > payload_end) {
+          result.error = PluginStateError::invalid_take_binding;
+          return result;
+        }
+        SessionTakeBinding binding;
+        binding.song_id.assign(
+            reinterpret_cast<const char*>(bytes.data() + offset), id_size);
+        offset += id_size;
+        if (!read_u16(bytes.first(payload_end), offset, file_size) ||
+            file_size == 0U || file_size > kMaxTakeFileNameBytes ||
+            offset + file_size + 16U > payload_end) {
+          result.error = PluginStateError::invalid_take_binding;
+          return result;
+        }
+        binding.file_name.assign(
+            reinterpret_cast<const char*>(bytes.data() + offset), file_size);
+        offset += file_size;
+        if (!read_u64(bytes.first(payload_end), offset, binding.start_frame) ||
+            !read_u64(bytes.first(payload_end), offset,
+                      binding.end_frame_exclusive)) {
+          result.error = PluginStateError::invalid_take_binding;
+          return result;
+        }
+        result.state.take_bindings.push_back(std::move(binding));
+      }
+    } catch (...) {
+      result.error = PluginStateError::allocation_failure;
+      return result;
+    }
+  }
+
+  if (format_minor >= 4U) {
+    if (offset + 2U > payload_end) {
+      result.error = PluginStateError::invalid_show_midi_mapping;
+      return result;
+    }
+    result.state.show_midi.capture_start_note = bytes[offset++];
+    result.state.show_midi.capture_stop_note = bytes[offset++];
+  }
+
   // Same-major future minor versions may append fields inside payload_size.
   if (offset > payload_end) {
     result.error = PluginStateError::invalid_payload_size;
@@ -353,6 +482,7 @@ const char* plugin_state_error_name(PluginStateError error) noexcept {
     case PluginStateError::inconsistent_locator: return "inconsistent_locator";
     case PluginStateError::invalid_song_binding: return "invalid_song_binding";
     case PluginStateError::invalid_show_midi_mapping: return "invalid_show_midi_mapping";
+    case PluginStateError::invalid_take_binding: return "invalid_take_binding";
   }
   return "unknown";
 }

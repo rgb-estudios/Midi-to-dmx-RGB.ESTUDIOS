@@ -21,6 +21,7 @@ using aeyla::runtime::PluginComponentState;
 using aeyla::runtime::PluginStateError;
 using aeyla::runtime::ProjectLocatorMode;
 using aeyla::runtime::SessionSongBinding;
+using aeyla::runtime::SessionTakeBinding;
 }  // namespace
 
 int main() {
@@ -44,6 +45,13 @@ int main() {
   state.show_midi.enabled = true;
   state.show_midi.channel = 12U;
   state.show_midi.play_note = 72U;
+  state.show_midi.capture_start_note = 74U;
+  state.show_midi.capture_stop_note = 75U;
+  state.take_library_locator = "C:/AEYLA/Takes";
+  state.take_bindings = {
+      SessionTakeBinding{"song-intro", "Intro_Toma_2.aeylatake", 44U, 440U},
+      SessionTakeBinding{"song-final", "Final_Clip.aeylatake", 0U, 0U},
+  };
 
   const auto encoded = aeyla::runtime::encode_plugin_component_state(state);
   check(encoded.ok(), "valid state should encode");
@@ -57,6 +65,9 @@ int main() {
         "all 15-song session bindings must survive host-state round trip");
   check(decoded.state.show_midi == state.show_midi,
         "MIDI Show mapping must survive host-state round trip");
+  check(decoded.state.take_library_locator == state.take_library_locator &&
+            decoded.state.take_bindings == state.take_bindings,
+        "take library selection and trims must survive host-state round trip");
 
   // Every truncated prefix must fail; no partial state may be accepted.
   for (std::size_t size = 0; size < encoded.bytes.size(); ++size) {
@@ -172,21 +183,66 @@ int main() {
           "non-finite host start PPQ must be rejected");
   }
 
+  // Take bindings are basenames only and trims have one unambiguous full-file
+  // sentinel (0/0). Never admit traversal, arbitrary extensions or one-frame
+  // / overflow-prone ranges into host state.
+  {
+    auto invalid = state;
+    invalid.take_bindings.front().file_name = "../escape.aeylatake";
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_take_binding,
+          "take filename traversal must be rejected");
+  }
+  {
+    auto invalid = state;
+    invalid.take_bindings.front().file_name = "Intro_Toma_2.wav";
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_take_binding,
+          "take binding must reference an .aeylatake basename");
+  }
+  {
+    auto invalid = state;
+    invalid.take_bindings.front().start_frame = 44U;
+    invalid.take_bindings.front().end_frame_exclusive = 0U;
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_take_binding,
+          "only 0/0 may represent full-file playback");
+  }
+  {
+    auto invalid = state;
+    invalid.take_bindings.front().end_frame_exclusive =
+        invalid.take_bindings.front().start_frame + 1U;
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_take_binding,
+          "take trim must leave at least two DMX frames");
+  }
+  {
+    auto invalid = state;
+    invalid.take_bindings.front().start_frame =
+        std::numeric_limits<std::uint64_t>::max();
+    invalid.take_bindings.front().end_frame_exclusive = 0U;
+    const auto result = aeyla::runtime::encode_plugin_component_state(invalid);
+    check(result.error == PluginStateError::invalid_take_binding,
+          "take trim validation must not overflow at UINT64_MAX");
+  }
+
   // Legacy format 1.0 contains no binding-count tail. It remains readable and
   // migrates deterministically to an empty binding list (safe until SET START).
   {
     PluginComponentState legacy_state = state;
     legacy_state.song_bindings.clear();
+    legacy_state.take_library_locator.clear();
+    legacy_state.take_bindings.clear();
     auto bytes = aeyla::runtime::encode_plugin_component_state(legacy_state).bytes;
-    check(bytes.size() >= 2U, "current empty-binding state must contain count tail");
-    bytes.resize(bytes.size() - 10U);
+    check(bytes.size() >= 16U, "current state must contain 1.1/1.2/1.3 tails");
+    bytes.resize(bytes.size() - 18U);
     bytes[10] = 0U;
     bytes[11] = 0U;
     std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
                                  (static_cast<std::uint32_t>(bytes[13]) << 8U) |
                                  (static_cast<std::uint32_t>(bytes[14]) << 16U) |
                                  (static_cast<std::uint32_t>(bytes[15]) << 24U);
-    payload_size -= 10U;
+    payload_size -= 18U;
     bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
     bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
     bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
@@ -201,9 +257,37 @@ int main() {
   // MIDI Show map is not. They migrate to the safe disabled default without
   // losing their placement data.
   {
-    auto bytes = encoded.bytes;
-    bytes.resize(bytes.size() - 8U);
+    auto legacy11 = state;
+    legacy11.take_library_locator.clear();
+    legacy11.take_bindings.clear();
+    auto bytes = aeyla::runtime::encode_plugin_component_state(legacy11).bytes;
+    bytes.resize(bytes.size() - 16U);
     bytes[10] = 1U;
+    bytes[11] = 0U;
+    std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
+                                 (static_cast<std::uint32_t>(bytes[13]) << 8U) |
+                                 (static_cast<std::uint32_t>(bytes[14]) << 16U) |
+                                 (static_cast<std::uint32_t>(bytes[15]) << 24U);
+    payload_size -= 16U;
+    bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
+    bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
+    bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
+    const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    auto expected = legacy11;
+    expected.show_midi = {};
+    check(result.ok() && result.state == expected,
+          "legacy 1.1 state must migrate to disabled MIDI Show defaults");
+  }
+
+  // R08 format 1.2 contains MIDI Show state but no take-library tail.
+  {
+    auto legacy12 = state;
+    legacy12.take_library_locator.clear();
+    legacy12.take_bindings.clear();
+    auto bytes = aeyla::runtime::encode_plugin_component_state(legacy12).bytes;
+    bytes.resize(bytes.size() - 8U);
+    bytes[10] = 2U;
     bytes[11] = 0U;
     std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
                                  (static_cast<std::uint32_t>(bytes[13]) << 8U) |
@@ -215,10 +299,35 @@ int main() {
     bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
     bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
     const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
-    auto expected = state;
-    expected.show_midi = {};
+    auto expected = legacy12;
+    expected.show_midi.capture_start_note = aeyla::runtime::kShowMidiCaptureStartNote;
+    expected.show_midi.capture_stop_note = aeyla::runtime::kShowMidiCaptureStopNote;
     check(result.ok() && result.state == expected,
-          "legacy 1.1 state must migrate to disabled MIDI Show defaults");
+          "legacy 1.2 state must migrate with default capture notes and empty take bindings");
+  }
+
+  // R08 state 1.3 contains take bindings but predates learned REC notes. It
+  // restores N42/N43 defaults without changing any existing take selection.
+  {
+    auto bytes = encoded.bytes;
+    bytes.resize(bytes.size() - 2U);
+    bytes[10] = 3U;
+    bytes[11] = 0U;
+    std::uint32_t payload_size = static_cast<std::uint32_t>(bytes[12]) |
+                                 (static_cast<std::uint32_t>(bytes[13]) << 8U) |
+                                 (static_cast<std::uint32_t>(bytes[14]) << 16U) |
+                                 (static_cast<std::uint32_t>(bytes[15]) << 24U);
+    payload_size -= 2U;
+    bytes[12] = static_cast<std::uint8_t>(payload_size & 0xFFU);
+    bytes[13] = static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU);
+    bytes[14] = static_cast<std::uint8_t>((payload_size >> 16U) & 0xFFU);
+    bytes[15] = static_cast<std::uint8_t>((payload_size >> 24U) & 0xFFU);
+    const auto result = aeyla::runtime::decode_plugin_component_state(bytes);
+    auto expected = state;
+    expected.show_midi.capture_start_note = aeyla::runtime::kShowMidiCaptureStartNote;
+    expected.show_midi.capture_stop_note = aeyla::runtime::kShowMidiCaptureStopNote;
+    check(result.ok() && result.state == expected,
+          "legacy 1.3 state must migrate to default capture notes");
   }
 
   // Same-major future minor payloads may append fields and remain readable.

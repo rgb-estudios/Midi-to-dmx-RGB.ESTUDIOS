@@ -1,9 +1,12 @@
 #include "AeylaTakeLibrarySession.h"
+#include "capture/dmx_take_file_store.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -13,6 +16,12 @@ void check(bool condition, const std::string& message) {
     ++failures;
     std::cerr << "FAIL: " << message << '\n';
   }
+}
+
+std::filesystem::path make_temp_library() {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  return std::filesystem::temp_directory_path() /
+         ("aeyla-take-session-" + std::to_string(stamp));
 }
 }  // namespace
 
@@ -75,6 +84,88 @@ int main() {
             !edit_state(&first_owner, "song-a").has_value(),
         "plugin destruction must be able to remove its complete session");
   clear(&second_owner);
+
+  // Host-state 1.3 gate: save the selected file + trims, destroy the complete
+  // in-memory session, then reconstruct it from the exact same library path.
+  const auto portableLibrary = make_temp_library();
+  std::string error;
+  check(aeyla::capture::prepare_take_directory(portableLibrary, error),
+        "temporary Take library must be writable: " + error);
+
+  aeyla::capture::DmxTake recorded;
+  recorded.name = "Toma 1";
+  recorded.port_address = 0U;
+  recorded.frames_per_second = 44U;
+  recorded.source_ipv4 = "2.0.0.10";
+  recorded.frames.resize(12U);
+  for(std::size_t index = 0U; index < recorded.frames.size(); ++index)
+    recorded.frames[index][0] = static_cast<std::uint8_t>(index + 1U);
+  const auto portableTake = aeyla::capture::make_take_file_path(
+      portableLibrary, "Song A", "Toma 1");
+  check(aeyla::capture::save_take_file_atomic(
+            portableTake, "song-a", "Song A", recorded, error),
+        "portable Take must save: " + error);
+
+  int persisted_owner = 0;
+  ensure_scope(&persisted_owner, "project-persisted");
+  set_directory(&persisted_owner, portableLibrary);
+  TakeEditState persistedEdit;
+  persistedEdit.path = portableTake;
+  persistedEdit.take_name = "Toma 1";
+  persistedEdit.start_frame = 3U;
+  persistedEdit.end_frame_exclusive = 10U;
+  persistedEdit.frame_count = 12U;
+  persistedEdit.frames_per_second = 44U;
+  set_edit_state(&persisted_owner, "song-a", persistedEdit);
+  set_loaded_path(&persisted_owner, "song-a", portableTake);
+
+  const std::vector<std::string> songs{"song-a"};
+  const auto hostSnapshot = snapshot_for_host(&persisted_owner, songs);
+  check(!hostSnapshot.library_locator.empty(),
+        "host snapshot must persist the selected Take library locator");
+  check(hostSnapshot.bindings.size() == 1U &&
+            hostSnapshot.bindings.front().song_id == "song-a" &&
+            hostSnapshot.bindings.front().start_frame == 3U &&
+            hostSnapshot.bindings.front().end_frame_exclusive == 10U,
+        "host snapshot must persist exact Take basename and IN/OUT trims");
+
+  clear(&persisted_owner);
+  stage_persisted_state(&persisted_owner, "project-persisted",
+                        hostSnapshot.library_locator, hostSnapshot.bindings);
+  const auto reopened = edit_state(&persisted_owner, "song-a");
+  check(!directory(&persisted_owner).empty() && reopened.has_value() &&
+            reopened->path.filename() == portableTake.filename() &&
+            reopened->start_frame == 3U &&
+            reopened->end_frame_exclusive == 10U,
+        "same-machine host reopen must restore library, Take and trims without arming output");
+
+  // Cross-platform gate: an unavailable saved path must not be guessed. The
+  // bindings survive while unresolved and are applied only after the operator
+  // explicitly selects the real library on the destination machine.
+  const auto missingLocator =
+      (portableLibrary.parent_path() / "definitely-missing-aeyla-library").generic_string();
+  clear(&persisted_owner);
+  stage_persisted_state(&persisted_owner, "project-persisted",
+                        missingLocator, hostSnapshot.bindings);
+  check(directory(&persisted_owner).empty() &&
+            !edit_state(&persisted_owner, "song-a").has_value(),
+        "unavailable saved locator must remain fail-closed");
+  const auto unresolvedSnapshot = snapshot_for_host(&persisted_owner, songs);
+  check(unresolvedSnapshot.bindings.size() == 1U &&
+            unresolvedSnapshot.bindings.front().file_name ==
+                hostSnapshot.bindings.front().file_name,
+        "unresolved cross-platform move must preserve pending Take binding");
+
+  set_directory(&persisted_owner, portableLibrary);
+  const auto rebound = edit_state(&persisted_owner, "song-a");
+  check(rebound.has_value() && rebound->path.filename() == portableTake.filename() &&
+            rebound->start_frame == 3U &&
+            rebound->end_frame_exclusive == 10U,
+        "manual destination-library selection must rebind the persisted Take and trims");
+
+  clear(&persisted_owner);
+  std::error_code cleanupError;
+  std::filesystem::remove_all(portableLibrary, cleanupError);
 
   if(failures == 0) {
     std::cout << "All AEYLA Take library session tests passed.\n";

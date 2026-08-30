@@ -1,7 +1,8 @@
 #define PLUG_NAME "AEYLA Visual DMX"
 #define PLUG_MFR "RGBEstudios"
-#define PLUG_VERSION_HEX 0x00000303
-#define PLUG_VERSION_STR "0.3.3-alpha"
+#define PLUG_VERSION_HEX 0x00000306
+#define PLUG_VERSION_STR "0.3.6-alpha"
+// R09.1 PRETEST: capture START/STOP are independent MIDI-learnable show actions.
 #define PLUG_UNIQUE_ID 'AyVD'
 #define PLUG_MFR_ID 'RGBE'
 #define PLUG_URL_STR "https://github.com/rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS"

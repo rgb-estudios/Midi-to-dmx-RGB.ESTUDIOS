@@ -1,3 +1,4 @@
+#include "capture/dmx_take_file_store.h"
 #include "capture/dmx_take_scheduler.h"
 #include "capture/dmx_take_stream_writer.h"
 #include "output/artnet_output_worker.h"
