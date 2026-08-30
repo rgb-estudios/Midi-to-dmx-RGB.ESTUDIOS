@@ -1,8 +1,10 @@
-#define PLUG_NAME "AEYLA Visual DMX"
+#define PLUG_NAME "RGB Live Control"
 #define PLUG_MFR "RGBEstudios"
 #define PLUG_VERSION_HEX 0x00000306
 #define PLUG_VERSION_STR "0.3.6-alpha"
-// R09.1 PRETEST: capture START/STOP are independent MIDI-learnable show actions.
+// R10.2 PRETEST: user-facing product brand is RGB Live Control. The existing
+// class, bundle and unique IDs intentionally remain stable so REAPER/Ableton
+// keep recognizing the same plugin instance and existing host state.
 #define PLUG_UNIQUE_ID 'AyVD'
 #define PLUG_MFR_ID 'RGBE'
 #define PLUG_URL_STR "https://github.com/rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS"
@@ -10,6 +12,9 @@
 #define PLUG_COPYRIGHT_STR "Copyright 2026 RGB Estudios"
 #define PLUG_CLASS_NAME AeylaVisualDmx
 
+// Compatibility names remain unchanged for this PRETEST cut. A future signed
+// product migration may rename the physical bundle only with an explicit host
+// migration plan.
 #define BUNDLE_NAME "AeylaVisualDmx"
 #define BUNDLE_MFR "RGBEstudios"
 #define BUNDLE_DOMAIN "cl"
@@ -22,8 +27,9 @@
 #define PLUG_DOES_MIDI_IN 1
 #define PLUG_DOES_MIDI_OUT 0
 #define PLUG_DOES_MPE 0
-// Custom component chunks contain versioned AEYLA project identity and safe
-// preferences, followed by iPlug's parameter state. Output Arm is excluded.
+// Custom component chunks contain versioned RGB Live Control project identity
+// and safe preferences, followed by iPlug's parameter state. Output Arm is
+// excluded.
 #define PLUG_DOES_STATE_CHUNKS 1
 
 #define PLUG_HAS_UI 1
@@ -46,14 +52,14 @@
 #define AAX_TYPE_IDS 'AyV1'
 #define AAX_TYPE_IDS_AUDIOSUITE 'AyA1'
 #define AAX_PLUG_MFR_STR "RGB Estudios"
-#define AAX_PLUG_NAME_STR "AEYLA Visual DMX\nAyVD"
+#define AAX_PLUG_NAME_STR "RGB Live Control\nAyVD"
 #define AAX_PLUG_CATEGORY_STR "Instrument"
 #define AAX_DOES_AUDIOSUITE 0
 
 #define VST3_SUBCATEGORY "Instrument|Synth"
 #define CLAP_MANUAL_URL "https://github.com/rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS"
 #define CLAP_SUPPORT_URL "https://github.com/rgb-estudios/Midi-to-dmx-RGB.ESTUDIOS/issues"
-#define CLAP_DESCRIPTION "Visual-to-DMX runtime and editor for AEYLA"
+#define CLAP_DESCRIPTION "RGB Estudios live show control for DMX capture, playback and operation"
 #define CLAP_FEATURES "instrument", "utility"
 
 #define APP_NUM_CHANNELS 2
