@@ -32,7 +32,7 @@ public:
     const IColor danger(255, 231, 45, 55);
     const IColor verify(255, 68, 214, 255);
 
-    // R08.2 verification beacon. A previous R08 binary still painted the old
+    // R09 verification beacon. A previous R08 binary still painted the old
     // "R07 PRETEST" subtitle in the main control; this overlay intentionally
     // covers that line so the operator can identify the loaded binary at a
     // glance without opening an installer or checking a filesystem timestamp.
@@ -51,10 +51,10 @@ public:
     g.DrawRoundRect(recording ? danger : verify,
                     verifyBadge, 6.0F, nullptr, 1.4F);
     const std::string verifyLabel = recording
-        ? "R08.2 PRETEST  ·  N42 MIDI REC  ·  CAPTURANDO"
+        ? "R09 PRETEST  ·  N42 START / N43 STOP  ·  CAPTURANDO"
         : (midiShowEnabled
-              ? "R08.2 PRETEST  ·  N42 MIDI REC  ·  LISTO"
-              : "R08.2 PRETEST  ·  N42 MIDI REC  ·  MIDI SHOW OFF");
+              ? "R09 PRETEST  ·  N42 START / N43 STOP  ·  LISTO"
+              : "R09 PRETEST  ·  N42 START / N43 STOP  ·  MIDI SHOW OFF");
     g.DrawText(IText(10.5F, recording ? danger : verify,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                verifyLabel.c_str(), verifyBadge.GetPadded(-5.0F));
@@ -149,7 +149,7 @@ public:
     }
 
     // Backlit output capsule. The top line is physical authority, while the
-    // lower line explicitly exposes the fixed N42 capture trigger state.
+    // lower line explicitly exposes the fixed N42/N43 capture trigger state.
     const IRECT outputAura(mOutputStatus.L - 4.0F, mOutputStatus.T + 4.0F,
                            mOutputStatus.R + 4.0F, mOutputStatus.B - 4.0F);
     g.FillRoundRect(recording || mPlug.TakeOutputLive()
@@ -171,10 +171,10 @@ public:
                state.c_str(), authorityLine);
 
     const std::string midiRecState = recording
-        ? "N42 MIDI REC · CAPTURANDO"
+        ? "N42 START · N43 STOP · CAPTURANDO"
         : (midiShowEnabled
-              ? "N42 MIDI REC · LISTO"
-              : "N42 MIDI REC · ACTIVA MIDI SHOW");
+              ? "N42 START · N43 STOP · LISTO"
+              : "N42 START · N43 STOP · ACTIVA MIDI SHOW");
     g.DrawText(IText(9.5F,
                      recording ? danger :
                          (midiShowEnabled ? verify : muted),

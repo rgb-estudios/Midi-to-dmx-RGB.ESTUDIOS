@@ -790,7 +790,7 @@ private:
     // Reserve every inter-row gap, both state rows, the message and all three
     // safety/sync footer lines. At the nominal 1280x800 canvas this keeps the
     // final warning inside the card. The compact 960x620 branch combines its
-    // MTC/safety footer into two lines while retaining all six controls.
+    // capture/safety footer into two lines while retaining all six controls.
     const float midiFixedBelowRows = mCompactMidi ? 163.0F : 264.0F;
     const float midiRowHeight = std::clamp(
         (midi.B - rowTop - midiFixedBelowRows) / 6.0F,
@@ -828,7 +828,7 @@ private:
                "AEYLA",
                IRECT(mHeader.L, mHeader.T, mHeader.L + 282.0F, mHeader.B - 20.0F));
     g.DrawText(IText(12.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · R07 PRETEST",
+               "RGB ESTUDIOS · R09 PRETEST · MIDI REC DIRECT",
                IRECT(mHeader.L, mHeader.B - 27.0F,
                      mHeader.L + 290.0F, mHeader.B));
 
@@ -1249,14 +1249,14 @@ private:
     if(mCompactMidi)
     {
       g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
-                 "MTC: mismo DAW → Avolites · MIDI no arma Art-Net ni desactiva APAGÓN",
+                 "CAPTURA: N42 REC START · N43 REC STOP · CERO = REC START",
                  IRECT(mWorkspace.L + 18.0F, footerTop + 19.0F,
                        mWorkspace.R - 18.0F, footerTop + 42.0F));
     }
     else
     {
       g.DrawText(IText(12.0F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Top),
-                 "MTC puede salir del mismo DAW hacia Avolites. AEYLA no lo recircula: la nota MIDI y el audio comparten el reloj más preciso del host.",
+                 "CAPTURA DMX: N42 REC START fija CERO · N43 REC STOP finaliza · AEYLA no usa MTC.",
                  IRECT(mWorkspace.L + 18.0F, footerTop + 23.0F,
                        mWorkspace.R - 18.0F, footerTop + 52.0F));
       g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),

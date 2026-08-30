@@ -1,105 +1,28 @@
-name: core-ci-r09-finalizer
+name: core-ci
 
 on:
   push:
-    branches:
-      - aeyla/r08-capture-zero-midi-rec-20260829
-    paths:
-      - .github/workflows/ci.yml
-
-permissions:
-  contents: write
+  pull_request:
 
 jobs:
-  integrate-r09-rec-start-stop:
-    runs-on: ubuntu-latest
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: aeyla/r08-capture-zero-midi-rec-20260829
-          fetch-depth: 0
-
-      - name: Sanitize and apply runtime patch
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('tools/dev/r09_apply_rec_start_stop.py')
-          text = p.read_text(encoding='utf-8')
-          text = text.replace('text = text.replace("N42 REC", "N42 REC START · N43 REC STOP")\n', '')
-          p.write_text(text, encoding='utf-8')
-          PY
-          python tools/dev/r09_apply_rec_start_stop.py
-
-      - name: Reject stale toggle and transport-zero logic
-        shell: bash
-        run: |
-          if grep -R --line-number --exclude='r09_apply_rec_start_stop.py' 'ShowMidiCommand::capture_toggle\|apply_midi_capture_toggle' src product tests; then
-            echo 'stale capture toggle remains'
-            exit 1
-          fi
-          if grep -R --line-number 'PLAY/N38 fijará el cero\|usa N38 para fijar el cero' product/AeylaVisualDmx; then
-            echo 'stale capture-zero transport wording remains'
-            exit 1
-          fi
-
-      - name: Restore permanent CI and remove engineering files
-        shell: python
-        run: |
-          from pathlib import Path
-          dollar = '$'
-          permanent = f'''name: core-ci
-
-          on:
-            push:
-            pull_request:
-
-          jobs:
-            build-and-test:
-              strategy:
-                fail-fast: false
-                matrix:
-                  os: [ubuntu-latest, windows-latest, macos-latest]
-              runs-on: {dollar}{{{{ matrix.os }}}}
-              steps:
-                - uses: actions/checkout@v4
-                - name: Configure
-                  run: cmake -S . -B build
-                - name: Build
-                  run: cmake --build build --config Release
-                - name: Test
-                  run: ctest --test-dir build -C Release --output-on-failure
-                - name: Validate JSON syntax
-                  shell: python
-                  run: |
-                    import json, pathlib
-                    for p in pathlib.Path('.').rglob('*.json'):
-                        json.loads(p.read_text(encoding='utf-8'))
-                        print('OK', p)
-          '''
-          Path('.github/workflows/ci.yml').write_text(permanent, encoding='utf-8')
-          for item in [
-              Path('.github/workflows/r09-apply-rec-start-stop-once.yml'),
-              Path('tools/dev/r09_apply_rec_start_stop.py'),
-          ]:
-              if item.exists():
-                  item.unlink()
-
       - name: Configure
         run: cmake -S . -B build
-
       - name: Build
         run: cmake --build build --config Release
-
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
-
-      - name: Commit clean R09 integration
-        shell: bash
+      - name: Validate JSON syntax
+        shell: python
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "R09 make MIDI capture explicit start stop"
-          git push origin HEAD:aeyla/r08-capture-zero-midi-rec-20260829
+          import json, pathlib
+          for p in pathlib.Path('.').rglob('*.json'):
+              json.loads(p.read_text(encoding='utf-8'))
+              print('OK', p)
