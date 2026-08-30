@@ -2,6 +2,7 @@
 
 #include "capture/artnet_capture_worker.h"
 #include "output/artnet_output_worker.h"
+#include "runtime/host_event.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,12 @@
 namespace aeyla::live_memory_session {
 
 inline constexpr std::size_t kOperatorMemoryCount = 4U;
+
+enum class MidiBindingKind : std::uint8_t {
+  none = 0,
+  note,
+  control_change,
+};
 
 struct ActionResult {
   bool succeeded{false};
@@ -26,6 +33,11 @@ struct MemoryView {
   float level{0.0F};
   float target_level{0.0F};
   bool transitioning{false};
+
+  bool midi_learning{false};
+  MidiBindingKind midi_kind{MidiBindingKind::none};
+  std::uint8_t midi_channel{0U};
+  std::uint8_t midi_number{0U};
 };
 
 // Session data is scoped by the concrete plugin instance. Nothing is shared
@@ -56,6 +68,17 @@ void clear(const void* owner) noexcept;
                                       int direction);
 [[nodiscard]] ActionResult toggle_mode(const void* owner,
                                        std::size_t index);
+
+// MIDI Learn is mode-aware. Toggle memories learn a Note; fader memories learn
+// a Control Change. The incoming HostEvent is consumed on the non-realtime
+// runtime thread; this module never runs network/mutex work in ProcessMidiMsg.
+[[nodiscard]] ActionResult arm_midi_learn(const void* owner,
+                                          std::size_t index);
+[[nodiscard]] ActionResult clear_midi_binding(const void* owner,
+                                              std::size_t index);
+[[nodiscard]] bool process_midi_event(const void* owner,
+                                      const runtime::HostEvent& event);
+
 void reset_levels(const void* owner) noexcept;
 
 }  // namespace aeyla::live_memory_session
