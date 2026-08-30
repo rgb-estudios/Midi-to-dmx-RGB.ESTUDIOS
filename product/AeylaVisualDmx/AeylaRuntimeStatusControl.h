@@ -204,7 +204,6 @@ public:
     }
 
     BuildButtons();
-
     if(Contains(mButtons[0], x, y))
     {
       if(mPlug.TakeRecording())
@@ -246,7 +245,6 @@ public:
       mLiveMessageError = false;
       mLiveMessage = "EN VIVO · PREPARADA no reemplaza AL AIRE hasta una acción de reproducción.";
       SetDirty(false);
-      return;
     }
   }
 
@@ -654,7 +652,7 @@ private:
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                on ? "ON" : "OFF", pad);
     g.DrawText(IText(8.5F, on ? valid : muted,
-                     "AeylaUI", EAlign::Center, EVAlign::Far),
+                     "AeylaUI", EAlign::Center, EVAlign::Bottom),
                "TOGGLE · MIDI NOTE",
                IRECT(pad.L + 6.0F, pad.T + 5.0F,
                      pad.R - 6.0F, pad.B - 6.0F));
@@ -678,10 +676,10 @@ private:
     g.DrawRoundRect(view.transitioning ? verify : line,
                     pad, 7.0F, nullptr, 1.0F);
 
-    g.DrawText(IText(9.5F, muted, "AeylaUI", EAlign::Near, EVAlign::Near),
+    g.DrawText(IText(9.5F, muted, "AeylaUI", EAlign::Near, EVAlign::Top),
                "0", IRECT(track.L, pad.T + 8.0F,
                           track.L + 30.0F, pad.T + 25.0F));
-    g.DrawText(IText(9.5F, muted, "AeylaUI", EAlign::Far, EVAlign::Near),
+    g.DrawText(IText(9.5F, muted, "AeylaUI", EAlign::Far, EVAlign::Top),
                "100", IRECT(track.R - 40.0F, pad.T + 8.0F,
                             track.R, pad.T + 25.0F));
 
@@ -706,7 +704,7 @@ private:
                percentage.c_str(),
                IRECT(pad.L + 10.0F, track.B + 14.0F,
                      pad.R - 10.0F, pad.B - 6.0F));
-    g.DrawText(IText(8.5F, muted, "AeylaUI", EAlign::Center, EVAlign::Near),
+    g.DrawText(IText(8.5F, muted, "AeylaUI", EAlign::Center, EVAlign::Top),
                "FADER CONTINUO · MIDI CC",
                IRECT(pad.L + 10.0F, pad.T + 7.0F,
                      pad.R - 10.0F, track.T - 10.0F));
@@ -849,8 +847,7 @@ private:
       if(Contains(mLiveMidiButtons[index], x, y))
       {
         (void)mPlug.LiveMemoryViewFromUI(index);
-        const auto result =
-            aeyla::live_memory_session::arm_midi_learn(&mPlug, index);
+        const auto result = aeyla::live_memory_session::arm_midi_learn(&mPlug, index);
         ReportLiveSession(result);
         SetDirty(false);
         return;
