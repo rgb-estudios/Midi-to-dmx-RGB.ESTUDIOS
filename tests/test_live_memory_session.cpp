@@ -111,14 +111,21 @@ int main() {
 
   const auto toggled = toggle(&owner, 0U);
   require(toggled.succeeded, toggled.message);
+
+  // Gate the physical result, not only the internal fade cursor. The output
+  // worker runs at 44 Hz, so the memory can reach level 1.0 a few milliseconds
+  // before the next ArtDMX packet carrying that exact composed frame arrives.
+  DmxUniverse composed{};
   require(wait_until([&]() {
     const auto memory = view(&owner, 0U);
-    return memory.level > 0.99F && sink.stats().packets_accepted > 20U;
+    DmxUniverse frame{};
+    if(memory.level <= 0.99F || !sink.latest_frame(frame)) return false;
+    if(frame[0] != 200U || frame[2] != 100U) return false;
+    composed = frame;
+    return true;
   }, std::chrono::milliseconds(1800)),
-          "FRONTAL memory did not finish its 1 s fade");
+          "FRONTAL memory did not reach its learned Art-Net targets after 1 s fade");
 
-  DmxUniverse composed{};
-  require(sink.latest_frame(composed), "sink did not expose AEYLA live frame");
   require(composed[0] == 200U && composed[2] == 100U,
           "learned channels did not reach Avolites targets");
   require(composed[1] == songBase[1],
