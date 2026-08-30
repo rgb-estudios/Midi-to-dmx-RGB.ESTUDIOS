@@ -294,6 +294,7 @@ class ArtNetOutputWorker::Impl final {
     stale_publish_drops_.store(0U, std::memory_order_relaxed);
     last_sent_generation_.store(0U, std::memory_order_relaxed);
     published_generation_.store(0U, std::memory_order_relaxed);
+    live_memories_.reset_levels();
     {
       const std::scoped_lock lock(frame_mutex_);
       latest_.fill(0U);
@@ -329,6 +330,7 @@ class ArtNetOutputWorker::Impl final {
   }
 
   void shutdown() noexcept {
+    live_memories_.reset_levels();
     if(worker_.joinable()) {
       const bool was_enabled = enabled_.exchange(false, std::memory_order_acq_rel);
       const bool was_override =
@@ -375,14 +377,17 @@ class ArtNetOutputWorker::Impl final {
     fail_closed_.store(false, std::memory_order_release);
     consecutive_send_errors_.store(0U, std::memory_order_relaxed);
     blackout_burst_remaining_.store(0U, std::memory_order_release);
+    live_memories_.reset_levels();
   }
 
   void set_enabled(bool next_enabled) noexcept {
     if(next_enabled && fail_closed_.load(std::memory_order_acquire)) return;
     const bool previous = enabled_.exchange(next_enabled, std::memory_order_acq_rel);
     if(previous && !next_enabled &&
-       !override_enabled_.load(std::memory_order_acquire))
+       !override_enabled_.load(std::memory_order_acquire)) {
+      live_memories_.reset_levels();
       schedule_blackout_burst();
+    }
     if(next_enabled)
       blackout_burst_remaining_.store(0U, std::memory_order_release);
     wake_.notify_all();
@@ -393,8 +398,10 @@ class ArtNetOutputWorker::Impl final {
     const bool previous =
         override_enabled_.exchange(next_enabled, std::memory_order_acq_rel);
     if(previous && !next_enabled &&
-       !enabled_.load(std::memory_order_acquire))
+       !enabled_.load(std::memory_order_acquire)) {
+      live_memories_.reset_levels();
       schedule_blackout_burst();
+    }
     if(next_enabled)
       blackout_burst_remaining_.store(0U, std::memory_order_release);
     wake_.notify_all();
@@ -402,6 +409,66 @@ class ArtNetOutputWorker::Impl final {
 
   bool override_enabled() const noexcept {
     return override_enabled_.load(std::memory_order_acquire);
+  }
+
+  bool configure_live_memory(std::size_t index,
+                             const LiveMemoryDefinition& definition,
+                             std::string& error_message) {
+    return live_memories_.configure(index, definition, error_message);
+  }
+
+  void clear_live_memory(std::size_t index) noexcept {
+    live_memories_.clear(index);
+  }
+
+  bool live_authority_active() const noexcept {
+    return override_enabled_.load(std::memory_order_acquire) ||
+           enabled_.load(std::memory_order_acquire);
+  }
+
+  bool toggle_live_memory(std::size_t index) noexcept {
+    if(!live_authority_active() ||
+       fail_closed_.load(std::memory_order_acquire))
+      return false;
+    const bool changed = live_memories_.toggle(index);
+    if(changed) wake_.notify_all();
+    return changed;
+  }
+
+  bool set_live_memory_level(std::size_t index,
+                             float level,
+                             bool direct) noexcept {
+    if(!live_authority_active() ||
+       fail_closed_.load(std::memory_order_acquire))
+      return false;
+    const bool changed = direct
+        ? live_memories_.set_direct_level(index, level)
+        : live_memories_.set_target_level(index, level);
+    if(changed) wake_.notify_all();
+    return changed;
+  }
+
+  void reset_live_memories() noexcept {
+    live_memories_.reset_levels();
+    wake_.notify_all();
+  }
+
+  LiveMemorySnapshot live_memory_snapshot(std::size_t index) noexcept {
+    return live_memories_.snapshot(index);
+  }
+
+  bool snapshot_authoritative_frame(DmxUniverse& universe) const noexcept {
+    const std::scoped_lock lock(frame_mutex_);
+    if(override_enabled_.load(std::memory_order_acquire) &&
+       has_override_frame_) {
+      universe = override_latest_;
+      return true;
+    }
+    if(enabled_.load(std::memory_order_acquire) && has_frame_) {
+      universe = latest_;
+      return true;
+    }
+    return false;
   }
 
   ArtNetOutputStats stats() const noexcept {
@@ -459,6 +526,7 @@ class ArtNetOutputWorker::Impl final {
     const bool already = fail_closed_.exchange(true, std::memory_order_acq_rel);
     enabled_.store(false, std::memory_order_release);
     override_enabled_.store(false, std::memory_order_release);
+    live_memories_.reset_levels();
     if(already) return;
     fail_closed_events_.fetch_add(1U, std::memory_order_relaxed);
     schedule_blackout_burst();
@@ -534,13 +602,17 @@ class ArtNetOutputWorker::Impl final {
       } else if(override_enabled_.load(std::memory_order_acquire)) {
         DmxUniverse latest{};
         std::uint64_t generation = 0U;
-        if(snapshot_override(latest, generation))
+        if(snapshot_override(latest, generation)) {
+          latest = live_memories_.compose(latest, now);
           (void)transmit(latest, generation, false);
+        }
       } else if(enabled_.load(std::memory_order_acquire)) {
         DmxUniverse latest{};
         std::uint64_t generation = 0U;
-        if(snapshot_latest(latest, generation))
+        if(snapshot_latest(latest, generation)) {
+          latest = live_memories_.compose(latest, now);
           (void)transmit(latest, generation, false);
+        }
       }
 
       next_deadline += period;
@@ -589,6 +661,7 @@ class ArtNetOutputWorker::Impl final {
   DmxUniverse override_latest_{};
   std::uint64_t override_generation_{0U};
   bool has_override_frame_{false};
+  DmxLiveMemoryEngine live_memories_{};
 
   std::atomic<std::uint64_t> published_generation_{0U};
   std::atomic<std::uint64_t> last_sent_generation_{0U};
@@ -665,6 +738,41 @@ void ArtNetOutputWorker::set_override_enabled(bool enabled) noexcept {
 
 bool ArtNetOutputWorker::override_enabled() const noexcept {
   return impl_->override_enabled();
+}
+
+bool ArtNetOutputWorker::configure_live_memory(
+    std::size_t index,
+    const LiveMemoryDefinition& definition,
+    std::string& error_message) {
+  return impl_->configure_live_memory(index, definition, error_message);
+}
+
+void ArtNetOutputWorker::clear_live_memory(std::size_t index) noexcept {
+  impl_->clear_live_memory(index);
+}
+
+bool ArtNetOutputWorker::toggle_live_memory(std::size_t index) noexcept {
+  return impl_->toggle_live_memory(index);
+}
+
+bool ArtNetOutputWorker::set_live_memory_level(std::size_t index,
+                                               float level,
+                                               bool direct) noexcept {
+  return impl_->set_live_memory_level(index, level, direct);
+}
+
+void ArtNetOutputWorker::reset_live_memories() noexcept {
+  impl_->reset_live_memories();
+}
+
+LiveMemorySnapshot ArtNetOutputWorker::live_memory_snapshot(
+    std::size_t index) noexcept {
+  return impl_->live_memory_snapshot(index);
+}
+
+bool ArtNetOutputWorker::snapshot_authoritative_frame(
+    DmxUniverse& universe) const noexcept {
+  return impl_->snapshot_authoritative_frame(universe);
 }
 
 ArtNetOutputStats ArtNetOutputWorker::stats() const noexcept {
