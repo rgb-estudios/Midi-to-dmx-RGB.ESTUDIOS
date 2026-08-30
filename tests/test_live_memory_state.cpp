@@ -55,6 +55,45 @@ int main() {
                             : decoded.diagnostics.front());
   require(*decoded.state == state, "live.bin roundtrip changed persistent state");
 
+  // R10.3: MIDI mapping is authoring metadata and may be prepared before DMX
+  // Learn. It must roundtrip even while configured=false/channels empty. The
+  // runtime remains physically inert until a sparse DMX definition exists.
+  LiveMemoryPersistentState preDmxMidi;
+  auto& preDmxFront = preDmxMidi.memories[0];
+  preDmxFront.configured = false;
+  preDmxFront.mode = PersistentLiveMemoryMode::toggle;
+  preDmxFront.fade_ms = 1000U;
+  preDmxFront.midi_kind = PersistentMidiBindingKind::note;
+  preDmxFront.midi_channel = 1U;
+  preDmxFront.midi_number = 60U;
+  preDmxMidi.memories[1].mode = PersistentLiveMemoryMode::fader;
+  preDmxMidi.memories[1].fade_ms = 1000U;
+  preDmxMidi.memories[2].mode = PersistentLiveMemoryMode::toggle;
+  preDmxMidi.memories[2].fade_ms = 1000U;
+  preDmxMidi.memories[3].mode = PersistentLiveMemoryMode::toggle;
+  preDmxMidi.memories[3].fade_ms = 1000U;
+
+  diagnostics.clear();
+  const auto preDmxEncoded =
+      encode_live_memory_persistent_state(preDmxMidi, diagnostics);
+  require(diagnostics.empty(),
+          "pre-DMX MIDI mapping produced encode diagnostics");
+  require(!preDmxEncoded.empty(),
+          "pre-DMX MIDI mapping was rejected by live.bin codec");
+  const auto preDmxDecoded =
+      decode_live_memory_persistent_state(preDmxEncoded);
+  require(preDmxDecoded.ok(),
+          preDmxDecoded.diagnostics.empty()
+              ? "pre-DMX MIDI roundtrip failed without diagnostic"
+              : preDmxDecoded.diagnostics.front());
+  require(*preDmxDecoded.state == preDmxMidi,
+          "pre-DMX MIDI mapping changed during live.bin roundtrip");
+  require(!preDmxDecoded.state->memories[0].configured &&
+              preDmxDecoded.state->memories[0].channels.empty() &&
+              preDmxDecoded.state->memories[0].midi_kind ==
+                  PersistentMidiBindingKind::note,
+          "pre-DMX MIDI roundtrip accidentally created DMX ownership");
+
   // Runtime safety state is intentionally absent from the persistent schema.
   // Only definitions/configuration are represented; there is no ON level,
   // target level, transition, activation serial, ARM or Learn-pending field.
@@ -127,6 +166,6 @@ int main() {
               !diagnostics.empty(),
           "unsafe live-memory fade was encoded");
 
-  std::cout << "AEYLA live-memory persistent codec PASS\n";
+  std::cout << "RGB Live Control live-memory persistent codec PASS\n";
   return EXIT_SUCCESS;
 }
