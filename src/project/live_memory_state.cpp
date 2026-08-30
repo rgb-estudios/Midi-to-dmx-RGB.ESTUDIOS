@@ -72,8 +72,6 @@ class Reader final {
     return bytes_.size() - offset_;
   }
 
-  [[nodiscard]] std::size_t offset() const noexcept { return offset_; }
-
  private:
   std::span<const std::uint8_t> bytes_;
   std::size_t offset_{0U};
@@ -147,8 +145,9 @@ std::vector<std::string> validate_live_memory_persistent_state(
       if(memory.midi_channel != 0U || memory.midi_number != 0U)
         diagnostics.push_back(path + ".midi: unmapped memory must store channel=0 and number=0");
     } else {
-      if(!memory.configured)
-        diagnostics.push_back(path + ".midi: unconfigured memory cannot own a MIDI binding");
+      // MIDI mapping is authoring metadata independent of DMX ownership. A
+      // Note/CC may be prepared and persisted before the Avolites two-snapshot
+      // DMX Learn is completed. Runtime output stays inert until configured.
       if(memory.midi_channel == 0U || memory.midi_channel > 16U)
         diagnostics.push_back(path + ".midi.channel: MIDI channel must be 1..16");
       if(memory.midi_number > 127U)
