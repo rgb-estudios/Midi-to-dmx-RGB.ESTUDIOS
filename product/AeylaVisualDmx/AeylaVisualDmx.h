@@ -98,9 +98,9 @@ public:
 
   void ToggleOutputArmFromUI();
   void ForceDisarmFromUI();
-  // Operator-facing BLACKOUT path. Enabling blackout performs one deterministic
-  // disarm boundary for both semantic and Take authority, then latches blackout.
-  // Disabling blackout never auto-arms output.
+  // Operator-facing APAGÓN TOTAL. This is a physical zero-DMX mask with
+  // absolute priority; it preserves ARM/carrier. DESARMAR is a separate action.
+  // Releasing APAGÓN reveals the underlying HOLD/Take state without auto-arming.
   void SetBlackoutFromUI(bool enabled);
   void TriggerExecutorFromUI(int executorIndex, float velocity);
   void ReleaseExecutorFromUI(int executorIndex);

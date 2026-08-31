@@ -31,6 +31,7 @@ struct ArtNetOutputStats {
   bool running{false};
   bool enabled{false};
   bool override_enabled{false};
+  bool blackout_latched{false};
   bool fail_closed{false};
   std::uint16_t configured_fps{0U};
   std::uint64_t published_generation{0U};
@@ -58,10 +59,11 @@ struct ArtNetOutputStats {
 // se mezclan sobre el frame autoritativo inmediatamente antes de transmitir.
 // ARM / DISARM / PANIC / fail-closed siguen perteneciendo a este único worker.
 //
-// La reproducción tiene prioridad mientras está habilitada. Si ninguna
-// autoridad queda activa se transmite una ráfaga corta de BLACKOUT. Tres
-// errores de envío consecutivos provocan fail-closed: ambas autoridades quedan
-// deshabilitadas, las memorias vuelven a OFF y el rearme debe ser explícito.
+// APAGÓN TOTAL es una máscara física latched de prioridad absoluta: mientras
+// exista autoridad armada transmite DMX 0 continuamente a 44 Hz por encima de
+// Take y memorias, sin retirar ARM. DESARMAR sí retira la autoridad y emite una
+// ráfaga corta final de BLACKOUT. Tres errores consecutivos provocan fail-closed:
+// autoridades y APAGÓN quedan retirados, memorias OFF y rearme explícito.
 class ArtNetOutputWorker final {
  public:
   ArtNetOutputWorker();
@@ -87,6 +89,11 @@ class ArtNetOutputWorker final {
   void publish_override(const DmxUniverse& universe, std::uint64_t generation);
   void set_override_enabled(bool enabled) noexcept;
   [[nodiscard]] bool override_enabled() const noexcept;
+
+  // APAGÓN TOTAL: máscara física de máxima prioridad. No desarma la autoridad;
+  // fuerza DMX 0 continuo mientras alguna autoridad esté armada.
+  void set_blackout_latched(bool enabled) noexcept;
+  [[nodiscard]] bool blackout_latched() const noexcept;
 
   // EN VIVO: configuración y control de la capa masked/LTP. Estas funciones
   // nunca habilitan una autoridad Art-Net por sí mismas.

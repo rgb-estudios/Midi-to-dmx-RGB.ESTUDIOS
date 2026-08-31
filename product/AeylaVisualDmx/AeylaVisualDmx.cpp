@@ -1538,6 +1538,7 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
   }
 
   mArtNetOutput.publish_latest(snapshot.dmx, snapshot.generation);
+  mArtNetOutput.set_blackout_latched(snapshot.global_blackout && !renderingOffline);
   mArtNetOutput.set_enabled(snapshot.output_armed && !renderingOffline);
 
   const auto stats = mArtNetOutput.stats();
