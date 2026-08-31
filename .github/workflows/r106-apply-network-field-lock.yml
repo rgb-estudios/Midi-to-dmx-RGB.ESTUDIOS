@@ -1,0 +1,46 @@
+name: r106-apply-network-field-lock
+
+on:
+  push:
+    branches:
+      - rgb/r10.6-pro-ui-stabilization-20260830
+    paths:
+      - tools/r106_network_field_lock_patch.py
+      - .github/workflows/r106-apply-network-field-lock.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rgb/r10.6-pro-ui-stabilization-20260830
+          fetch-depth: 0
+      - name: Apply guarded network field patch
+        run: python3 tools/r106_network_field_lock_patch.py
+      - name: Verify edit lock contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE=product/AeylaVisualDmx/AeylaMainControl.h
+          grep -Fq 'Desarma la salida antes de editar la red TX.' "$FILE"
+          grep -Fq 'Edición descartada · desarma la salida y espera que la red esté libre.' "$FILE"
+          grep -Fq 'Red editada · aún no aplicada · presiona APLICAR IP Y PREPARAR ART-NET.' "$FILE"
+          grep -Fq 'IPv4 TX / MÁSCARA · BLOQUEADA' "$FILE"
+          grep -Fq 'DESARMA PARA EDITAR' "$FILE"
+          grep -Fq 'const bool networkApplyBlocked = routeSelectionBlocked;' "$FILE"
+      - name: Commit result and remove applicator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/r106_network_field_lock_patch.py
+          rm -f .github/workflows/r106-apply-network-field-lock.yml
+          git config user.name 'rgb-estudios-r10.6-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(r10.6): lock network editing while output has authority'
+          git push origin HEAD:rgb/r10.6-pro-ui-stabilization-20260830
