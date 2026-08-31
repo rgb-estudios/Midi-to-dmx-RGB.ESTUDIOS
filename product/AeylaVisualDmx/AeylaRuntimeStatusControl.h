@@ -233,7 +233,7 @@ private:
                      cover.R - 5.0F, cover.T + 34.0F));
     g.DrawText(IText(9.5F, kMuted, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · SHOW / AEYLA · R10.3 PRETEST",
+               "RGB ESTUDIOS · SHOW / AEYLA · R10.4 PRETEST",
                IRECT(cover.L + 6.0F, cover.T + 31.0F,
                      cover.R - 5.0F, cover.T + 50.0F));
 
@@ -508,7 +508,7 @@ private:
                      mRECT.L + 260.0F, mRECT.T + 34.0F));
     g.DrawText(IText(9.2F, kMuted, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · SHOW / AEYLA · EN VIVO · R10.3 PRETEST",
+               "RGB ESTUDIOS · SHOW / AEYLA · EN VIVO · R10.4 PRETEST",
                IRECT(mRECT.L + 18.0F, mRECT.T + 30.0F,
                      mRECT.L + 410.0F, mRECT.T + 47.0F));
 
