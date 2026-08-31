@@ -8,11 +8,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace aeyla::live_memory_session {
 
-inline constexpr std::size_t kOperatorMemoryCount = 4U;
-static_assert(kOperatorMemoryCount == project::kPersistentLiveMemoryCount);
+inline constexpr std::size_t kOperatorMemoryCapacity = 8U;
+inline constexpr std::size_t kOperatorMemoryCount = kOperatorMemoryCapacity;
+inline constexpr std::size_t kDefaultOperatorMemoryCount = 4U;
+static_assert(kOperatorMemoryCapacity == project::kPersistentLiveMemoryCapacity);
+static_assert(kDefaultOperatorMemoryCount ==
+              project::kDefaultPersistentLiveMemoryCount);
 
 enum class MidiBindingKind : std::uint8_t {
   none = 0,
@@ -49,7 +54,12 @@ void register_runtime(const void* owner,
                       capture::ArtNetCaptureWorker* capture_worker);
 void clear(const void* owner) noexcept;
 
+[[nodiscard]] std::size_t memory_count(const void* owner) noexcept;
 [[nodiscard]] MemoryView view(const void* owner, std::size_t index);
+[[nodiscard]] ActionResult add_memory(const void* owner);
+[[nodiscard]] ActionResult rename_memory(const void* owner,
+                                         std::size_t index,
+                                         std::string_view name);
 
 // Persistence contains authored/operator configuration only. Runtime level,
 // transition/LTP state, Learn baseline/pending state and physical ARM are never
@@ -65,7 +75,7 @@ void clear(const void* owner) noexcept;
 // 1) first press while the Avolites memory is OFF captures the RX baseline;
 // 2) second press while the Avolites memory is ON captures only the slots that
 //    actually changed. This avoids treating unrelated zero-valued slots as part
-//    of FRONTAL/HUMO/BASE/TEST.
+//    of the learned memory.
 [[nodiscard]] ActionResult learn_from_avolites(const void* owner,
                                                std::size_t index);
 [[nodiscard]] ActionResult cancel_learn(const void* owner,

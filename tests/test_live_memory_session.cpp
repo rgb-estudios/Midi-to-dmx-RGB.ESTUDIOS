@@ -77,6 +77,24 @@ int main() {
   int owner = 0;
   register_runtime(&owner, &aeylaTx, &aeylaRx);
 
+  require(memory_count(&owner) == 4U,
+          "fresh EN VIVO session must expose four memories");
+  const auto renamedFront = rename_memory(&owner, 0U, "CONTRA VIOLINES");
+  require(renamedFront.succeeded && view(&owner, 0U).name == "CONTRA VIOLINES",
+          "live-memory rename did not update the operator view");
+  const auto addedFive = add_memory(&owner);
+  const auto addedSix = add_memory(&owner);
+  require(addedFive.succeeded && addedSix.succeeded && memory_count(&owner) == 6U,
+          "adding live memories did not extend the active count to six");
+  const auto renamedFive = rename_memory(&owner, 4U, "STROBE");
+  require(renamedFive.succeeded && view(&owner, 4U).name == "STROBE",
+          "new live memory could not be renamed");
+  const auto authoredLive = persistent_state(&owner);
+  require(authoredLive.memory_count == 6U &&
+              authoredLive.memories[0].name == "CONTRA VIOLINES" &&
+              authoredLive.memories[4].name == "STROBE",
+          "dynamic live-memory count/name did not enter persistent state");
+
   // R10.3: MIDI authoring is independent of Avolites DMX authoring. This lets
   // the show be mapped before the console look exists. The event used for
   // Learn is non-destructive, and subsequent mapped events remain physically
@@ -281,6 +299,6 @@ int main() {
   sink.stop();
   aeylaRx.stop();
 
-  std::cout << "RGB Live Control live-memory PASS: pre-DMX MIDI Learn + sparse Avolites learn + safe Note/CC control\n";
+  std::cout << "RGB Live Control live-memory PASS: expandable/renamable + pre-DMX MIDI Learn + sparse Avolites learn + safe Note/CC control\n";
   return EXIT_SUCCESS;
 }

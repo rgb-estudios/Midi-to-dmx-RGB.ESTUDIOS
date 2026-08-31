@@ -28,7 +28,8 @@ struct SlotState {
 struct SessionState {
   output::ArtNetOutputWorker* output_worker{nullptr};
   capture::ArtNetCaptureWorker* capture_worker{nullptr};
-  std::array<SlotState, kOperatorMemoryCount> slots{};
+  std::array<SlotState, kOperatorMemoryCapacity> slots{};
+  std::size_t memory_count{kDefaultOperatorMemoryCount};
   bool persistence_dirty{false};
 };
 
@@ -37,10 +38,12 @@ std::map<const void*, SessionState> gSessions;
 
 constexpr std::array<std::uint32_t, 3U> kFadePresetsMs{
     100U, 1000U, 1500U};
-constexpr std::array<const char*, kOperatorMemoryCount> kMemoryIds{
-    "front", "haze", "white-base", "fixture-test"};
-constexpr std::array<const char*, kOperatorMemoryCount> kMemoryNames{
-    "FRONTAL", "HUMO / HAZE", "BASE BLANCA", "TEST LUMINARIAS"};
+constexpr std::array<const char*, kOperatorMemoryCapacity> kMemoryIds{
+    "front", "haze", "white-base", "fixture-test",
+    "live-5", "live-6", "live-7", "live-8"};
+constexpr std::array<const char*, kOperatorMemoryCapacity> kMemoryNames{
+    "FRONTAL", "HUMO / HAZE", "BASE BLANCA", "TEST LUMINARIAS",
+    "MEMORIA 5", "MEMORIA 6", "MEMORIA 7", "MEMORIA 8"};
 
 void initialize_slot(std::size_t index, SlotState& slot) {
   slot = SlotState{};
@@ -54,6 +57,7 @@ void initialize_slot(std::size_t index, SlotState& slot) {
 
 void initialize_session(SessionState& session) {
   session = SessionState{};
+  session.memory_count = kDefaultOperatorMemoryCount;
   for(std::size_t index = 0U; index < session.slots.size(); ++index)
     initialize_slot(index, session.slots[index]);
 }
@@ -145,7 +149,7 @@ void remove_duplicate_binding(SessionState& session,
                               MidiBindingKind kind,
                               std::uint8_t channel,
                               std::uint8_t number) noexcept {
-  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+  for(std::size_t index = 0U; index < session.memory_count; ++index) {
     if(index == keep_index) continue;
     auto& slot = session.slots[index];
     if(slot.midi_kind == kind && slot.midi_channel == channel &&
@@ -214,7 +218,7 @@ void register_runtime(const void* owner,
   if(session.output_worker == nullptr) return;
 
   session.output_worker->reset_live_memories();
-  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+  for(std::size_t index = 0U; index < session.memory_count; ++index) {
     if(!session.slots[index].configured) continue;
     std::string ignored;
     (void)session.output_worker->configure_live_memory(
@@ -231,13 +235,23 @@ void clear(const void* owner) noexcept {
   gSessions.erase(iterator);
 }
 
+std::size_t memory_count(const void* owner) noexcept {
+  if(owner == nullptr) return kDefaultOperatorMemoryCount;
+  const std::scoped_lock lock(gMutex);
+  const auto iterator = gSessions.find(owner);
+  return iterator == gSessions.end()
+      ? kDefaultOperatorMemoryCount
+      : iterator->second.memory_count;
+}
+
 MemoryView view(const void* owner, std::size_t index) {
   MemoryView result;
-  if(owner == nullptr || index >= kOperatorMemoryCount)
+  if(owner == nullptr || index >= kOperatorMemoryCapacity)
     return result;
 
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return result;
   const auto& slot = session.slots[index];
   result.configured = slot.configured;
   result.learning = slot.learn_pending;
@@ -259,15 +273,66 @@ MemoryView view(const void* owner, std::size_t index) {
   return result;
 }
 
+ActionResult add_memory(const void* owner) {
+  if(owner == nullptr)
+    return {false, "No hay instancia RGB Live Control"};
+  const std::scoped_lock lock(gMutex);
+  auto& session = ensure_session_locked(owner);
+  if(session.memory_count >= kOperatorMemoryCapacity)
+    return {false, "Límite EN VIVO alcanzado · máximo 8 memorias"};
+
+  const std::size_t index = session.memory_count;
+  initialize_slot(index, session.slots[index]);
+  ++session.memory_count;
+  session.persistence_dirty = true;
+  return {true, session.slots[index].definition.name + " · memoria añadida"};
+}
+
+ActionResult rename_memory(const void* owner,
+                           std::size_t index,
+                           std::string_view requested_name) {
+  if(owner == nullptr || index >= kOperatorMemoryCapacity)
+    return invalid_index();
+
+  while(!requested_name.empty() &&
+        (requested_name.front() == ' ' || requested_name.front() == '\t'))
+    requested_name.remove_prefix(1U);
+  while(!requested_name.empty() &&
+        (requested_name.back() == ' ' || requested_name.back() == '\t'))
+    requested_name.remove_suffix(1U);
+  if(requested_name.empty())
+    return {false, "El nombre de la memoria no puede estar vacío"};
+  if(requested_name.size() > project::kMaximumPersistentLiveMemoryNameBytes)
+    return {false, "Nombre demasiado largo · máximo 48 bytes"};
+  if(std::any_of(requested_name.begin(), requested_name.end(),
+                 [](unsigned char value) {
+                   return value == 0U || value == '\n' || value == '\r';
+                 }))
+    return {false, "El nombre de la memoria contiene caracteres no permitidos"};
+
+  const std::scoped_lock lock(gMutex);
+  auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
+  auto& slot = session.slots[index];
+  const std::string normalized(requested_name);
+  if(slot.definition.name == normalized)
+    return {true, slot.definition.name + " · nombre sin cambios"};
+  slot.definition.name = normalized;
+  session.persistence_dirty = true;
+  return {true, slot.definition.name + " · nombre actualizado"};
+}
+
 project::LiveMemoryPersistentState persistent_state(const void* owner) {
   project::LiveMemoryPersistentState result;
   if(owner == nullptr) return result;
 
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
-  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+  result.memory_count = static_cast<std::uint8_t>(session.memory_count);
+  for(std::size_t index = 0U; index < session.memory_count; ++index) {
     const auto& slot = session.slots[index];
     auto& persistent = result.memories[index];
+    persistent.name = slot.definition.name;
     persistent.configured = slot.configured;
     persistent.mode = persistent_mode(slot.definition.mode);
     persistent.fade_ms = slot.definition.fade_ms;
@@ -298,11 +363,13 @@ ActionResult restore_persistent_state(
   if(!diagnostics.empty())
     return {false, "live.bin inválido · " + diagnostics.front()};
 
-  std::array<SlotState, kOperatorMemoryCount> restored{};
+  std::array<SlotState, kOperatorMemoryCapacity> restored{};
   for(std::size_t index = 0U; index < restored.size(); ++index) {
     initialize_slot(index, restored[index]);
+    if(index >= static_cast<std::size_t>(state.memory_count)) continue;
     const auto& source = state.memories[index];
     auto& target = restored[index];
+    target.definition.name = source.name;
     target.configured = source.configured;
     target.definition.mode = runtime_mode(source.mode);
     target.definition.fade_ms = source.fade_ms;
@@ -329,7 +396,8 @@ ActionResult restore_persistent_state(
 
   if(output_worker != nullptr) {
     clear_worker_definitions(session);
-    for(std::size_t index = 0U; index < restored.size(); ++index) {
+    for(std::size_t index = 0U;
+        index < static_cast<std::size_t>(state.memory_count); ++index) {
       if(!restored[index].configured) continue;
       std::string error;
       if(!output_worker->configure_live_memory(
@@ -348,6 +416,7 @@ ActionResult restore_persistent_state(
   }
 
   session.slots = std::move(restored);
+  session.memory_count = state.memory_count;
   session.persistence_dirty = false;
   return {true, "Memorias EN VIVO restauradas · niveles seguros OFF / 0%"};
 }
@@ -368,6 +437,7 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
 
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   if(session.capture_worker == nullptr || session.output_worker == nullptr)
     return {false, "El runtime de red EN VIVO no está disponible"};
 
@@ -428,6 +498,7 @@ ActionResult cancel_learn(const void* owner, std::size_t index) {
     return invalid_index();
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
   slot.learn_pending = false;
   return {true, slot.definition.name + " · aprendizaje DMX cancelado"};
@@ -438,6 +509,7 @@ ActionResult toggle(const void* owner, std::size_t index) {
     return invalid_index();
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
   if(!slot.configured)
     return {false, slot.definition.name + " · SIN DMX: configura 1/2 OFF y 2/2 ON antes de operar"};
@@ -461,6 +533,7 @@ ActionResult set_fader_level(const void* owner,
     return invalid_index();
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
   if(!slot.configured)
     return {false, slot.definition.name + " · SIN DMX: configura 1/2 OFF y 2/2 ON antes de operar"};
@@ -492,6 +565,7 @@ ActionResult cycle_fade(const void* owner,
 
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
   if(edit_blocked_locked(session, index))
     return active_edit_blocked(slot);
@@ -523,6 +597,7 @@ ActionResult toggle_mode(const void* owner, std::size_t index) {
     return invalid_index();
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
   if(edit_blocked_locked(session, index))
     return active_edit_blocked(slot);
@@ -551,6 +626,7 @@ ActionResult arm_midi_learn(const void* owner, std::size_t index) {
     return invalid_index();
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
 
   // MIDI is configuration metadata, not physical output authority. It can be
@@ -574,6 +650,7 @@ ActionResult clear_midi_binding(const void* owner, std::size_t index) {
     return invalid_index();
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
+  if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
   const bool changed = slot.midi_kind != MidiBindingKind::none;
   clear_binding(slot);
@@ -590,7 +667,7 @@ bool process_midi_event(const void* owner,
   auto& session = iterator->second;
   const bool isLiveCc = event.reserved == kLiveCcMarker;
 
-  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+  for(std::size_t index = 0U; index < session.memory_count; ++index) {
     auto& slot = session.slots[index];
     if(!slot.midi_learn_pending) continue;
 
@@ -614,7 +691,7 @@ bool process_midi_event(const void* owner,
     return true;
   }
 
-  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+  for(std::size_t index = 0U; index < session.memory_count; ++index) {
     auto& slot = session.slots[index];
     if(slot.midi_kind == MidiBindingKind::none ||
        slot.midi_channel != event.channel ||

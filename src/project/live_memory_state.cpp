@@ -14,14 +14,15 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8U> kMagic{
     'A', 'E', 'Y', 'L', 'A', 'L', 'I', 'V'};
-constexpr std::uint16_t kFormatVersion = 1U;
+constexpr std::uint16_t kLegacyFormatVersion = 1U;
+constexpr std::uint16_t kFormatVersion = 2U;
 constexpr std::size_t kFixedHeaderBytes = 12U;
 constexpr std::size_t kMemoryHeaderBytes = 12U;
 constexpr std::size_t kEncodedChannelBytes = 3U;
 constexpr std::size_t kMaximumEncodedBytes =
     kFixedHeaderBytes +
-    kPersistentLiveMemoryCount *
-        (kMemoryHeaderBytes +
+    kPersistentLiveMemoryCapacity *
+        (kMemoryHeaderBytes + kMaximumPersistentLiveMemoryNameBytes +
          kMaximumLiveMemoryChannels * kEncodedChannelBytes);
 
 void append_u8(std::vector<std::uint8_t>& bytes, std::uint8_t value) {
@@ -68,6 +69,13 @@ class Reader final {
     return true;
   }
 
+  [[nodiscard]] bool read_string(std::size_t size, std::string& value) {
+    if(bytes_.size() - offset_ < size) return false;
+    value.assign(reinterpret_cast<const char*>(bytes_.data() + offset_), size);
+    offset_ += size;
+    return true;
+  }
+
   [[nodiscard]] std::size_t remaining() const noexcept {
     return bytes_.size() - offset_;
   }
@@ -92,6 +100,14 @@ bool known_midi_kind(PersistentMidiBindingKind kind) noexcept {
          kind == PersistentMidiBindingKind::control_change;
 }
 
+bool valid_name(std::string_view name) noexcept {
+  if(name.empty() || name.size() > kMaximumPersistentLiveMemoryNameBytes)
+    return false;
+  return std::none_of(name.begin(), name.end(), [](unsigned char value) {
+    return value == 0U || value == '\n' || value == '\r';
+  });
+}
+
 std::uint32_t midi_binding_key(PersistentMidiBindingKind kind,
                                std::uint8_t channel,
                                std::uint8_t number) noexcept {
@@ -107,10 +123,27 @@ std::vector<std::string> validate_live_memory_persistent_state(
   std::vector<std::string> diagnostics;
   std::set<std::uint32_t> midi_bindings;
 
+  if(state.memory_count == 0U ||
+     state.memory_count > kPersistentLiveMemoryCapacity) {
+    diagnostics.push_back("liveMemories: active memory count must be 1..8");
+    return diagnostics;
+  }
+
   for(std::size_t index = 0U; index < state.memories.size(); ++index) {
     const auto& memory = state.memories[index];
     const std::string path = memory_path(index);
+    const bool active = index < static_cast<std::size_t>(state.memory_count);
 
+    if(!active) {
+      if(memory.configured || !memory.channels.empty() ||
+         memory.midi_kind != PersistentMidiBindingKind::none ||
+         memory.midi_channel != 0U || memory.midi_number != 0U)
+        diagnostics.push_back(path + ": inactive memory must not own DMX or MIDI state");
+      continue;
+    }
+
+    if(!valid_name(memory.name))
+      diagnostics.push_back(path + ".name: must contain 1..48 UTF-8 bytes without line breaks");
     if(!known_mode(memory.mode))
       diagnostics.push_back(path + ".mode: unsupported mode");
     if(memory.fade_ms > kMaximumPersistentLiveFadeMs)
@@ -145,9 +178,6 @@ std::vector<std::string> validate_live_memory_persistent_state(
       if(memory.midi_channel != 0U || memory.midi_number != 0U)
         diagnostics.push_back(path + ".midi: unmapped memory must store channel=0 and number=0");
     } else {
-      // MIDI mapping is authoring metadata independent of DMX ownership. A
-      // Note/CC may be prepared and persisted before the Avolites two-snapshot
-      // DMX Learn is completed. Runtime output stays inert until configured.
       if(memory.midi_channel == 0U || memory.midi_channel > 16U)
         diagnostics.push_back(path + ".midi.channel: MIDI channel must be 1..16");
       if(memory.midi_number > 127U)
@@ -179,18 +209,21 @@ std::vector<std::uint8_t> encode_live_memory_persistent_state(
   bytes.reserve(kMaximumEncodedBytes);
   bytes.insert(bytes.end(), kMagic.begin(), kMagic.end());
   append_u16(bytes, kFormatVersion);
-  append_u8(bytes, static_cast<std::uint8_t>(kPersistentLiveMemoryCount));
+  append_u8(bytes, state.memory_count);
   append_u8(bytes, 0U);
 
-  for(const auto& memory : state.memories) {
+  for(std::size_t index = 0U;
+      index < static_cast<std::size_t>(state.memory_count); ++index) {
+    const auto& memory = state.memories[index];
     append_u8(bytes, memory.configured ? 1U : 0U);
     append_u8(bytes, static_cast<std::uint8_t>(memory.mode));
     append_u8(bytes, static_cast<std::uint8_t>(memory.midi_kind));
     append_u8(bytes, memory.midi_channel);
     append_u8(bytes, memory.midi_number);
-    append_u8(bytes, 0U);
+    append_u8(bytes, static_cast<std::uint8_t>(memory.name.size()));
     append_u32(bytes, memory.fade_ms);
     append_u16(bytes, static_cast<std::uint16_t>(memory.channels.size()));
+    bytes.insert(bytes.end(), memory.name.begin(), memory.name.end());
     for(const auto& channel : memory.channels) {
       append_u16(bytes, channel.slot);
       append_u8(bytes, channel.value);
@@ -229,13 +262,19 @@ LiveMemoryStateCodecResult decode_live_memory_persistent_state(
     result.diagnostics.push_back("live.bin: truncated format header");
     return result;
   }
-  if(version != kFormatVersion) {
+  if(version != kLegacyFormatVersion && version != kFormatVersion) {
     result.diagnostics.push_back("live.bin: unsupported format version " +
                                  std::to_string(version));
     return result;
   }
-  if(memory_count != kPersistentLiveMemoryCount) {
-    result.diagnostics.push_back("live.bin: memory count must be exactly 4");
+  if(version == kLegacyFormatVersion &&
+     memory_count != kDefaultPersistentLiveMemoryCount) {
+    result.diagnostics.push_back("live.bin v1: memory count must be exactly 4");
+    return result;
+  }
+  if(version == kFormatVersion &&
+     (memory_count == 0U || memory_count > kPersistentLiveMemoryCapacity)) {
+    result.diagnostics.push_back("live.bin v2: memory count must be 1..8");
     return result;
   }
   if(reserved != 0U) {
@@ -244,18 +283,20 @@ LiveMemoryStateCodecResult decode_live_memory_persistent_state(
   }
 
   LiveMemoryPersistentState state;
-  for(std::size_t index = 0U; index < state.memories.size(); ++index) {
+  state.memory_count = memory_count;
+  for(std::size_t index = 0U;
+      index < static_cast<std::size_t>(memory_count); ++index) {
     std::uint8_t configured = 0U;
     std::uint8_t mode = 0U;
     std::uint8_t midi_kind = 0U;
     std::uint8_t midi_channel = 0U;
     std::uint8_t midi_number = 0U;
-    std::uint8_t memory_reserved = 0U;
+    std::uint8_t name_length = 0U;
     std::uint32_t fade_ms = 0U;
     std::uint16_t channel_count = 0U;
     if(!reader.read_u8(configured) || !reader.read_u8(mode) ||
        !reader.read_u8(midi_kind) || !reader.read_u8(midi_channel) ||
-       !reader.read_u8(midi_number) || !reader.read_u8(memory_reserved) ||
+       !reader.read_u8(midi_number) || !reader.read_u8(name_length) ||
        !reader.read_u32(fade_ms) || !reader.read_u16(channel_count)) {
       result.diagnostics.push_back(memory_path(index) + ": truncated memory header");
       return result;
@@ -264,18 +305,35 @@ LiveMemoryStateCodecResult decode_live_memory_persistent_state(
       result.diagnostics.push_back(memory_path(index) + ".configured: invalid boolean byte");
       return result;
     }
-    if(memory_reserved != 0U) {
-      result.diagnostics.push_back(memory_path(index) + ": non-zero reserved byte");
+    if(version == kLegacyFormatVersion && name_length != 0U) {
+      result.diagnostics.push_back(memory_path(index) + ": non-zero legacy reserved byte");
       return result;
     }
+    if(version == kFormatVersion &&
+       (name_length == 0U || name_length > kMaximumPersistentLiveMemoryNameBytes)) {
+      result.diagnostics.push_back(memory_path(index) + ".name: invalid encoded name length");
+      return result;
+    }
+    const std::size_t encoded_name_bytes =
+        version == kFormatVersion ? static_cast<std::size_t>(name_length) : 0U;
     if(channel_count > kMaximumLiveMemoryChannels ||
-       reader.remaining() < static_cast<std::size_t>(channel_count) *
-                                kEncodedChannelBytes) {
-      result.diagnostics.push_back(memory_path(index) + ".channels: invalid or truncated channel payload");
+       reader.remaining() < encoded_name_bytes +
+                                static_cast<std::size_t>(channel_count) *
+                                    kEncodedChannelBytes) {
+      result.diagnostics.push_back(memory_path(index) +
+                                   ".channels: invalid or truncated payload");
       return result;
     }
 
     auto& memory = state.memories[index];
+    if(version == kFormatVersion) {
+      std::string name;
+      if(!reader.read_string(encoded_name_bytes, name)) {
+        result.diagnostics.push_back(memory_path(index) + ".name: truncated payload");
+        return result;
+      }
+      memory.name = std::move(name);
+    }
     memory.configured = configured != 0U;
     memory.mode = static_cast<PersistentLiveMemoryMode>(mode);
     memory.fade_ms = fade_ms;
@@ -287,7 +345,8 @@ LiveMemoryStateCodecResult decode_live_memory_persistent_state(
         channel_index < channel_count; ++channel_index) {
       PersistentLiveMemoryChannel channel;
       if(!reader.read_u16(channel.slot) || !reader.read_u8(channel.value)) {
-        result.diagnostics.push_back(memory_path(index) + ".channels: truncated channel entry");
+        result.diagnostics.push_back(memory_path(index) +
+                                     ".channels: truncated channel entry");
         return result;
       }
       memory.channels.push_back(channel);
