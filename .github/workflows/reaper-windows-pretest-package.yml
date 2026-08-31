@@ -1,35 +1,179 @@
 name: reaper-windows-pretest-package
 
 on:
-  push:
-    branches:
-      - rgb/r10.4-persistent-operator-authority-20260830
+  pull_request:
+    paths:
+      - product/**
+      - src/**
+      - tests/**
+      - docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md
+      - docs/AEYLA_R10_FIELD_PRETEST_ES.md
+      - tools/maintenance/windows/**
+      - tools/network/**
+      - .github/workflows/reaper-windows-pretest-package.yml
+  workflow_dispatch:
 
-permissions:
-  contents: read
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
 
 jobs:
   package-windows-reaper-pretest:
-    name: R10.4 exact source snapshot bridge
-    runs-on: ubuntu-latest
+    name: Windows / integrated 0.3 VST3 / manual REAPER pretest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - name: Collect source snapshot
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Validate AEYLA maintenance tools
+        shell: pwsh
         run: |
-          mkdir -p snapshot/product/AeylaVisualDmx snapshot/src/product snapshot/src/runtime snapshot/tests snapshot/.github/workflows
-          cp product/AeylaVisualDmx/AeylaVisualDmx.cpp snapshot/product/AeylaVisualDmx/
-          cp product/AeylaVisualDmx/AeylaVisualDmx.h snapshot/product/AeylaVisualDmx/
-          cp product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp snapshot/product/AeylaVisualDmx/
-          cp src/product/application_model.cpp snapshot/src/product/
-          cp src/product/application_model.h snapshot/src/product/
-          cp src/runtime/runtime_safety_state.cpp snapshot/src/runtime/
-          cp src/runtime/runtime_safety_state.h snapshot/src/runtime/
-          cp tests/test_application_model.cpp snapshot/tests/
-          cp tests/test_runtime_safety.cpp snapshot/tests/
-          cp CMakeLists.txt snapshot/
+          $script = (Resolve-Path "tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $script, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "AEYLA maintenance PowerShell syntax validation failed"
+          }
+          & $script -Action Audit
+
+      - name: Fetch pinned plugin dependencies
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Build integrated AEYLA 0.3 VST3
+        shell: pwsh
+        run: |
+          cmake -S product -B build-product -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2" -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3
+
+      - name: Verify bundle and PE image
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "AeylaVisualDmx.vst3 bundle not found" }
+          $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $binary) { throw "AeylaVisualDmx VST3 binary not found" }
+          $helper = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
+          if (-not $helper) { throw "AeylaNetworkHelper.exe not embedded in VST3 bundle" }
+          if ($binary.Length -lt 1MB) { throw "AeylaVisualDmx VST3 binary unexpectedly small" }
+          $stream = [System.IO.File]::OpenRead($binary.FullName)
+          try { $b0=$stream.ReadByte(); $b1=$stream.ReadByte() } finally { $stream.Dispose() }
+          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "AeylaVisualDmx VST3 binary lacks PE/MZ header" }
+          $helperStream = [System.IO.File]::OpenRead($helper.FullName)
+          try { $h0=$helperStream.ReadByte(); $h1=$helperStream.ReadByte() } finally { $helperStream.Dispose() }
+          if ($h0 -ne 0x4D -or $h1 -ne 0x5A) { throw "AeylaNetworkHelper.exe lacks PE/MZ header" }
+          Write-Host "Verified bundle $($bundle.FullName) binarySize=$($binary.Length) helperSize=$($helper.Length)"
+
+      - name: Package manual REAPER pretest
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $root = Join-Path $PWD "reaper-pretest"
+          $vst3Root = Join-Path $root "VST3"
+          New-Item -ItemType Directory -Force $vst3Root | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName (Join-Path $vst3Root "AeylaVisualDmx.vst3")
+
+          Copy-Item tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1 $root
+          Copy-Item tools/maintenance/windows/AUDIT_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/CLEAN_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $root
+          Copy-Item docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md (Join-Path $root "UI_INTERACTION_CONTRACT.md")
+          Copy-Item docs/AEYLA_R10_FIELD_PRETEST_ES.md (Join-Path $root "R10_FIELD_PRETEST_ES.md")
+
+          @'
+          AEYLA Visual DMX 0.3 — R10.0 REAPER WINDOWS PRETEST
+
+          ESTADO
+          PRETEST_NOT_SHOW_CANDIDATE. Este paquete exige gates fisicos; CI verde no significa Show Ready.
+
+          INSTALACION
+          1. Cierra REAPER, Ableton y cualquier host VST3.
+          2. Ejecuta CLEAN_INSTALL_AEYLA.cmd.
+          3. Abre REAPER y re-scan VST3 si AEYLA no aparece automaticamente.
+          4. Confirma en BUILD_ID.txt SOURCE_COMMIT y HOST_STATE_SCHEMA=1.4.
+
+          CAPTURA R09.1
+          - AEYLA no usa MTC para fijar ZERO.
+          - N42 = REC START por defecto; N43 = REC STOP por defecto.
+          - START y STOP son comandos separados, idempotentes y aprendibles de forma independiente.
+          - REC START fija el origen de la captura; el RAW .aeylatake se conserva.
+          - Repetir START no reinicia ZERO; STOP sin captura activa se ignora.
+
+          MIDI SHOW
+          N36 anterior | N37 siguiente | N38 PLAY | N39 pausa
+          N40 STOP/reset | N41 PANIC | N42 REC START | N43 REC STOP
+          N48-N62 canciones 1-15.
+          MIDI nunca puede ARMAR la salida ni quitar APAGON.
+
+          CARRIER R09.2
+          - APAGON OFF y ARM son manuales.
+          - Una vez ARMADA, la salida Art-Net debe continuar transmitiendo ~44 Hz con DAW detenido/pausado.
+          - STOP/PAUSA normal conserva HOLD + carrier y nunca exige re-ARM.
+          - Perdida real del reloj mientras el ultimo estado conocido sigue RUNNING=true debe fallar cerrado.
+
+          EN VIVO R10
+          - PREPARADA y AL AIRE son estados separados: PREV/NEXT no sustituyen la toma activa hasta PLAY/GO.
+          - Memorias iniciales: FRONTAL, HUMO / HAZE, BASE BLANCA, TEST LUMINARIAS.
+          - APRENDER usa dos snapshots Avolites: primero memoria OFF (baseline), luego memoria ON (target).
+          - Solo los canales que cambiaron forman la mascara; nunca se aplica un snapshot ciego de 512 canales.
+          - Fades disponibles: 0.1 / 1.0 / 1.5 s. Modo BOTON/TOGGLE o FADER.
+          - DISARM, PANIC, fail-closed y reinicio de socket llevan memorias a OFF.
+          - MIDI Learn y persistencia de memorias R10 aun NO estan cerrados; no aprobar Show Candidate por estas funciones.
+
+          REAPERTURA / ESTADO 1.4
+          1. Carga una toma, ajusta IN/OUT y guarda el .RPP.
+          2. Cierra REAPER y vuelve a abrirlo.
+          3. Deben restaurarse biblioteca/toma/trims si la carpeta guardada existe.
+          4. La salida siempre vuelve segura: sin auto-ARM ni auto-PLAY.
+          5. El mapa MIDI SHOW incluye REC START y REC STOP independientes.
+
+          HERRAMIENTAS
+          AUDIT_AEYLA.cmd: informa instalaciones/cache AEYLA.
+          CLEAN_AEYLA.cmd: elimina SOLO AEYLA y su entrada de cache REAPER con backup.
+          INSTALL_AEYLA.cmd: instala el bundle incluido.
+          CLEAN_INSTALL_AEYLA.cmd: flujo recomendado para cada build nuevo.
+
+          GATES FISICOS
+          Ejecutar completo R10_FIELD_PRETEST_ES.md.
+          PRETEST NO significa Show Candidate.
+          '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
+
+          $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $helper = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
+          if (-not $binary -or -not $helper) { throw "Critical binary missing from package" }
+
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helperHash = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "NETWORK_HELPER_SHA256=$helperHash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "BUILD_KIND=R10_REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "HOST_STATE_SCHEMA=1.4" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "STATUS=PRETEST_NOT_SHOW_CANDIDATE" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+
+          $binaryRel = [System.IO.Path]::GetRelativePath($root, $binary.FullName).Replace('\','/')
+          $helperRel = [System.IO.Path]::GetRelativePath($root, $helper.FullName).Replace('\','/')
+          @(
+            "$hash  $binaryRel",
+            "$helperHash  $helperRel"
+          ) | Set-Content -Encoding ASCII (Join-Path $root "SHA256SUMS.txt")
+
       - uses: actions/upload-artifact@v4
         with:
-          name: r104-exact-source-snapshot
-          path: snapshot/**
+          name: AEYLA-R10.0-REAPER-Windows-PRETEST
+          path: reaper-pretest/**
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
