@@ -478,15 +478,17 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
     while(mShowMidiIngress.try_consume(ignored))
     {
     }
-    mTakeScheduler.stop_reset();
-    mTakeScheduler.disarm();
-    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+
+    // R10.5: N41/PANIC and the UI APAGÓN TOTAL are one physical contract.
+    // Do not create a third safety mode by disarming the scheduler here.
+    // The Art-Net worker keeps its lease/carrier and masks every source with
+    // continuous zero DMX until the operator explicitly releases APAGÓN.
     mModel.release_transients();
-    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::operator_disarm);
     mModel.set_blackout(true);
     mParamBlackout.store(true, std::memory_order_release);
+    mArtNetOutput.set_blackout_latched(true);
     SetShowMidiMessage(
-        "PANIC MIDI · APAGÓN ACTIVO · salida desarmada · rearme manual");
+        "PANIC MIDI · APAGÓN TOTAL · DMX 0 continuo · ARM conservado");
   };
 
   // Called with mModelMutex already held by RuntimeTick. This capture path is
