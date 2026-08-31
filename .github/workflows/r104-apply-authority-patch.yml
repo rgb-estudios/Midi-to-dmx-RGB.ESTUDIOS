@@ -4,7 +4,7 @@ on:
   pull_request:
     branches:
       - rgb/r10.4-tooling-base-temp
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: write
