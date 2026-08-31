@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -34,6 +35,12 @@ bool wait_until_written(aeyla::capture::DmxTakeStreamWriter& writer,
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   return false;
+}
+
+std::string read_text(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(input),
+                     std::istreambuf_iterator<char>());
 }
 }  // namespace
 
@@ -133,6 +140,57 @@ int main() {
               static_cast<std::uint8_t>((last * 7U) & 0xFFU),
           "last streamed frame must round-trip exactly");
   }
+
+  // P0 RAW immutability: a second capture may never reuse an already-published
+  // .aeylatake path. Refuse before recording rather than backup/replace.
+  const auto original_size = std::filesystem::file_size(target);
+  DmxTakeStreamWriter collision;
+  auto collision_config = config;
+  collision_config.take_name = "Collision";
+  error.clear();
+  check(!collision.start(collision_config, error),
+        "stream writer must fail closed when RAW target already exists");
+  check(error.find("immutable") != std::string::npos,
+        "existing RAW collision must report immutable contract");
+  check(std::filesystem::file_size(target) == original_size,
+        "existing RAW collision must not alter target bytes");
+  check(!std::filesystem::exists(target.string() + ".bak"),
+        "RAW collision must never create a replacement backup path");
+  auto reloaded = load_take_file(target, error);
+  check(reloaded.has_value() && reloaded->take.frames.size() == kFrameCount,
+        "existing RAW must remain checksum-valid after refused collision");
+
+  // P0 race gate: if a destination appears after recording starts but before
+  // publish, finalize must preserve that destination and discard only our temp.
+  const auto race_target = directory / "Race.aeylatake";
+  DmxTakeStreamWriter raced;
+  auto race_config = config;
+  race_config.target_path = race_target;
+  race_config.take_name = "Race";
+  error.clear();
+  check(raced.start(race_config, error),
+        "race-path writer must start while destination is absent: " + error);
+  DmxUniverse race_frame{};
+  race_frame[7] = 77U;
+  check(raced.try_push_frame(race_frame),
+        "race-path writer must accept a frame");
+  check(wait_until_written(raced, 1U),
+        "race-path writer must durably write its frame before collision");
+  {
+    std::ofstream sentinel(race_target, std::ios::binary | std::ios::trunc);
+    sentinel << "DO-NOT-REPLACE";
+  }
+  error.clear();
+  check(!raced.finalize(error),
+        "finalize must fail closed if RAW destination appears during capture");
+  check(error.find("immutable") != std::string::npos,
+        "late RAW collision must report immutable contract");
+  check(read_text(race_target) == "DO-NOT-REPLACE",
+        "late collision must leave pre-existing destination byte-for-byte intact");
+  check(!std::filesystem::exists(race_target.string() + ".tmp"),
+        "late collision must clean only its unpublished temporary file");
+  check(!std::filesystem::exists(race_target.string() + ".bak"),
+        "late RAW collision must never create a backup/replacement file");
 
   // Aborting a new recording must remove the incomplete .tmp and never replace
   // the last known-good final Take.
