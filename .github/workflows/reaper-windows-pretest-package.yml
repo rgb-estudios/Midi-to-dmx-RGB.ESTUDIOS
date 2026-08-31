@@ -9,6 +9,7 @@ on:
       - docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md
       - docs/AEYLA_R10_FIELD_PRETEST_ES.md
       - docs/R10_4_AUTHORITY_CONTRACT.md
+      - docs/R10_5_BLACKOUT_UI_CONTRACT.md
       - tools/maintenance/windows/**
       - tools/network/**
       - .github/workflows/reaper-windows-pretest-package.yml
@@ -20,7 +21,7 @@ env:
 
 jobs:
   package-windows-reaper-pretest:
-    name: Windows / integrated 0.3 VST3 / R10.4 manual REAPER pretest
+    name: Windows / RGB Live Control R10.5 / manual REAPER pretest
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +53,7 @@ jobs:
           git -C $sdk checkout $env:VST3SDK_COMMIT
           git -C $sdk submodule update --init --recursive
 
-      - name: Build integrated AEYLA 0.3 VST3
+      - name: Build integrated RGB Live Control VST3
         shell: pwsh
         run: |
           cmake -S product -B build-product -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2" -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG
@@ -64,13 +65,13 @@ jobs:
           $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
           if (-not $bundle) { throw "AeylaVisualDmx.vst3 bundle not found" }
           $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
-          if (-not $binary) { throw "AeylaVisualDmx VST3 binary not found" }
+          if (-not $binary) { throw "RGB Live Control VST3 binary not found" }
           $helper = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
           if (-not $helper) { throw "AeylaNetworkHelper.exe not embedded in VST3 bundle" }
-          if ($binary.Length -lt 1MB) { throw "AeylaVisualDmx VST3 binary unexpectedly small" }
+          if ($binary.Length -lt 1MB) { throw "RGB Live Control VST3 binary unexpectedly small" }
           $stream = [System.IO.File]::OpenRead($binary.FullName)
           try { $b0=$stream.ReadByte(); $b1=$stream.ReadByte() } finally { $stream.Dispose() }
-          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "AeylaVisualDmx VST3 binary lacks PE/MZ header" }
+          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "RGB Live Control VST3 binary lacks PE/MZ header" }
           $helperStream = [System.IO.File]::OpenRead($helper.FullName)
           try { $h0=$helperStream.ReadByte(); $h1=$helperStream.ReadByte() } finally { $helperStream.Dispose() }
           if ($h0 -ne 0x4D -or $h1 -ne 0x5A) { throw "AeylaNetworkHelper.exe lacks PE/MZ header" }
@@ -92,76 +93,58 @@ jobs:
           Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $root
           Copy-Item docs/AEYLA_UI_INTERACTION_CONTRACT_ES.md (Join-Path $root "UI_INTERACTION_CONTRACT.md")
           Copy-Item docs/AEYLA_R10_FIELD_PRETEST_ES.md (Join-Path $root "R10_FIELD_PRETEST_ES.md")
-          Copy-Item docs/R10_4_AUTHORITY_CONTRACT.md (Join-Path $root "R10_4_AUTHORITY_CONTRACT.md")
+          Copy-Item docs/R10_5_BLACKOUT_UI_CONTRACT.md (Join-Path $root "R10_5_BLACKOUT_UI_CONTRACT.md")
 
           @'
-          RGB Live Control / AEYLA — R10.4 REAPER WINDOWS PRETEST
+          RGB LIVE CONTROL — RGB ESTUDIOS
+          SHOW / AEYLA — R10.5 WINDOWS / REAPER PRETEST
 
           ESTADO
-          PRETEST_NOT_SHOW_CANDIDATE. Este paquete exige gates fisicos; CI verde no significa Show Ready.
+          PRETEST_NOT_SHOW_CANDIDATE. CI verde no significa Show Ready.
 
           INSTALACION
           1. Cierra REAPER, Ableton y cualquier host VST3.
           2. Ejecuta CLEAN_INSTALL_AEYLA.cmd.
           3. Abre REAPER y re-scan VST3 si RGB Live Control no aparece automaticamente.
-          4. Confirma visualmente R10.4 PRETEST y revisa BUILD_ID.txt.
+          4. Confirma visualmente R10.5 PRETEST y revisa BUILD_ID.txt.
 
-          CAPTURA R09.1
-          - AEYLA no usa MTC para fijar ZERO.
-          - N42 = REC START por defecto; N43 = REC STOP por defecto.
-          - START y STOP son comandos separados, idempotentes y aprendibles de forma independiente.
-          - REC START fija el origen de la captura; el RAW .aeylatake se conserva.
-          - Repetir START no reinicia ZERO; STOP sin captura activa se ignora.
-
-          MIDI SHOW
-          N36 anterior | N37 siguiente | N38 PLAY | N39 pausa
-          N40 STOP/reset | N41 PANIC | N42 REC START | N43 REC STOP
-          N48-N62 canciones 1-15.
-          MIDI nunca puede ARMAR la salida ni quitar APAGON.
-
-          CARRIER R09.2
-          - APAGON OFF y ARM son manuales.
-          - Una vez ARMADA, la salida Art-Net debe continuar transmitiendo ~44 Hz con DAW detenido/pausado.
-          - STOP/PAUSA normal conserva HOLD + carrier y nunca exige re-ARM.
-          - Perdida real del reloj mientras el ultimo estado conocido sigue RUNNING=true debe fallar cerrado.
-
-          AUTORIDAD R10.4
-          - Cambio de ventana/pestana y callbacks normales del host NO desarman Art-Net.
-          - PREPARADA/PREV/NEXT NO activan APAGON TOTAL y NO retiran ARM.
-          - PLAY/PAUSA/HOLD/STOP normal conservan la autoridad y el carrier.
-          - PREPARADA no sustituye AL AIRE hasta PLAY/GO explicito.
-          - Solo DESARMAR o APAGON TOTAL/PANIC retiran autoridad en operacion normal.
+          AUTORIDAD FISICA R10.5
+          - ARMAR obtiene y mantiene autoridad Art-Net.
+          - DESARMAR retira autoridad y deja una rafaga corta de seguridad.
+          - APAGON TOTAL NO desarma: mantiene ARM/socket/carrier y transmite DMX 0 continuo a ~44 Hz.
+          - APAGON TOTAL tiene prioridad sobre Take, HOLD y memorias EN VIVO.
+          - Liberar APAGON revela el estado subyacente sin un segundo ARM.
+          - Cambio de ventana/pestana/PREPARADA/PREV/NEXT/PLAY/PAUSA/HOLD/STOP no puede retirar ARM.
           - Fallos reales de backend/runtime, render offline, shutdown y cambio fisico TX conservan fail-closed.
 
-          EN VIVO R10
-          - PREPARADA y AL AIRE son estados separados.
-          - Memorias iniciales: FRONTAL, HUMO / HAZE, BASE BLANCA, TEST LUMINARIAS.
-          - APRENDER usa dos snapshots Avolites: primero memoria OFF (baseline), luego memoria ON (target).
-          - Solo los canales que cambiaron forman la mascara; nunca se aplica un snapshot ciego de 512 canales.
-          - Fades disponibles: 0.1 / 1.0 / 1.5 s. Modo BOTON/TOGGLE o FADER.
-          - DISARM, PANIC, fail-closed y reinicio de socket llevan memorias a OFF.
+          NAVEGACION R10.5
+          TOMA | EN VIVO | MIDI | SISTEMA
+          - Un solo shell RGB Live Control.
+          - ARM y APAGON permanecen en la misma ubicacion en los cuatro workspaces.
+          - Cambiar workspace es presentacion unicamente; no modifica autoridad ni transporte.
+          - ARCHIVO permanece en el footer.
 
-          REAPERTURA / ESTADO 1.4
-          1. Carga una toma, ajusta IN/OUT y guarda el .RPP.
-          2. Cierra REAPER y vuelve a abrirlo.
-          3. Deben restaurarse biblioteca/toma/trims si la carpeta guardada existe.
-          4. La salida siempre vuelve segura al abrir proyecto: sin auto-ARM ni auto-PLAY.
-          5. El mapa MIDI SHOW incluye REC START y REC STOP independientes.
+          CAPTURA / MIDI
+          - REC START N42 y REC STOP N43 por defecto.
+          - MIDI nunca puede ARMAR ni quitar APAGON.
+          - PREPARADA no sustituye AL AIRE hasta GO/PLAY explicito.
+          - A -> B usa reemplazo atomico sin blackout intermedio.
 
-          HERRAMIENTAS
-          AUDIT_AEYLA.cmd: informa instalaciones/cache AEYLA.
-          CLEAN_AEYLA.cmd: elimina SOLO AEYLA y su entrada de cache REAPER con backup.
-          INSTALL_AEYLA.cmd: instala el bundle incluido.
-          CLEAN_INSTALL_AEYLA.cmd: flujo recomendado para cada build nuevo.
+          EN VIVO
+          - FRONTAL, HUMO/HAZE, BASE BLANCA y TEST LUMINARIAS.
+          - Operacion muestra boton/fader; CONFIGURAR contiene Learn, modo y fade.
+          - DMX Learn usa snapshots OFF -> ON y mascara sparse de slots cambiados.
 
-          GATE PRINCIPAL R10.4
-          ARM una sola vez y repite al menos 10 ciclos de cambio de ventana/pestana,
-          PREV/NEXT/seleccion directa y PLAY/HOLD/STOP. El receptor Art-Net debe
-          conservar paquetes, ARM debe seguir activo y APAGON TOTAL debe seguir OFF.
-          Luego valida que DESARMAR y PANIC retiren autoridad inmediatamente.
+          GATE FISICO OBLIGATORIO
+          1. ARM una vez con DMX no-cero.
+          2. Activa APAGON TOTAL: receptor sigue ~44 Hz, todos los slots 0 y ARM sigue activo.
+          3. Libera APAGON: vuelve el estado subyacente sin rearmar.
+          4. Cambia TOMA/EN VIVO/MIDI/SISTEMA al menos 10 veces: sin caida de carrier ni blackout accidental.
+          5. A AL AIRE -> B PREPARADA -> GO: B entra sin corte.
+          6. DESARMAR: la autoridad termina.
+          7. Re-ARM y APAGON/PANIC: cero DMX debe imponerse inmediatamente.
 
-          Ejecuta tambien R10_4_AUTHORITY_CONTRACT.md y R10_FIELD_PRETEST_ES.md.
-          PRETEST NO significa Show Candidate.
+          Lee R10_5_BLACKOUT_UI_CONTRACT.md y R10_FIELD_PRETEST_ES.md.
           '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
 
           $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
@@ -174,7 +157,7 @@ jobs:
           "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "NETWORK_HELPER_SHA256=$helperHash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
-          "BUILD_KIND=R10_4_REAPER_WINDOWS_MANUAL_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "BUILD_KIND=RGB_LIVE_CONTROL_R10_5_REAPER_WINDOWS_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "HOST_STATE_SCHEMA=1.4" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "STATUS=PRETEST_NOT_SHOW_CANDIDATE" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
 
@@ -187,7 +170,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AEYLA-R10.4-REAPER-Windows-PRETEST
+          name: RGB-Live-Control-R10.5-REAPER-Windows-PRETEST
           path: reaper-pretest/**
           if-no-files-found: error
           retention-days: 90
