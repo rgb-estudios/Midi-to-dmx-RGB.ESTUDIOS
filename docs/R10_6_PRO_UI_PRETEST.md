@@ -85,6 +85,9 @@ Reglas adicionales:
 
 - una memoria activa o en transición no puede entrar a edición hasta volver a OFF / 0%;
 - pulsar el pad/fader de una memoria aún sin DMX aprendido abre su modo `EDITAR` y guía al Learn OFF → ON, en vez de ejecutar una acción inválida;
+- durante una transición, la UI separa nivel real y target: muestra `FADE → ON` o `FADE → OFF` hasta que el nivel físico alcance el destino; nunca anticipa ON/OFF sólo por haber cambiado el target;
+- el Learn de dos capturas debe mostrar `PASO 2/2` después de capturar la base OFF y antes de capturar el estado ON;
+- APAGÓN resetea niveles de memorias y bloquea toggle/fader mientras permanezca latched; liberar APAGÓN nunca puede revelar un valor oculto preparado bajo blackout;
 - controles locales antiguos de ARM/PANIC/cierre no forman parte de EN VIVO: la seguridad vive únicamente en el shell global.
 
 ## 5. MIDI y persistencia
@@ -93,7 +96,22 @@ Reglas adicionales:
 
 Un MIDI Learn completado en el runtime thread debe consolidar el estado persistente de memorias y marcar inmediatamente el proyecto como `SIN GUARDAR`. Guardar sigue siendo una acción explícita del usuario; la corrección sólo evita que el footer afirme falsamente `GUARDADO`.
 
-## 6. ARCHIVO
+## 6. SISTEMA / RED
+
+Los cambios de red son acciones de configuración, no acciones de operación EN VIVO.
+
+Mientras exista autoridad física voluntaria, queda prohibido modificar:
+
+- adaptador RX;
+- adaptador TX;
+- IPv4/máscara TX;
+- actualización de la lista de adaptadores.
+
+La condición se evalúa tanto en la UI como en la capa funcional. Los selectores y `APLICAR IP` deben mostrar `BLOQUEADA · SALIDA ARMADA`, y el backend debe rechazar la mutación aunque una ruta de UI futura omita el bloqueo visual.
+
+Cambiar adaptador o red nunca puede usar el click de configuración como un `DISARM` implícito. El operador debe ejecutar `DESARMAR` explícitamente primero. Los `disarm()` defensivos internos pueden conservarse como fallback, pero no sustituyen este preflight.
+
+## 7. ARCHIVO
 
 `ARCHIVO` debe funcionar desde los cuatro workspaces, incluido EN VIVO.
 
@@ -103,7 +121,7 @@ Mientras el menú está abierto, el overlay posee toda la superficie de la aplic
 - hacer clic fuera cierra el menú y **consume ese clic**;
 - el clic de cierre nunca puede atravesar el menú y disparar una memoria, fader, canción, timeline, transporte o control de SISTEMA.
 
-## 7. Indicadores de operación
+## 8. Indicadores de operación
 
 REC/PLAY pueden activar el marco periférico pulsante, pero no deben dibujar badges sobre la cabecera ni tapar navegación, Art-Net, ARM o APAGÓN.
 
@@ -118,7 +136,7 @@ Header, footer y SISTEMA deben ser coherentes entre sí:
 - reproducción normal: verde;
 - HOLD/advertencia: ámbar.
 
-## 8. Gate de interacción R10.6
+## 9. Gate de interacción R10.6
 
 La build no avanza a prueba física hasta validar:
 
@@ -130,15 +148,19 @@ La build no avanza a prueba física hasta validar:
 6. ARCHIVO abre y ejecuta GUARDAR desde EN VIVO.
 7. Cerrar ARCHIVO tocando fuera en cualquiera de los cuatro workspaces no dispara ningún control inferior.
 8. AL AIRE y PREPARADA permanecen visualmente distinguibles en 1280×800 y en el layout compacto.
-9. FRONTAL/BASE/TEST muestran pad ON/OFF grande.
+9. FRONTAL/BASE/TEST muestran pad ON/OFF grande y, durante fade, `FADE → ON/OFF` hasta completar la transición.
 10. HUMO/HAZE muestra fader manipulable y porcentaje legible.
 11. EDITAR no cambia nivel DMX por sí mismo y está bloqueado mientras la memoria esté activa/transicionando.
 12. Una memoria sin DMX aprendido guía a EDITAR/Learn y no intenta operar salida.
-13. Un MIDI Learn exitoso cambia el footer a `SIN GUARDAR` sin auto-guardar.
-14. REC/PLAY no ocultan ni interceptan cabecera.
-15. APAGÓN/PANIC/DESARMAR conservan los tests de autoridad R10.5.
-16. Carga/guardado `.aeylashow` no restaura niveles activos ni ARM.
+13. Learn DMX OFF → ON presenta correctamente PASO 1/2 y PASO 2/2.
+14. APAGÓN pone memorias OFF y rechaza cambios de nivel hasta liberarse.
+15. Un MIDI Learn exitoso cambia el footer a `SIN GUARDAR` sin auto-guardar.
+16. REC/PLAY no ocultan ni interceptan cabecera.
+17. Con salida ARMADA, RX/TX/IP/refresh permanecen bloqueados y ningún click de SISTEMA retira carrier o autoridad.
+18. Después de `DESARMAR`, los cambios de RX/TX/IP vuelven a estar disponibles.
+19. APAGÓN/PANIC/DESARMAR conservan los tests de autoridad R10.5.
+20. Carga/guardado `.aeylashow` no restaura niveles activos ni ARM.
 
-## 9. Criterio de entrega
+## 10. Criterio de entrega
 
 CI verde significa candidato **PRETEST**, no Show Ready. La aprobación para show requiere prueba física Windows/REAPER + Avolites/nodo Art-Net y posteriormente validación macOS/Ableton.
