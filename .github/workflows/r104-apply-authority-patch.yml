@@ -1,71 +1,35 @@
-name: r104-release-stamp-temp
+name: r104-manual-go-fix-temp
 
 on:
   pull_request:
     branches:
       - rgb/r10.4-tooling-base-temp
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
-  stamp-r104:
-    if: github.event.pull_request.head.ref == 'rgb/r10.4-persistent-operator-authority-20260830'
+  apply-manual-go-fix:
+    if: github.event.pull_request.head.ref == 'rgb/r10.4-go-atomic-temp'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout R10.4 head
+      - name: Checkout temporary R10.4 GO head
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
-      - name: Stamp visible R10.4 identity and Windows package
+      - name: Apply deterministic manual GO repair
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_exact(path, old, new, count=1):
-              p = Path(path)
-              text = p.read_text(encoding='utf-8')
-              actual = text.count(old)
-              if actual != count:
-                  raise SystemExit(f'{path}: expected {count} matches for {old!r}, got {actual}')
-              p.write_text(text.replace(old, new), encoding='utf-8')
-
-          ui = 'product/AeylaVisualDmx/AeylaRuntimeStatusControl.h'
-          replace_exact(ui, 'R10.3 PRETEST', 'R10.4 PRETEST', 2)
-
-          wf = '.github/workflows/reaper-windows-pretest-package.yml'
-          replace_exact(wf,
-              'AEYLA Visual DMX 0.3 — R10.0 REAPER WINDOWS PRETEST',
-              'RGB Live Control / AEYLA — R10.4 REAPER WINDOWS PRETEST')
-          replace_exact(wf,
-              'BUILD_KIND=R10_REAPER_WINDOWS_MANUAL_PRETEST',
-              'BUILD_KIND=R10_4_REAPER_WINDOWS_MANUAL_PRETEST')
-          replace_exact(wf,
-              'AEYLA-R10.0-REAPER-Windows-PRETEST',
-              'AEYLA-R10.4-REAPER-Windows-PRETEST')
-
-          p = Path(wf)
-          text = p.read_text(encoding='utf-8')
-          anchor = '          Copy-Item docs/AEYLA_R10_FIELD_PRETEST_ES.md (Join-Path $root "R10_FIELD_PRETEST_ES.md")\n'
-          if text.count(anchor) != 1:
-              raise SystemExit('package copy anchor mismatch')
-          text = text.replace(anchor, anchor +
-              '          Copy-Item docs/R10_4_AUTHORITY_CONTRACT.md (Join-Path $root "R10_4_AUTHORITY_CONTRACT.md")\n')
-          carrier = '''          CARRIER R09.2\n          - APAGON OFF y ARM son manuales.\n          - Una vez ARMADA, la salida Art-Net debe continuar transmitiendo ~44 Hz con DAW detenido/pausado.\n          - STOP/PAUSA normal conserva HOLD + carrier y nunca exige re-ARM.\n          - Perdida real del reloj mientras el ultimo estado conocido sigue RUNNING=true debe fallar cerrado.\n'''
-          authority = carrier + '''\n          AUTORIDAD R10.4\n          - Cambio de ventana/pestana y callbacks normales del host NO desarman Art-Net.\n          - PREPARADA/PREV/NEXT NO activan APAGON TOTAL y NO retiran ARM.\n          - PLAY/PAUSA/HOLD/STOP normal conservan la autoridad y el carrier.\n          - Solo DESARMAR o APAGON TOTAL/PANIC retiran autoridad en operacion normal.\n'''
-          if text.count(carrier) != 1:
-              raise SystemExit('carrier section anchor mismatch')
-          p.write_text(text.replace(carrier, authority), encoding='utf-8')
-          PY
+          test -f patches/r104_manual_go_fix.py
+          python3 patches/r104_manual_go_fix.py
           git diff --check
           git config user.name "rgb-estudios-r10.4-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add product/AeylaVisualDmx/AeylaRuntimeStatusControl.h \
-                  .github/workflows/reaper-windows-pretest-package.yml
-          git diff --cached --quiet && { echo 'No stamp changes produced'; exit 1; }
-          git commit -m 'chore(r10.4): stamp visible identity and Windows package'
-          git push origin HEAD:rgb/r10.4-persistent-operator-authority-20260830
+          git add product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp
+          git rm patches/r104_manual_go_fix.py
+          git diff --cached --quiet && { echo 'No GO changes produced'; exit 1; }
+          git commit -m 'fix(r10.4): make manual GO switch songs without dropping Art-Net authority'
+          git push origin HEAD:rgb/r10.4-go-atomic-temp
