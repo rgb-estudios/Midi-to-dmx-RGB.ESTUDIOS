@@ -1,0 +1,40 @@
+name: r106-block-network-mutation-while-armed
+
+on:
+  push:
+    branches:
+      - rgb/r10.6-pro-ui-stabilization-20260830
+    paths:
+      - .github/workflows/r106-block-network-mutation-while-armed.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rgb/r10.6-pro-ui-stabilization-20260830
+          fetch-depth: 0
+
+      - name: Apply network authority guard
+        run: python3 .github/scripts/r106_block_network_mutation_while_armed.py
+
+      - name: Verify patch
+        run: |
+          git diff --check
+          grep -q 'Desarma la salida física antes de cambiar la red TX' product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp
+          grep -q 'BLOQUEADA · SALIDA ARMADA' product/AeylaVisualDmx/AeylaMainControl.h
+          grep -q 'Desarma la salida antes de cambiar el adaptador TX' product/AeylaVisualDmx/AeylaMainControl.h
+
+      - name: Commit result and remove applicator
+        run: |
+          git config user.name 'rgb-estudios-r10.6-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git rm .github/workflows/r106-block-network-mutation-while-armed.yml
+          git rm .github/scripts/r106_block_network_mutation_while_armed.py
+          git add product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp product/AeylaVisualDmx/AeylaMainControl.h
+          git commit -m 'fix(r10.6): block network mutation while output is armed'
+          git push origin HEAD:rgb/r10.6-pro-ui-stabilization-20260830
