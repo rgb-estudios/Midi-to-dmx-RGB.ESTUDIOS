@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 class AeylaRuntimeStatusControl final : public IControl
@@ -67,6 +68,7 @@ public:
       mFileMenuOpen = false;
       mLiveConfigIndex = -1;
       mDraggingMemory = -1;
+      mLiveNameEditIndex = -1;
       if(mLiveOpen)
         mLiveMessage = "EN VIVO · operación limpia; EDITAR abre DMX, MIDI, modo y fade sólo para una memoria.";
       SetDirty(false);
@@ -172,6 +174,19 @@ public:
     mDraggingMemory = -1;
   }
 
+  void OnTextEntryCompletion(const char* str, int valIdx) override
+  {
+    (void)valIdx;
+    if(mLiveNameEditIndex < 0) return;
+    const std::size_t index = static_cast<std::size_t>(mLiveNameEditIndex);
+    mLiveNameEditIndex = -1;
+    const std::string value = str == nullptr
+        ? std::string{}
+        : TrimText(str);
+    ReportLive(mPlug.RenameLiveMemoryFromUI(index, value));
+    SetDirty(false);
+  }
+
 private:
   inline static const IColor kBackground{255, 7, 8, 11};
   inline static const IColor kPanel{255, 13, 15, 19};
@@ -246,6 +261,31 @@ private:
     return text == nullptr || text[0] == '\0';
   }
 
+  static std::string TrimText(std::string_view value)
+  {
+    while(!value.empty() &&
+          (value.front() == ' ' || value.front() == '\t'))
+      value.remove_prefix(1U);
+    while(!value.empty() &&
+          (value.back() == ' ' || value.back() == '\t'))
+      value.remove_suffix(1U);
+    return std::string(value);
+  }
+
+  void BeginLiveNameEdit(std::size_t index)
+  {
+    if(index >= mPlug.LiveMemoryCount() || index >= mLiveNameButtons.size())
+      return;
+    auto* ui = GetUI();
+    if(ui == nullptr) return;
+    const auto view = mPlug.LiveMemoryViewFromUI(index);
+    mLiveNameEditIndex = static_cast<int>(index);
+    ui->CreateTextEntry(*this,
+                        IText(11.0F, kText, "AeylaUI", EAlign::Near,
+                              EVAlign::Middle),
+                        mLiveNameButtons[index], view.name.c_str(), kNoValIdx);
+  }
+
   static std::filesystem::path PathFromUtf8(const char* text)
   {
     if(text == nullptr || text[0] == '\0') return {};
@@ -314,7 +354,7 @@ private:
     else if(projectName.empty() || projectName == "Untitled Show")
       projectName = "SIN TÍTULO";
     const std::string showContext =
-        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.6 PRETEST";
+        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.7 PRETEST";
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                showContext.c_str(),
                IRECT(header.L + 14.0F, header.T + 28.0F,
@@ -557,7 +597,7 @@ private:
     mLiveConfigIndex = -1;
     mDraggingMemory = -1;
     mLiveMessageError = false;
-    mLiveMessage = "EN VIVO · selecciona una memoria para operar; EDITAR abre DMX/MIDI/modo/fade sólo en esa memoria.";
+    mLiveMessage = "EN VIVO · 4 memorias por página; EDITAR abre nombre / DMX / MIDI / modo / fade.";
     SetDirty(false);
   }
 
@@ -610,6 +650,39 @@ private:
                                    y + rowH - 2.0F);
     }
 
+    const std::size_t memoryCount = mPlug.LiveMemoryCount();
+    if(memoryCount <= 4U) mLiveMemoryPage = 0U;
+    else mLiveMemoryPage = std::min<std::size_t>(mLiveMemoryPage, 1U);
+    const std::size_t firstMemory = mLiveMemoryPage * 4U;
+
+    const float headerY = mLiveMemoryPanel.T + 7.0F;
+    const float headerH = 25.0F;
+    const float addW = 92.0F;
+    const float pageW = 46.0F;
+    mLiveAddMemoryButton = IRECT(mLiveMemoryPanel.R - 9.0F - addW,
+                                 headerY,
+                                 mLiveMemoryPanel.R - 9.0F,
+                                 headerY + headerH);
+    mLivePageButtons[1] = IRECT(mLiveAddMemoryButton.L - 7.0F - pageW,
+                                headerY,
+                                mLiveAddMemoryButton.L - 7.0F,
+                                headerY + headerH);
+    mLivePageButtons[0] = IRECT(mLivePageButtons[1].L - 5.0F - pageW,
+                                headerY,
+                                mLivePageButtons[1].L - 5.0F,
+                                headerY + headerH);
+
+    mLiveMemoryCards.fill({});
+    mLiveConfigButtons.fill({});
+    mLiveMainControls.fill({});
+    mLiveFaders.fill({});
+    mLiveNameButtons.fill({});
+    mLiveDmxButtons.fill({});
+    mLiveMidiButtons.fill({});
+    mLiveModeButtons.fill({});
+    mLiveFadeButtons.fill({});
+    mLiveBackButtons.fill({});
+
     const float gridL = mLiveMemoryPanel.L + 8.0F;
     const float gridR = mLiveMemoryPanel.R - 8.0F;
     const float gridT = mLiveMemoryPanel.T + 42.0F;
@@ -618,27 +691,31 @@ private:
     const float cardW = (gridR - gridL - gap) * 0.5F;
     const float cardH = (gridB - gridT - gap) * 0.5F;
 
-    for(std::size_t index = 0U; index < mLiveMemoryCards.size(); ++index)
+    for(std::size_t local = 0U; local < 4U; ++local)
     {
-      const std::size_t col = index % 2U;
-      const std::size_t row = index / 2U;
+      const std::size_t index = firstMemory + local;
+      if(index >= memoryCount || index >= mLiveMemoryCards.size()) continue;
+      const std::size_t col = local % 2U;
+      const std::size_t row = local / 2U;
       const float x = gridL + static_cast<float>(col) * (cardW + gap);
       const float y = gridT + static_cast<float>(row) * (cardH + gap);
       const IRECT card(x, y, x + cardW, y + cardH);
       mLiveMemoryCards[index] = card;
-      mLiveConfigButtons[index] = IRECT(card.R - 94.0F, card.T + 8.0F,
-                                        card.R - 8.0F, card.T + 31.0F);
-      mLiveMainControls[index] = IRECT(card.L + 10.0F, card.T + 58.0F,
-                                       card.R - 10.0F, card.B - 36.0F);
+      mLiveConfigButtons[index] = IRECT(card.R - 82.0F, card.T + 8.0F,
+                                        card.R - 8.0F, card.T + 30.0F);
+      mLiveMainControls[index] = IRECT(card.L + 10.0F, card.T + 56.0F,
+                                       card.R - 10.0F, card.B - 10.0F);
       const auto control = mLiveMainControls[index];
-      const float trackY = control.T + control.H() * 0.52F;
-      mLiveFaders[index] = IRECT(control.L + 18.0F, trackY - 4.5F,
-                                 control.R - 18.0F, trackY + 4.5F);
+      const float trackY = control.T + control.H() * 0.50F;
+      mLiveFaders[index] = IRECT(control.L + 18.0F, trackY - 6.0F,
+                                 control.R - 18.0F, trackY + 6.0F);
 
+      mLiveNameButtons[index] = IRECT(card.L + 10.0F, card.T + 34.0F,
+                                      card.R - 10.0F, card.T + 56.0F);
       const float cfgTop = card.T + 61.0F;
-      const float cfgGap = 7.0F;
-      const float cfgW = (card.W() - 27.0F) * 0.5F;
-      const float cfgH = 29.0F;
+      const float cfgGap = 6.0F;
+      const float cfgW = (card.W() - 26.0F) * 0.5F;
+      const float cfgH = 25.0F;
       mLiveDmxButtons[index] = IRECT(card.L + 10.0F, cfgTop,
                                      card.L + 10.0F + cfgW, cfgTop + cfgH);
       mLiveMidiButtons[index] = IRECT(mLiveDmxButtons[index].R + cfgGap,
@@ -649,8 +726,8 @@ private:
       mLiveFadeButtons[index] = IRECT(mLiveModeButtons[index].R + cfgGap,
                                       secondTop, card.R - 10.0F,
                                       secondTop + cfgH);
-      mLiveBackButtons[index] = IRECT(card.L + 10.0F, card.B - 36.0F,
-                                      card.R - 10.0F, card.B - 10.0F);
+      mLiveBackButtons[index] = IRECT(card.L + 10.0F, card.B - 29.0F,
+                                      card.R - 10.0F, card.B - 8.0F);
     }
   }
 
@@ -800,20 +877,44 @@ private:
   void DrawLiveMemories(IGraphics& g)
   {
     g.FillRoundRect(kPanel, mLiveMemoryPanel, 7.0F);
-    g.DrawRoundRect(kLine, mLiveMemoryPanel, 7.0F, nullptr, 1.0F);
+    g.DrawRoundRect(IColor(145, kLine.R, kLine.G, kLine.B),
+                    mLiveMemoryPanel, 7.0F, nullptr, 1.0F);
+
+    const std::size_t memoryCount = mPlug.LiveMemoryCount();
+    const std::size_t first = mLiveMemoryPage * 4U;
+    const std::size_t last = std::min<std::size_t>(first + 4U, memoryCount);
+    const std::string heading = "MEMORIAS EN VIVO · " +
+        std::to_string(memoryCount) + "/8";
     g.DrawText(IText(11.5F, kText, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
-               "MEMORIAS EN VIVO",
+               heading.c_str(),
                IRECT(mLiveMemoryPanel.L + 11.0F, mLiveMemoryPanel.T + 5.0F,
-                     mLiveMemoryPanel.R - 10.0F, mLiveMemoryPanel.T + 26.0F));
-    g.DrawText(IText(8.3F, kMuted, "AeylaUI",
-                     EAlign::Far, EVAlign::Middle),
-               "OPERACIÓN · EDITAR = DMX / MIDI / FADE",
-               IRECT(mLiveMemoryPanel.L + 11.0F, mLiveMemoryPanel.T + 5.0F,
-                     mLiveMemoryPanel.R - 11.0F, mLiveMemoryPanel.T + 26.0F));
+                     mLivePageButtons[0].L - 8.0F, mLiveMemoryPanel.T + 31.0F));
 
-    for(std::size_t index = 0U; index < mLiveMemoryCards.size(); ++index)
+    Button(g, mLivePageButtons[0], "1–4",
+           mLiveMemoryPage == 0U ? IColor(255, 31, 23, 39) : kRaised,
+           mLiveMemoryPage == 0U ? kBrand : kLine,
+           mLiveMemoryPage == 0U ? kBrand : kMuted, 8.2F);
+    Button(g, mLivePageButtons[1], "5–8",
+           mLiveMemoryPage == 1U ? IColor(255, 31, 23, 39) : kRaised,
+           mLiveMemoryPage == 1U ? kBrand : kLine,
+           memoryCount > 4U ? (mLiveMemoryPage == 1U ? kBrand : kMuted) : kFaint,
+           8.2F);
+    if(memoryCount < 8U)
+      Button(g, mLiveAddMemoryButton, "+ MEMORIA", kRaised, kLine, kText, 8.2F);
+    else
+      Button(g, mLiveAddMemoryButton, "8 / 8", IColor(255, 14, 16, 20),
+             IColor(120, kLine.R, kLine.G, kLine.B), kFaint, 8.2F);
+
+    for(std::size_t index = first; index < last; ++index)
       DrawMemoryCard(g, index);
+
+    if(last == first)
+      g.DrawText(IText(10.0F, kMuted, "AeylaUI",
+                       EAlign::Center, EVAlign::Middle),
+                 "AÑADE UNA MEMORIA PARA ESTA PÁGINA",
+                 IRECT(mLiveMemoryPanel.L + 20.0F, mLiveMemoryPanel.T + 58.0F,
+                       mLiveMemoryPanel.R - 20.0F, mLiveMemoryPanel.B - 20.0F));
   }
 
   void DrawMemoryCard(IGraphics& g, std::size_t index)
@@ -823,46 +924,56 @@ private:
     const bool active = view.level > 0.005F || view.target_level > 0.005F;
     const auto& card = mLiveMemoryCards[index];
 
-    IColor border = configuring ? kBrand :
+    const IColor accent = configuring ? kBrand :
         (view.learning || view.midi_learning ? kBrand :
             (active ? kGood : (view.configured ? kLine : kWarn)));
-    g.FillRoundRect(active ? IColor(255, 10, 25, 19) : IColor(255, 17, 19, 24),
-                    card, 6.0F);
-    g.DrawRoundRect(border, card, 6.0F, nullptr,
-                    configuring || active ? 1.4F : 1.0F);
+    const IColor fill = configuring
+        ? IColor(255, 20, 17, 25)
+        : (active ? IColor(255, 9, 27, 19) : IColor(255, 15, 17, 21));
+    g.FillRoundRect(fill, card, 7.0F);
+    g.DrawRoundRect(IColor(configuring || active ? 220 : 115,
+                           accent.R, accent.G, accent.B),
+                    card, 7.0F, nullptr, configuring || active ? 1.3F : 1.0F);
+    g.FillRoundRect(accent,
+                    IRECT(card.L + 1.5F, card.T + 11.0F,
+                          card.L + 4.0F, card.B - 11.0F), 1.2F);
 
-    g.DrawText(IText(11.4F, active ? kGood : kText, "AeylaUI",
+    g.DrawText(IText(12.4F, active ? kGood : kText, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
                view.name.c_str(),
-               IRECT(card.L + 10.0F, card.T + 4.0F,
-                     card.R - 106.0F, card.T + 27.0F));
+               IRECT(card.L + 11.0F, card.T + 4.0F,
+                     card.R - 94.0F, card.T + 29.0F));
+
+    Button(g, mLiveConfigButtons[index],
+           configuring ? "EDITANDO" : "EDITAR",
+           configuring ? IColor(255, 30, 20, 37) : IColor(255, 18, 20, 25),
+           configuring ? kBrand : IColor(130, kLine.R, kLine.G, kLine.B),
+           configuring ? kBrand : kMuted, 8.0F);
+
+    if(configuring)
+    {
+      DrawMemoryConfig(g, index, view);
+      return;
+    }
 
     const std::string dmx = view.configured
-        ? "DMX · " + std::to_string(view.channel_count) + " CH"
-        : (view.learning ? "DMX · PASO 2/2" : "DMX · SIN APRENDER");
+        ? "DMX " + std::to_string(view.channel_count) + " CH"
+        : (view.learning ? "DMX · PASO 2/2" : "DMX SIN APRENDER");
     const std::string midi = MidiLabel(view);
-    g.DrawText(IText(8.4F, view.configured ? kGood : kWarn, "AeylaUI",
+    g.DrawText(IText(8.2F, view.configured ? kGood : kWarn, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
                dmx.c_str(),
-               IRECT(card.L + 10.0F, card.T + 27.0F,
-                     card.L + card.W() * 0.52F, card.T + 48.0F));
-    g.DrawText(IText(8.4F,
+               IRECT(card.L + 11.0F, card.T + 28.0F,
+                     card.L + card.W() * 0.53F, card.T + 50.0F));
+    g.DrawText(IText(8.2F,
                      view.midi_kind == aeyla::live_memory_session::MidiBindingKind::none
                          ? (view.midi_learning ? kBrand : kMuted) : kBrand,
                      "AeylaUI", EAlign::Far, EVAlign::Middle),
                midi.c_str(),
-               IRECT(card.L + card.W() * 0.48F, card.T + 27.0F,
-                     card.R - 10.0F, card.T + 48.0F));
+               IRECT(card.L + card.W() * 0.47F, card.T + 28.0F,
+                     card.R - 11.0F, card.T + 50.0F));
 
-    Button(g, mLiveConfigButtons[index],
-           configuring ? "EDITANDO" : "EDITAR",
-           configuring ? IColor(255, 30, 20, 37) : kRaised,
-           configuring ? kBrand : kLine,
-           configuring ? kBrand : kMuted, 8.2F);
-
-    if(configuring)
-      DrawMemoryConfig(g, index, view);
-    else if(view.mode == aeyla::output::LiveMemoryControlMode::toggle)
+    if(view.mode == aeyla::output::LiveMemoryControlMode::toggle)
       DrawToggleOperation(g, index, view);
     else
       DrawFaderOperation(g, index, view);
@@ -899,7 +1010,7 @@ private:
     g.FillRoundRect(fill, control, 6.0F);
     g.DrawRoundRect(border, control, 6.0F, nullptr,
                     actualOn || transitioning ? 1.6F : 1.0F);
-    g.DrawText(IText(19.0F, stateColor,
+    g.DrawText(IText(21.5F, stateColor,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                state.c_str(), control.GetPadded(-6.0F));
     g.DrawText(IText(8.2F, kMuted, "AeylaUI",
@@ -930,14 +1041,20 @@ private:
       return;
     }
 
-    g.FillRoundRect(IColor(255, 5, 7, 9), track, 5.0F);
+    g.FillRoundRect(IColor(255, 5, 7, 9), track, 6.0F);
     if(normalized > 0.0F)
-      g.FillRoundRect(kBrand, IRECT(track.L, track.T, handleX, track.B), 5.0F);
-    g.DrawRoundRect(kLine, track, 5.0F, nullptr, 1.0F);
-    const IRECT handle(handleX - 8.0F, track.T - 12.0F,
-                       handleX + 8.0F, track.B + 12.0F);
-    g.FillRoundRect(kText, handle, 4.0F);
-    g.DrawRoundRect(kBrand, handle, 4.0F, nullptr, 1.1F);
+    {
+      g.FillRoundRect(IColor(70, kBrand.R, kBrand.G, kBrand.B),
+                      IRECT(track.L, track.T - 5.0F, handleX, track.B + 5.0F),
+                      7.0F);
+      g.FillRoundRect(kBrand, IRECT(track.L, track.T, handleX, track.B), 6.0F);
+    }
+    g.DrawRoundRect(IColor(170, kLine.R, kLine.G, kLine.B),
+                    track, 6.0F, nullptr, 1.0F);
+    const IRECT handle(handleX - 9.0F, track.T - 11.0F,
+                       handleX + 9.0F, track.B + 11.0F);
+    g.FillRoundRect(kText, handle, 5.0F);
+    g.DrawRoundRect(kBrand, handle, 5.0F, nullptr, 1.2F);
     const std::string percentage =
         std::to_string(static_cast<int>(std::lround(normalized * 100.0F))) + "%";
     g.DrawText(IText(15.0F, normalized > 0.0F ? kBrand : kText,
@@ -963,19 +1080,21 @@ private:
     const std::string fadeLabel = view.fade_ms == 100U ? "FADE · 0.1 s"
         : (view.fade_ms == 1500U ? "FADE · 1.5 s" : "FADE · 1.0 s");
 
+    Button(g, mLiveNameButtons[index], "NOMBRE · " + view.name,
+           IColor(255, 12, 14, 19), kBrand, kText, 8.5F);
     Button(g, mLiveDmxButtons[index], dmxLabel,
            view.learning ? IColor(255, 30, 20, 37) : kRaised,
            view.learning ? kBrand : kWarn,
-           view.learning ? kBrand : kWarn, 8.2F);
+           view.learning ? kBrand : kWarn, 8.0F);
     Button(g, mLiveMidiButtons[index], midiLabel,
            view.midi_learning ? IColor(255, 30, 20, 37) : kRaised,
            view.midi_learning ? kBrand : kLine,
-           view.midi_learning ? kBrand : kText, 8.2F);
+           view.midi_learning ? kBrand : kText, 8.0F);
     Button(g, mLiveModeButtons[index], modeLabel, kRaised, kLine,
            view.mode == aeyla::output::LiveMemoryControlMode::fader
-               ? kBrand : kText, 8.2F);
+               ? kBrand : kText, 8.0F);
     Button(g, mLiveFadeButtons[index], fadeLabel, kRaised, kLine,
-           kText, 8.2F);
+           kText, 8.0F);
 
     const auto& card = mLiveMemoryCards[index];
     std::string instruction;
@@ -986,21 +1105,21 @@ private:
     }
     else if(view.midi_learning) {
       instruction = view.mode == aeyla::output::LiveMemoryControlMode::toggle
-          ? "MIDI: presiona la Note. Ese primer toque sólo asigna."
-          : "MIDI: mueve el CC. Ese primer movimiento sólo asigna.";
+          ? "MIDI: presiona la Note. El primer toque sólo asigna."
+          : "MIDI: mueve el CC. El primer movimiento sólo asigna.";
       instructionColor = kBrand;
     }
     else {
-      instruction = "DMX: memoria OFF → captura 1/2. Luego ON → captura 2/2.";
+      instruction = "NOMBRE / DMX / MIDI / MODO / FADE";
     }
-    g.DrawText(IText(8.1F, instructionColor, "AeylaUI",
+    g.DrawText(IText(7.8F, instructionColor, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
                instruction.c_str(),
-               IRECT(card.L + 11.0F, mLiveFadeButtons[index].B + 6.0F,
-                     card.R - 11.0F, mLiveBackButtons[index].T - 4.0F));
+               IRECT(card.L + 11.0F, mLiveFadeButtons[index].B + 3.0F,
+                     card.R - 11.0F, mLiveBackButtons[index].T - 2.0F));
 
-    Button(g, mLiveBackButtons[index], "VOLVER A OPERAR",
-           IColor(255, 24, 17, 31), kBrand, kBrand, 8.4F);
+    Button(g, mLiveBackButtons[index], "CERRAR EDICIÓN",
+           IColor(255, 24, 17, 31), kBrand, kBrand, 8.2F);
   }
 
   static std::string MidiLabel(
@@ -1022,6 +1141,40 @@ private:
   void HandleLiveMouseDown(float x, float y)
   {
     BuildLiveLayout();
+
+    if(Contains(mLivePageButtons[0], x, y))
+    {
+      mLiveMemoryPage = 0U;
+      mLiveConfigIndex = -1;
+      mDraggingMemory = -1;
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mLivePageButtons[1], x, y))
+    {
+      if(mPlug.LiveMemoryCount() > 4U)
+      {
+        mLiveMemoryPage = 1U;
+        mLiveConfigIndex = -1;
+        mDraggingMemory = -1;
+      }
+      SetDirty(false);
+      return;
+    }
+    if(Contains(mLiveAddMemoryButton, x, y) && mPlug.LiveMemoryCount() < 8U)
+    {
+      const auto result = mPlug.AddLiveMemoryFromUI();
+      ReportLive(result);
+      if(result.succeeded)
+      {
+        const std::size_t count = mPlug.LiveMemoryCount();
+        mLiveMemoryPage = (count - 1U) / 4U;
+        mLiveConfigIndex = static_cast<int>(count - 1U);
+        mDraggingMemory = -1;
+      }
+      SetDirty(false);
+      return;
+    }
 
     if(Contains(mLiveTransport[0], x, y))
     {
@@ -1069,7 +1222,11 @@ private:
       return;
     }
 
-    for(std::size_t index = 0U; index < mLiveMemoryCards.size(); ++index)
+    const std::size_t memoryCount = mPlug.LiveMemoryCount();
+    const std::size_t firstMemory = mLiveMemoryPage * 4U;
+    const std::size_t lastMemory = std::min<std::size_t>(
+        firstMemory + 4U, memoryCount);
+    for(std::size_t index = firstMemory; index < lastMemory; ++index)
     {
       const auto view = mPlug.LiveMemoryViewFromUI(index);
       if(Contains(mLiveConfigButtons[index], x, y))
@@ -1095,6 +1252,11 @@ private:
 
       if(mLiveConfigIndex == static_cast<int>(index))
       {
+        if(Contains(mLiveNameButtons[index], x, y))
+        {
+          BeginLiveNameEdit(index);
+          return;
+        }
         if(Contains(mLiveDmxButtons[index], x, y))
         {
           ReportLive(mPlug.LearnLiveMemoryFromAvolitesFromUI(index));
@@ -1287,6 +1449,8 @@ private:
   bool mLiveMessageError{false};
   int mLiveConfigIndex{-1};
   int mDraggingMemory{-1};
+  int mLiveNameEditIndex{-1};
+  std::size_t mLiveMemoryPage{0U};
   std::string mLiveMessage{
       "EN VIVO · memorias en OFF hasta configuración y ARM explícito."};
 
@@ -1295,15 +1459,18 @@ private:
   IRECT mLiveMemoryPanel{};
   IRECT mLiveMessageRect{};
   std::array<IRECT, 15U> mLiveSongRows{};
-  std::array<IRECT, 4U> mLiveMemoryCards{};
-  std::array<IRECT, 4U> mLiveConfigButtons{};
-  std::array<IRECT, 4U> mLiveMainControls{};
-  std::array<IRECT, 4U> mLiveFaders{};
-  std::array<IRECT, 4U> mLiveDmxButtons{};
-  std::array<IRECT, 4U> mLiveMidiButtons{};
-  std::array<IRECT, 4U> mLiveModeButtons{};
-  std::array<IRECT, 4U> mLiveFadeButtons{};
-  std::array<IRECT, 4U> mLiveBackButtons{};
+  std::array<IRECT, 2U> mLivePageButtons{};
+  IRECT mLiveAddMemoryButton{};
+  std::array<IRECT, 8U> mLiveMemoryCards{};
+  std::array<IRECT, 8U> mLiveConfigButtons{};
+  std::array<IRECT, 8U> mLiveMainControls{};
+  std::array<IRECT, 8U> mLiveFaders{};
+  std::array<IRECT, 8U> mLiveNameButtons{};
+  std::array<IRECT, 8U> mLiveDmxButtons{};
+  std::array<IRECT, 8U> mLiveMidiButtons{};
+  std::array<IRECT, 8U> mLiveModeButtons{};
+  std::array<IRECT, 8U> mLiveFadeButtons{};
+  std::array<IRECT, 8U> mLiveBackButtons{};
 
   WDL_String mDialogFileName;
   WDL_String mDialogPath;
