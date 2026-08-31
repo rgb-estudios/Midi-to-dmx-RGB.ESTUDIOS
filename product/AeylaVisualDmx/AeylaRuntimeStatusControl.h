@@ -308,10 +308,17 @@ private:
                "RGB LIVE CONTROL",
                IRECT(header.L + 14.0F, header.T + 4.0F,
                      header.L + 245.0F, header.T + 31.0F));
+    std::string projectName = mPlug.ProjectName();
+    if(projectName == "Untitled AEYLA Show")
+      projectName = "AEYLA";  // Legacy project default: preserve stored intent.
+    else if(projectName.empty() || projectName == "Untitled Show")
+      projectName = "SIN TÍTULO";
+    const std::string showContext =
+        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.6 PRETEST";
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · SHOW / AEYLA · R10.6 PRETEST",
+               showContext.c_str(),
                IRECT(header.L + 14.0F, header.T + 28.0F,
-                     header.L + 330.0F, header.T + 45.0F));
+                     header.L + 440.0F, header.T + 45.0F));
 
     // Sparse Campo Vivo signature: identity cue, not decoration.
     g.DrawLine(IColor(255, 232, 166, 201), header.L + 14.0F, header.T + 43.0F,

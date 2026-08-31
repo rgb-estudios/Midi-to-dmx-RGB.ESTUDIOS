@@ -542,7 +542,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
             : static_cast<double>(*automaticIn) /
                   static_cast<double>(newest.frames_per_second);
         syncMessage = " · ENTRADA AUTO " + FormatDuration(inSeconds) +
-                      " · REPRODUCIR / MTC";
+                      " · ANCLA DAW / MIDI SHOW";
       }
       else
       {
@@ -555,7 +555,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
     {
       aeyla::take_library_session::clear_edit_state(this, songId);
       aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
-      syncMessage = " · SIN ANCLA REPRODUCIR / MTC · AJUSTA ENTRADA MANUALMENTE";
+      syncMessage = " · SIN ANCLA DAW / MIDI SHOW · AJUSTA ENTRADA MANUALMENTE";
     }
     mCaptureSyncAnchor.reset();
     aeyla::take_library_session::set_storage_message(
@@ -651,7 +651,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
   const auto sync = mCaptureSyncAnchor.status();
   const std::string syncMessage =
       sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport
-          ? " · ESPERANDO REPRODUCIR / MTC"
+          ? " · ESPERANDO PLAY DEL DAW / MIDI SHOW"
           : " · SIN ANCLA AUTOMÁTICA · INICIA GRABACIÓN CON REAPER DETENIDO";
 
   aeyla::take_library_session::set_storage_message(
@@ -952,7 +952,7 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
       result += " · ERROR DE ALMACENAMIENTO";
     const auto sync = mCaptureSyncAnchor.status();
     if(sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport)
-      result += " · ESPERANDO REPRODUCIR / MTC";
+      result += " · ESPERANDO PLAY DEL DAW / MIDI SHOW";
     else if(sync.state == aeyla::capture::DmxCaptureSyncState::anchored)
       result += " · SINCRONÍA FIJADA · ENTRADA AUTO " +
           FormatDuration(static_cast<double>(sync.anchor_frame) / 44.0);

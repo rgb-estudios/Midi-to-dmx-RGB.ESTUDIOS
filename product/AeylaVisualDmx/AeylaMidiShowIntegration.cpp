@@ -300,7 +300,7 @@ bool AeylaVisualDmx::StartPreparedTakeFromMidiLocked(
 {
   error_message.clear();
   if(TakeRecording()) {
-    error_message = "MIDI PLAY bloqueado mientras AEYLA está grabando";
+    error_message = "MIDI PLAY bloqueado mientras GRABAR DMX está activo";
     return false;
   }
 

@@ -55,7 +55,7 @@ ProjectFileStatus ProjectFileController::new_project(
       document, show::ShowProgram{});
   if (!validation.ok()) {
     return publish_failure(ProjectFileOperation::new_project,
-                           "Could not create a valid AEYLA project",
+                           "Could not create a valid project",
                            flatten(validation));
   }
 
@@ -72,7 +72,7 @@ ProjectFileStatus ProjectFileController::open(
   if (!loaded.ok() || !loaded.document.has_value() ||
       !loaded.show_program.has_value()) {
     return publish_failure(ProjectFileOperation::open,
-                           "Could not open AEYLA project package",
+                           "Could not open project package",
                            flatten(loaded.diagnostics));
   }
 
@@ -148,7 +148,7 @@ ProjectFileStatus ProjectFileController::save_to(
       path, document, show_program, live_memory_state_);
   if (!saved.ok()) {
     return publish_failure(operation,
-                           "Could not save AEYLA project package",
+                           "Could not save project package",
                            flatten(saved.diagnostics));
   }
 
