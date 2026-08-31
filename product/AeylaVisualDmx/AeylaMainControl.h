@@ -197,7 +197,9 @@ public:
             ? "Espera a que termine el cambio de red actual."
             : (mPlug.TakeRecording()
                 ? "No se puede cambiar el adaptador RX mientras se graba."
-                : "No se detectaron adaptadores RX seleccionables.");
+                : ((mPlug.TakeOutputArmed() || mPlug.OutputArmed())
+                    ? "Desarma la salida antes de cambiar el adaptador RX."
+                    : "No se detectaron adaptadores RX seleccionables."));
       SetDirty(false);
       return;
     }
@@ -208,7 +210,9 @@ public:
             ? "Espera a que termine el cambio de red actual."
             : (mPlug.TakeRecording()
                 ? "No se puede cambiar el adaptador RX mientras se graba."
-                : "No se detectaron adaptadores RX seleccionables.");
+                : ((mPlug.TakeOutputArmed() || mPlug.OutputArmed())
+                    ? "Desarma la salida antes de cambiar el adaptador RX."
+                    : "No se detectaron adaptadores RX seleccionables."));
       SetDirty(false);
       return;
     }
@@ -224,7 +228,9 @@ public:
             ? "Espera a que termine el cambio de red actual."
             : (mPlug.TakeRecording()
                 ? "Detén y guarda la toma antes de cambiar el adaptador TX."
-                : "No se detectaron adaptadores TX seleccionables.");
+                : ((mPlug.TakeOutputArmed() || mPlug.OutputArmed())
+                    ? "Desarma la salida antes de cambiar el adaptador TX."
+                    : "No se detectaron adaptadores TX seleccionables."));
       SetDirty(false);
       return;
     }
@@ -240,7 +246,9 @@ public:
             ? "Espera a que termine el cambio de red actual."
             : (mPlug.TakeRecording()
                 ? "Detén y guarda la toma antes de cambiar el adaptador TX."
-                : "No se detectaron adaptadores TX seleccionables.");
+                : ((mPlug.TakeOutputArmed() || mPlug.OutputArmed())
+                    ? "Desarma la salida antes de cambiar el adaptador TX."
+                    : "No se detectaron adaptadores TX seleccionables."));
       SetDirty(false);
       return;
     }
@@ -585,6 +593,13 @@ private:
     if(mPlug.NetworkConfigurationBusy())
     {
       mMessage = mPlug.NetworkConfigurationStatus();
+      return;
+    }
+    if(mPlug.TakeOutputArmed() || mPlug.OutputArmed() ||
+       mPlug.ArtNetOutputStatus().enabled ||
+       mPlug.ArtNetOutputStatus().override_enabled)
+    {
+      mMessage = "Desarma la salida antes de aplicar cambios de red.";
       return;
     }
     const auto separator = mLocalNetworkText.find('/');
@@ -1300,8 +1315,10 @@ private:
     const auto capture = mPlug.ArtNetCaptureStatus();
     const auto output = mPlug.ArtNetOutputStatus();
     const bool networkBusy = mPlug.NetworkConfigurationBusy();
+    const bool physicalAuthority = output.enabled || output.override_enabled;
     const bool routeSelectionBlocked =
-        networkBusy || mPlug.TakeRecording();
+        networkBusy || mPlug.TakeRecording() ||
+        mPlug.TakeOutputArmed() || mPlug.OutputArmed() || physicalAuthority;
 
     DrawRouteCard(g, mRxCard, "ENTRADA / ADAPTADOR RX",
                   mPlug.RxInterfaceStatus(), mPlug.CaptureInputStatus(),
@@ -1320,11 +1337,14 @@ private:
           mLocalNetworkText.empty() ? "clic para configurar" : mLocalNetworkText,
           mLocalNetworkText.empty() ? kWarn : kText);
     const bool networkApplyBlocked =
-        networkBusy || mPlug.TakeRecording();
+        networkBusy || mPlug.TakeRecording() ||
+        mPlug.TakeOutputArmed() || mPlug.OutputArmed() || physicalAuthority;
     Button(g, mApplyNetworkButton,
            networkBusy ? "APLICANDO RED · ESPERA" :
                (mPlug.TakeRecording() ? "BLOQUEADA · GRABANDO" :
-                                        "APLICAR IP Y PREPARAR ART-NET"),
+                  (physicalAuthority || mPlug.TakeOutputArmed() || mPlug.OutputArmed()
+                      ? "BLOQUEADA · SALIDA ARMADA"
+                      : "APLICAR IP Y PREPARAR ART-NET")),
            networkApplyBlocked ? IColor(255, 54, 42, 22) :
                (mPlug.BackendReady() ? IColor(255, 18, 51, 38) : kPanelRaised),
            networkApplyBlocked ? kWarn :
@@ -1354,7 +1374,6 @@ private:
                     capture.running ? "ESPERANDO ART-NET" : "RECEPTOR DETENIDO",
                     static_cast<unsigned>(capture.port_address + 1U));
 
-    const bool physicalAuthority = output.enabled || output.override_enabled;
     char transmission[220];
     if(physicalAuthority && output.blackout_latched)
       std::snprintf(transmission, sizeof(transmission),

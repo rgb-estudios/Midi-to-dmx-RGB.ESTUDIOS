@@ -275,7 +275,8 @@ std::size_t AeylaVisualDmx::NetworkInterfaceCount() const
 
 bool AeylaVisualDmx::CycleRxInterfaceFromUI(int direction)
 {
-  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording())
+  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording() ||
+     TakeOutputArmed() || OutputArmed())
     return false;
   {
     const std::scoped_lock lock(mNetworkMutex);
@@ -290,7 +291,8 @@ bool AeylaVisualDmx::CycleRxInterfaceFromUI(int direction)
 
 bool AeylaVisualDmx::CycleTxInterfaceFromUI(int direction)
 {
-  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording())
+  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording() ||
+     TakeOutputArmed() || OutputArmed())
     return false;
 
   mTakeScheduler.disarm();
@@ -369,6 +371,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
     return {false, {}, std::move(error)};
   if(TakeRecording())
     return {false, {}, "Detén GRABAR antes de cambiar la red TX"};
+  if(TakeOutputArmed() || OutputArmed())
+    return {false, {}, "Desarma la salida física antes de cambiar la red TX"};
   if(NetworkConfigurationBusy())
     return {false, {}, "Espera a que termine el cambio de red actual"};
 
