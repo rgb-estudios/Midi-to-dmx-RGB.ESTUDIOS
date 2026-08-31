@@ -84,10 +84,9 @@ void RuntimeSafetyState::on_event_overflow() noexcept {
 }
 
 void RuntimeSafetyState::on_host_deactivation() noexcept {
-  output_armed_ = false;
-  blackout_ = true;
-  reason_ = RuntimeSafetyReason::host_deactivation;
-  request_safe_actions(true);
+  // Host/editor deactivation is an ordinary DAW lifecycle event. It is not an
+  // operator DISARM and must not publish a safe/black frame. True runtime,
+  // backend, offline-render and shutdown faults retain fail-closed paths.
 }
 
 void RuntimeSafetyState::on_shutdown() noexcept {

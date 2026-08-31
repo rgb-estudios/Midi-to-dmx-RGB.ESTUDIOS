@@ -126,6 +126,30 @@ int main() {
   check(model.request_arm(),
         "explicit blackout release plus ARM must recover a preflighted backend");
 
+  // R10.4 show contract: selecting PREPARADA is navigation only. It must not
+  // withdraw the manually armed Art-Net authority or re-latch APAGÓN TOTAL.
+  auto two_song_show = development_show;
+  auto second_song = two_song_show.songs.front();
+  second_song.song_id = "runtime-song-2";
+  second_song.name = "AEYLA Runtime Song 2";
+  second_song.scenes.front().scene_id = "scene-main-2";
+  second_song.scenes.front().name = "Main 2";
+  second_song.clips.front().clip_id = "clip-main-2";
+  second_song.clips.front().scene_id = "scene-main-2";
+  two_song_show.songs.push_back(std::move(second_song));
+  const auto two_song_loaded = model.replace_show_program(two_song_show);
+  check(two_song_loaded.ok(), "two-song authority regression show must validate");
+  model.set_blackout(false);
+  check(model.request_arm(), "two-song authority regression must arm explicitly");
+  check(model.select_song(1U), "second song must become PREPARADA");
+  check(model.snapshot().output_armed,
+        "selecting a different PREPARADA song must preserve output ARM");
+  check(!model.snapshot().global_blackout,
+        "selecting a different PREPARADA song must not latch APAGÓN TOTAL");
+  check(model.select_song(0U), "first song must become PREPARADA again");
+  check(model.snapshot().output_armed && !model.snapshot().global_blackout,
+        "repeated song navigation must preserve ARM and global blackout state");
+
   HostEvent note_on{};
   note_on.type = HostEventType::note_on;
   note_on.channel = 1U;
