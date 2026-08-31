@@ -1588,6 +1588,12 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
 
 void AeylaVisualDmx::SetOutputArmed(bool armed)
 {
+  if(armed)
+  {
+    mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,
+                               std::memory_order_release);
+    mPendingMidiLearnPacked.store(0U, std::memory_order_release);
+  }
   const std::scoped_lock lock(mModelMutex);
   if(armed && RuntimeHealthy() &&
      !mRenderingOffline.load(std::memory_order_acquire))

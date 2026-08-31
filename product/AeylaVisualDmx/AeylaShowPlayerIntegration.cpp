@@ -851,6 +851,9 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
     mTakeScheduler.disarm();
     return {true, {}, "SALIDA DE TOMA DESARMADA"};
   }
+  mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,
+                             std::memory_order_release);
+  mPendingMidiLearnPacked.store(0U, std::memory_order_release);
   if(NetworkConfigurationBusy())
     return {false, {}, "Espera a que termine el cambio de red antes de armar"};
   if(ShowMidiMapping().enabled &&

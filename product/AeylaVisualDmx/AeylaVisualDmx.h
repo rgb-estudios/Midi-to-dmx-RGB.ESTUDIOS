@@ -167,6 +167,12 @@ public:
       aeyla::runtime::ShowMidiLearnTarget target);
   [[nodiscard]] aeyla::runtime::ShowMidiLearnTarget ShowMidiLearnTarget() const noexcept;
   [[nodiscard]] std::string ShowMidiStatus() const;
+  [[nodiscard]] bool ShowMidiConfigurationLocked() const noexcept
+  {
+    const auto output = mArtNetOutput.stats();
+    return TakeOutputArmed() || OutputArmed() ||
+           output.enabled || output.override_enabled;
+  }
   [[nodiscard]] bool ShowMidiPreflightBusy() const noexcept
   {
     return mMidiPreflightCursor.load(std::memory_order_acquire) >= 0;

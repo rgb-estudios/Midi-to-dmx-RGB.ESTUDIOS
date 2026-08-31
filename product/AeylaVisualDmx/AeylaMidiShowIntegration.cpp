@@ -143,13 +143,13 @@ void AeylaVisualDmx::SynchronizeShowTransportCursor(
 
 aeyla::product::AuthoringResult AeylaVisualDmx::ToggleShowMidiFromUI()
 {
+  if(ShowMidiConfigurationLocked())
+    return {false, {},
+            "Desarma la salida antes de cambiar el modo MIDI SHOW"};
   auto mapping = ShowMidiMapping();
   if(aeyla::runtime::validate_show_midi_mapping(mapping) !=
      aeyla::runtime::ShowMidiMappingError::none)
     return {false, {}, "El mapa MIDI no es válido; vuelve a aprender sus notas"};
-  if(!mapping.enabled && (TakeOutputArmed() || OutputArmed()))
-    return {false, {},
-            "Desarma cualquier autoridad antes de activar y precargar MIDI SHOW"};
   mapping.enabled = !mapping.enabled;
   mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,
                              std::memory_order_release);
@@ -182,7 +182,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::CycleShowMidiChannelFromUI(
 {
   if(direction == 0)
     return {false, {}, "Selecciona una dirección de canal MIDI"};
-  if(TakeOutputArmed() || OutputArmed())
+  if(ShowMidiConfigurationLocked())
     return {false, {},
             "Desarma la salida antes de cambiar el mapa MIDI del show"};
   auto mapping = ShowMidiMapping();
@@ -209,7 +209,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::BeginShowMidiLearnFromUI(
     mShowMidiLearnTarget.store(target, std::memory_order_release);
     return {true, {}, "APRENDER MIDI CANCELADO"};
   }
-  if(TakeOutputArmed() || OutputArmed())
+  if(ShowMidiConfigurationLocked())
     return {false, {},
             "Desarma la salida antes de aprender notas MIDI del show"};
   mShowMidiLearnTarget.store(target, std::memory_order_release);

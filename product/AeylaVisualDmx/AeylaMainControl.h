@@ -1204,31 +1204,46 @@ private:
   {
     Card(g, mWorkspace);
     const auto mapping = mPlug.ShowMidiMapping();
+    const bool midiConfigLocked = mPlug.ShowMidiConfigurationLocked();
     g.DrawText(IText(18.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "AUTOMATIZACIÓN MIDI DE SHOW",
+               "MIDI SHOW · MAPEO Y CONTROL",
                IRECT(mWorkspace.L + 16.0F, mWorkspace.T + 10.0F,
                      mWorkspace.R - 16.0F, mWorkspace.T + 42.0F));
 
-    Button(g, mMidiEnableButton,
-           mapping.enabled ? "MIDI SHOW ACTIVO" : "ACTIVAR MIDI SHOW",
-           mapping.enabled ? IColor(255, 18, 51, 38) : kPanelRaised,
-           mapping.enabled ? kGood : kLineStrong,
-           mapping.enabled ? kGood : kText);
-    Button(g, mMidiChannelPrevious, "<", kPanelRaised, kLineStrong);
-    const std::string channel = "CANAL " + std::to_string(mapping.channel);
-    Button(g, mMidiChannelField, channel.c_str(), kPanelRaised, kLineStrong,
-           kText);
-    Button(g, mMidiChannelNext, ">", kPanelRaised, kLineStrong);
+    const std::string midiModeLabel = midiConfigLocked
+        ? (mapping.enabled ? "MIDI SHOW ACTIVO · BLOQUEADO"
+                           : "MIDI SHOW OFF · BLOQUEADO")
+        : (mapping.enabled ? "MIDI SHOW ACTIVO" : "ACTIVAR MIDI SHOW");
+    Button(g, mMidiEnableButton, midiModeLabel.c_str(),
+           midiConfigLocked ? IColor(255, 54, 42, 22) :
+               (mapping.enabled ? IColor(255, 18, 51, 38) : kPanelRaised),
+           midiConfigLocked ? kWarn :
+               (mapping.enabled ? kGood : kLineStrong),
+           midiConfigLocked ? kWarn :
+               (mapping.enabled ? kGood : kText));
+    Button(g, mMidiChannelPrevious, "<",
+           midiConfigLocked ? IColor(255, 35, 31, 25) : kPanelRaised,
+           midiConfigLocked ? kWarn : kLineStrong,
+           midiConfigLocked ? kWarn : kText);
+    const std::string channel = "CANAL " + std::to_string(mapping.channel) +
+        (midiConfigLocked ? " · BLOQUEADO" : "");
+    Button(g, mMidiChannelField, channel.c_str(), kPanelRaised,
+           midiConfigLocked ? kWarn : kLineStrong,
+           midiConfigLocked ? kWarn : kText);
+    Button(g, mMidiChannelNext, ">",
+           midiConfigLocked ? IColor(255, 35, 31, 25) : kPanelRaised,
+           midiConfigLocked ? kWarn : kLineStrong,
+           midiConfigLocked ? kWarn : kText);
 
     constexpr std::array<const char*, 8U> labels{
-        "CANCIÓN ANTERIOR",
-        "SIGUIENTE CANCIÓN",
-        "PLAY / REINICIAR DESDE CERO",
+        "ANTERIOR",
+        "SIGUIENTE",
+        "PLAY / REINICIAR",
         "PAUSA / REANUDAR",
-        "STOP / RESET A CERO",
-        "REC START · INICIO CAPTURA",
-        "REC STOP · FIN CAPTURA",
-        "LANZAR CANCIONES 01–15"};
+        "STOP / CERO",
+        "REC START",
+        "REC STOP",
+        "LANZAR CANCIÓN 01–15"};
     const std::array<std::uint8_t, 8U> notes{
         mapping.previous_note, mapping.next_note, mapping.play_note,
         mapping.pause_note, mapping.stop_note, mapping.capture_start_note,
@@ -1264,10 +1279,12 @@ private:
                  IRECT(row.L + row.W() * 0.52F, row.T,
                        mMidiLearnButtons[index].L - 8.0F, row.B));
       Button(g, mMidiLearnButtons[index],
-             waiting ? "ESPERANDO NOTA…" : "APRENDER MIDI",
-             waiting ? IColor(255, 54, 42, 22) : kPanelRaised,
-             waiting ? kWarn : kLineStrong,
-             waiting ? kWarn : kText);
+             midiConfigLocked ? "BLOQUEADO" :
+                 (waiting ? "ESPERANDO NOTA…" : "APRENDER MIDI"),
+             (midiConfigLocked || waiting) ? IColor(255, 54, 42, 22) :
+                                             kPanelRaised,
+             (midiConfigLocked || waiting) ? kWarn : kLineStrong,
+             (midiConfigLocked || waiting) ? kWarn : kText);
     }
 
     const std::size_t prepared = mPlug.ActiveSongIndex();
@@ -1297,31 +1314,31 @@ private:
         (mCompactMidi ? 4.0F : 8.0F);
     g.DrawText(IText(12.0F, kGood, "AeylaUI", EAlign::Near, EVAlign::Top),
                mCompactMidi
-                   ? "SINCRONÍA: MUESTRAS DEL DAW · sin deriva acumulativa"
-                   : "SINCRONÍA: MUESTRAS DEL DAW · sin reloj global ni deriva acumulativa",
+                   ? "RELOJ · MUESTRAS DEL DAW · SIN DERIVA ACUMULATIVA"
+                   : "RELOJ · MUESTRAS DEL DAW · SIN DERIVA ACUMULATIVA",
                IRECT(mWorkspace.L + 18.0F, footerTop,
                      mWorkspace.R - 18.0F,
                      footerTop + (mCompactMidi ? 18.0F : 22.0F)));
     if(mCompactMidi)
     {
       g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
-                 ("CAPTURA: N" + std::to_string(mapping.capture_start_note) +
-                  " REC START · N" + std::to_string(mapping.capture_stop_note) +
-                  " REC STOP · CERO = REC START").c_str(),
+                 ("CAPTURA · N" + std::to_string(mapping.capture_start_note) +
+                  " REC START / CERO · N" + std::to_string(mapping.capture_stop_note) +
+                  " REC STOP").c_str(),
                  IRECT(mWorkspace.L + 18.0F, footerTop + 19.0F,
                        mWorkspace.R - 18.0F, footerTop + 42.0F));
     }
     else
     {
       g.DrawText(IText(12.0F, kFaint, "AeylaUI", EAlign::Near, EVAlign::Top),
-                 ("CAPTURA DMX: N" + std::to_string(mapping.capture_start_note) +
-                  " REC START fija CERO · N" +
+                 ("CAPTURA · N" + std::to_string(mapping.capture_start_note) +
+                  " REC START / CERO · N" +
                   std::to_string(mapping.capture_stop_note) +
-                  " REC STOP finaliza · el plugin no usa MTC.").c_str(),
+                  " REC STOP").c_str(),
                  IRECT(mWorkspace.L + 18.0F, footerTop + 23.0F,
                        mWorkspace.R - 18.0F, footerTop + 52.0F));
       g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
-                 "MIDI nunca arma Art-Net ni desactiva APAGÓN. Prepara la salida manualmente antes del show.",
+                 "SEGURIDAD · MIDI NO ARMA ART-NET NI LIBERA APAGÓN",
                  IRECT(mWorkspace.L + 18.0F, footerTop + 52.0F,
                        mWorkspace.R - 18.0F, footerTop + 78.0F));
     }
