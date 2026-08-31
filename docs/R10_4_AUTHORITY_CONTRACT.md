@@ -29,3 +29,7 @@ Persisten como fail-closed excepcionales:
 ## PREPARADA vs AL AIRE
 
 Seleccionar otra canción sólo cambia PREPARADA. No toca la toma AL AIRE, no modifica ARM, no activa blackout y no retira el carrier. La sustitución de AL AIRE ocurre únicamente por una acción explícita de reproducción/GO.
+
+## Gate físico R10.4
+
+ARM una sola vez y repetir al menos 10 ciclos de cambio de pestaña/ventana + PREV/NEXT/selección directa + PLAY/HOLD/STOP. Durante todo el bloque el receptor Art-Net debe conservar paquetes, ARM debe seguir activo y APAGÓN TOTAL debe permanecer desactivado. Después, DESARMAR y PANIC deben retirar autoridad de forma inmediata y determinista.
