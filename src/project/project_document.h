@@ -106,7 +106,7 @@ struct ProjectDocument {
   std::string project_id;
   std::string created_at;
   std::string modified_at;
-  std::string name{"Untitled AEYLA Show"};
+  std::string name{"Untitled Show"};
   std::vector<FixtureProfileDocument> fixture_profiles;
   std::vector<FixtureDocument> fixtures;
   std::vector<LookDocument> looks;

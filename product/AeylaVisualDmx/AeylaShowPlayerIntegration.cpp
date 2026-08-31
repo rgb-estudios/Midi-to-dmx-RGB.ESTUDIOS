@@ -275,7 +275,8 @@ std::size_t AeylaVisualDmx::NetworkInterfaceCount() const
 
 bool AeylaVisualDmx::CycleRxInterfaceFromUI(int direction)
 {
-  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording())
+  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording() ||
+     TakeOutputArmed() || OutputArmed())
     return false;
   {
     const std::scoped_lock lock(mNetworkMutex);
@@ -290,7 +291,8 @@ bool AeylaVisualDmx::CycleRxInterfaceFromUI(int direction)
 
 bool AeylaVisualDmx::CycleTxInterfaceFromUI(int direction)
 {
-  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording())
+  if(direction == 0 || NetworkConfigurationBusy() || TakeRecording() ||
+     TakeOutputArmed() || OutputArmed())
     return false;
 
   mTakeScheduler.disarm();
@@ -369,6 +371,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
     return {false, {}, std::move(error)};
   if(TakeRecording())
     return {false, {}, "Detén GRABAR antes de cambiar la red TX"};
+  if(TakeOutputArmed() || OutputArmed())
+    return {false, {}, "Desarma la salida física antes de cambiar la red TX"};
   if(NetworkConfigurationBusy())
     return {false, {}, "Espera a que termine el cambio de red actual"};
 
@@ -398,7 +402,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
       const std::scoped_lock lock(mNetworkMutex);
       mNetworkConfigurationMessage = "RED LISTA · " + network->address +
           "/" + std::to_string(network->prefix_length) + " → " +
-          network->directed_broadcast + " · U1 · SALIDA DESARMADA";
+          network->directed_broadcast +
+          " · U1 · SALIDA DESARMADA · APAGÓN ACTIVO";
       result.message = mNetworkConfigurationMessage;
     }
     return result;
@@ -419,7 +424,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
     return {false, {}, std::move(error)};
   }
   return {true, network->address,
-          "CAMBIO EN CURSO · AEYLA agregará " + network->address + "/" +
+          "CAMBIO EN CURSO · se agregará " + network->address + "/" +
               std::to_string(network->prefix_length) + " a " + adapter.name +
               " sin borrar su red existente"};
 }
@@ -537,7 +542,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
             : static_cast<double>(*automaticIn) /
                   static_cast<double>(newest.frames_per_second);
         syncMessage = " · ENTRADA AUTO " + FormatDuration(inSeconds) +
-                      " · REPRODUCIR / MTC";
+                      " · ANCLA DAW / MIDI SHOW";
       }
       else
       {
@@ -550,7 +555,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
     {
       aeyla::take_library_session::clear_edit_state(this, songId);
       aeyla::take_library_session::set_loaded_path(this, songId, newest.path);
-      syncMessage = " · SIN ANCLA REPRODUCIR / MTC · AJUSTA ENTRADA MANUALMENTE";
+      syncMessage = " · SIN ANCLA DAW / MIDI SHOW · AJUSTA ENTRADA MANUALMENTE";
     }
     mCaptureSyncAnchor.reset();
     aeyla::take_library_session::set_storage_message(
@@ -646,7 +651,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeCaptureFromUI()
   const auto sync = mCaptureSyncAnchor.status();
   const std::string syncMessage =
       sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport
-          ? " · ESPERANDO REPRODUCIR / MTC"
+          ? " · ESPERANDO PLAY DEL DAW / MIDI SHOW"
           : " · SIN ANCLA AUTOMÁTICA · INICIA GRABACIÓN CON REAPER DETENIDO";
 
   aeyla::take_library_session::set_storage_message(
@@ -846,6 +851,9 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
     mTakeScheduler.disarm();
     return {true, {}, "SALIDA DE TOMA DESARMADA"};
   }
+  mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,
+                             std::memory_order_release);
+  mPendingMidiLearnPacked.store(0U, std::memory_order_release);
   if(NetworkConfigurationBusy())
     return {false, {}, "Espera a que termine el cambio de red antes de armar"};
   if(ShowMidiMapping().enabled &&
@@ -947,7 +955,7 @@ std::string AeylaVisualDmx::ActiveTakeStatus() const
       result += " · ERROR DE ALMACENAMIENTO";
     const auto sync = mCaptureSyncAnchor.status();
     if(sync.state == aeyla::capture::DmxCaptureSyncState::waiting_for_transport)
-      result += " · ESPERANDO REPRODUCIR / MTC";
+      result += " · ESPERANDO PLAY DEL DAW / MIDI SHOW";
     else if(sync.state == aeyla::capture::DmxCaptureSyncState::anchored)
       result += " · SINCRONÍA FIJADA · ENTRADA AUTO " +
           FormatDuration(static_cast<double>(sync.anchor_frame) / 44.0);

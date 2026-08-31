@@ -819,7 +819,7 @@ ProjectDocument make_default_project_document(std::string project_id,
   document.project_id = std::move(project_id);
   document.created_at = timestamp_utc;
   document.modified_at = std::move(timestamp_utc);
-  document.name = "Untitled AEYLA Show";
+  document.name = "Untitled Show";
 
   FixtureProfileDocument profile;
   profile.profile_id = "aeyla-rgbwaluv-10ch";

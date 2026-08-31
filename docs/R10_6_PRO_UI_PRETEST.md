@@ -1,0 +1,213 @@
+# RGB Live Control R10.6 — Professional UI PRETEST
+
+Estado: **PRETEST_NOT_SHOW_CANDIDATE**  
+Base de seguridad: **R10.5 blackout authority contract**  
+Alcance R10.6: interfaz, jerarquía visual e interacción. No redefine la autoridad Art-Net.
+
+## 1. Arquitectura de navegación
+
+La aplicación expone una sola navegación principal:
+
+`TOMA | EN VIVO | MIDI | SISTEMA`
+
+El shell canónico pertenece exclusivamente a `AeylaRuntimeStatusControl`.
+`AeylaMainControl` no dibuja ni recibe eventos del header legado.
+
+### Identidad visible
+
+- Producto / fabricante: `RGB LIVE CONTROL · RGB ESTUDIOS`.
+- El artista o show no forma parte del nombre del plugin: el shell muestra `SHOW / <nombre del proyecto>` usando el proyecto realmente abierto.
+- Proyectos nuevos usan un nombre neutro (`Untitled Show` / `SIN TÍTULO`).
+- Los identificadores internos históricos (`AeylaVisualDmx`, `AyVD`, namespaces y bundle de compatibilidad) no se renombran dentro de R10.6 para no romper reconocimiento de sesiones existentes.
+
+### Regla de autoridad
+
+Cambiar de workspace es sólo presentación. Nunca puede:
+
+- armar o desarmar Art-Net;
+- activar o liberar APAGÓN TOTAL;
+- detener el carrier;
+- iniciar una toma;
+- cambiar el estado AL AIRE.
+
+## 2. Controles globales y autoridad
+
+La cabecera contiene una única instancia de:
+
+- `ARMAR / DESARMAR`;
+- `APAGÓN TOTAL`;
+- estado Art-Net;
+- navegación principal.
+
+No deben existir hit-zones duplicadas por debajo de la cabecera visible.
+
+El botón global ARM representa la autoridad voluntaria visible. Si existe autoridad de TOMA o del modelo heredado, una pulsación de `DESARMAR` debe retirar todas las autoridades voluntarias representadas por ese botón; nunca puede mostrar `DESARMAR` y ejecutar una ruta incompatible de ARM.
+
+APAGÓN/PANIC conserva el contrato R10.5: ARM y carrier permanecen activos y el worker transmite DMX 0 continuo con prioridad absoluta. DESARMAR es la única retirada voluntaria de autoridad.
+
+### Veracidad de estado Art-Net
+
+La UI distingue explícitamente:
+
+- backend/red disponible;
+- worker/motor listo;
+- autoridad física/carrier activo (`enabled || override_enabled`);
+- APAGÓN con carrier activo;
+- fail-closed.
+
+`ART-NET · LISTA / SIN CARRIER` nunca debe presentarse como `TX 44 Hz`. Header, footer y SISTEMA deben derivar la autoridad física de la misma fuente del worker.
+
+## 3. TOMA
+
+Prioridad visual:
+
+1. canción seleccionada y estado de toma;
+2. timeline/actividad DMX;
+3. transporte REC / PLAY / STOP;
+4. ENTRADA / SALIDA y herramientas de versión/zoom.
+
+Identidad/selección utiliza violeta/cyan. El rojo queda reservado para REC, APAGÓN, errores y AL AIRE. La selección IN/OUT del timeline usa cyan; la indicación AL AIRE de la setlist usa rojo.
+
+## 4. EN VIVO
+
+La superficie de operación debe privilegiar reconocimiento sobre lectura.
+
+- `AL AIRE`: tarjeta roja de alta prioridad.
+- `PREPARADA`: tarjeta cyan diferenciada.
+- transporte grande y centrado: PREV, PLAY/GO, HOLD, NEXT.
+- PLAY/GO: verde.
+- HOLD: ámbar.
+- memorias: grilla 2 × 2.
+
+Memorias por defecto:
+
+1. FRONTAL — botón/toggle.
+2. HUMO / HAZE — fader.
+3. BASE BLANCA — botón/toggle.
+4. TEST LUMINARIAS — botón/toggle.
+
+La operación primaria muestra un pad ON/OFF o un fader real. `EDITAR` abre DMX Learn, MIDI Learn, modo y fade sólo para la memoria seleccionada.
+
+Reglas adicionales:
+
+- una memoria activa o en transición no puede entrar a edición hasta volver a OFF / 0%;
+- pulsar el pad/fader de una memoria aún sin DMX aprendido abre su modo `EDITAR` y guía al Learn OFF → ON, en vez de ejecutar una acción inválida;
+- durante una transición, la UI separa nivel real y target: muestra `FADE → ON` o `FADE → OFF` hasta que el nivel físico alcance el destino; nunca anticipa ON/OFF sólo por haber cambiado el target;
+- el Learn de dos capturas debe mostrar `PASO 2/2` después de capturar la base OFF y antes de capturar el estado ON;
+- APAGÓN resetea niveles de memorias y bloquea toggle/fader mientras permanezca latched; liberar APAGÓN nunca puede revelar un valor oculto preparado bajo blackout;
+- controles locales antiguos de ARM/PANIC/cierre no forman parte de EN VIVO: la seguridad vive únicamente en el shell global.
+
+## 5. MIDI y persistencia
+
+`PREPARADA` usa cyan y `AL AIRE` usa rojo, igual que EN VIVO.
+
+Un MIDI Learn completado en el runtime thread debe consolidar el estado persistente de memorias y marcar inmediatamente el proyecto como `SIN GUARDAR`. Guardar sigue siendo una acción explícita del usuario; la corrección sólo evita que el footer afirme falsamente `GUARDADO`.
+
+### MIDI SHOW durante operación
+
+Mientras exista autoridad física (`TakeOutputArmed`, `OutputArmed`, `enabled` u `override_enabled`), la configuración MIDI SHOW queda congelada:
+
+- no se puede activar ni desactivar MIDI SHOW;
+- no se puede cambiar el canal;
+- no se puede iniciar MIDI Learn;
+- los controles de configuración muestran `BLOQUEADO`.
+
+Este bloqueo **no detiene la operación MIDI ya configurada**: PREV/NEXT/PLAY/PAUSA/STOP/REC y lanzamiento de canciones siguen procesándose normalmente. Sólo se congela la mutación del mapa.
+
+Al adquirir autoridad física se cancela cualquier Learn pendiente y también cualquier nota aprendida en el callback que aún no haya sido consolidada. La primera nota del show nunca puede convertirse accidentalmente en una operación de remapeo.
+
+### Sincronía real
+
+La sincronía implementada en R10.6 se apoya en:
+
+- transporte / muestras del DAW;
+- marcador MIDI SHOW para el ancla de captura.
+
+No existe un receptor MTC operativo en esta arquitectura; la UI no debe anunciar `MTC` como fuente de sincronía disponible.
+
+## 6. SISTEMA / RED
+
+Los cambios de red son acciones de configuración, no acciones de operación EN VIVO.
+
+Mientras exista autoridad física voluntaria, queda prohibido modificar:
+
+- adaptador RX;
+- adaptador TX;
+- edición de IPv4/máscara TX;
+- aplicación de IPv4/máscara TX;
+- actualización de la lista de adaptadores.
+
+La condición se evalúa tanto en la UI como en la capa funcional. Los selectores y `APLICAR IP` deben mostrar estado bloqueado, y el backend debe rechazar la mutación aunque una ruta de UI futura omita el bloqueo visual.
+
+Si el editor de IPv4 se abrió desarmado pero la autoridad cambia antes de confirmar el texto, la edición se descarta y se restaura el valor del adaptador TX realmente seleccionado.
+
+Cambiar adaptador o red nunca puede usar el click de configuración como un `DISARM` implícito. El operador debe ejecutar `DESARMAR` explícitamente primero. Los `disarm()` defensivos internos pueden conservarse como fallback, pero no sustituyen este preflight.
+
+### Secuencia segura de cambio de red
+
+La aplicación deja APAGÓN latched deliberadamente tras una mutación de red. La recuperación correcta es:
+
+`DESARMAR → CAMBIAR/APLICAR RED → APAGÓN ACTIVO → ARMAR CARRIER NEGRO → VERIFICAR RUTA → LIBERAR APAGÓN`
+
+APAGÓN no se libera automáticamente al terminar un cambio de red.
+
+## 7. ARCHIVO
+
+`ARCHIVO` debe funcionar desde los cuatro workspaces, incluido EN VIVO.
+
+Mientras el menú está abierto, el overlay posee toda la superficie de la aplicación:
+
+- NUEVO / ABRIR / GUARDAR / GUARDAR COMO reciben el evento antes que cualquier workspace;
+- hacer clic fuera cierra el menú y **consume ese clic**;
+- el clic de cierre nunca puede atravesar el menú y disparar una memoria, fader, canción, timeline, transporte o control de SISTEMA.
+
+## 8. Indicadores de operación
+
+REC/PLAY pueden activar el marco periférico pulsante, pero no deben dibujar badges sobre la cabecera ni tapar navegación, Art-Net, ARM o APAGÓN.
+
+Header, footer y SISTEMA deben ser coherentes entre sí:
+
+- carrier activo: estado físico real del worker;
+- backend disponible sin autoridad: `LISTA / SIN CARRIER`;
+- APAGÓN: rojo y carrier conservado;
+- fail-closed: rojo y rearme manual;
+- AL AIRE: rojo;
+- PREPARADA: cyan;
+- reproducción normal: verde;
+- HOLD/advertencia/bloqueo de configuración: ámbar.
+
+## 9. Gate de interacción R10.6
+
+La build no avanza a prueba física hasta validar:
+
+1. TOMA → EN VIVO → MIDI → SISTEMA ×10 sin cambio de ARM ni carrier.
+2. Una sola acción por clic sobre ARM y APAGÓN.
+3. Si existe cualquiera de las autoridades voluntarias representadas por el header, `DESARMAR` las retira sin intentar una ruta incompatible de ARM.
+4. APAGÓN activo mientras se cambia de workspace: sigue DMX 0 continuo y ARM permanece activo.
+5. Header, footer y SISTEMA muestran carrier sólo cuando `enabled || override_enabled` es verdadero.
+6. ARCHIVO abre y ejecuta GUARDAR desde EN VIVO.
+7. Cerrar ARCHIVO tocando fuera en cualquiera de los cuatro workspaces no dispara ningún control inferior.
+8. AL AIRE y PREPARADA permanecen visualmente distinguibles en 1280×800 y en el layout compacto.
+9. FRONTAL/BASE/TEST muestran pad ON/OFF grande y, durante fade, `FADE → ON/OFF` hasta completar la transición.
+10. HUMO/HAZE muestra fader manipulable y porcentaje legible.
+11. EDITAR no cambia nivel DMX por sí mismo y está bloqueado mientras la memoria esté activa/transicionando.
+12. Una memoria sin DMX aprendido guía a EDITAR/Learn y no intenta operar salida.
+13. Learn DMX OFF → ON presenta correctamente PASO 1/2 y PASO 2/2.
+14. APAGÓN pone memorias OFF y rechaza cambios de nivel hasta liberarse.
+15. Un MIDI Learn exitoso cambia el footer a `SIN GUARDAR` sin auto-guardar.
+16. REC/PLAY no ocultan ni interceptan cabecera.
+17. Con salida ARMADA, RX/TX/IP/refresh permanecen bloqueados y ningún click de SISTEMA retira carrier o autoridad.
+18. Con salida ARMADA, el campo IPv4 no entra en edición ni conserva una edición iniciada antes de ARMAR.
+19. Después de `DESARMAR`, los cambios de RX/TX/IP vuelven a estar disponibles.
+20. Tras aplicar una red, APAGÓN permanece activo; se puede ARMAR carrier negro y sólo después liberar APAGÓN manualmente.
+21. Con salida ARMADA, MIDI SHOW conserva el mapa activo pero bloquea modo, canal y Learn.
+22. Iniciar MIDI Learn → ARMAR antes de tocar una nota cancela Learn; la siguiente nota opera el mapa existente y no lo modifica.
+23. MIDI SHOW continúa operando PREV/NEXT/PLAY/PAUSA/STOP mientras su configuración está bloqueada.
+24. La UI de captura sólo anuncia fuentes de sincronía realmente implementadas: DAW / MIDI SHOW, no MTC.
+25. El shell identifica `RGB LIVE CONTROL / RGB ESTUDIOS` como producto y toma el nombre del show desde el proyecto abierto.
+26. APAGÓN/PANIC/DESARMAR conservan los tests de autoridad R10.5.
+27. Carga/guardado `.aeylashow` no restaura niveles activos ni ARM.
+
+## 10. Criterio de entrega
+
+CI verde significa candidato **PRETEST**, no Show Ready. La aprobación para show requiere prueba física Windows/REAPER + Avolites/nodo Art-Net y posteriormente validación macOS/Ableton.

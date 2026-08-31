@@ -845,7 +845,8 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
       mNetworkConfigurationMessage = ready
           ? "RED LISTA · " + network->address + "/" +
                 std::to_string(network->prefix_length) + " → " +
-                network->directed_broadcast + " · U1 · SALIDA DESARMADA"
+                network->directed_broadcast +
+                " · U1 · SALIDA DESARMADA · APAGÓN ACTIVO"
           : "IPv4 APLICADA / MOTOR ART-NET BLOQUEADO · " + mOutputBackendError;
     }
     RestartCaptureInputFromRouting();
@@ -1007,6 +1008,11 @@ void AeylaVisualDmx::DrainHostEventsLocked()
       continue;
     mModel.handle_host_event(event);
   }
+
+  // MIDI Learn is finalized on this non-realtime thread. Persist its authored
+  // binding into the project controller and mark the project unsaved here so
+  // the footer cannot continue to claim GUARDADO after a successful Learn.
+  CommitLiveMemoryPersistenceDirtyLocked();
 }
 
 void AeylaVisualDmx::RefreshHostStateCacheLocked()
@@ -1582,6 +1588,12 @@ void AeylaVisualDmx::PublishOutputFrameLocked(bool renderingOffline)
 
 void AeylaVisualDmx::SetOutputArmed(bool armed)
 {
+  if(armed)
+  {
+    mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,
+                               std::memory_order_release);
+    mPendingMidiLearnPacked.store(0U, std::memory_order_release);
+  }
   const std::scoped_lock lock(mModelMutex);
   if(armed && RuntimeHealthy() &&
      !mRenderingOffline.load(std::memory_order_acquire))

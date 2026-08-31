@@ -33,14 +33,29 @@ public:
   bool IsHit(float x, float y) const override
   {
     if(Contains(Header(), x, y) || Contains(Footer(), x, y)) return true;
+    // A modal file menu owns the whole editor surface while open. Otherwise a
+    // click outside the panel can fall through to MainControl and trigger a
+    // transport/timeline/system action while the menu remains visible.
+    if(mFileMenuOpen) return Contains(mRECT, x, y);
     if(mPlug.UiWorkspace() == 1) return Contains(mRECT, x, y);
-    if(mFileMenuOpen && Contains(FileMenuPanel(), x, y)) return true;
     return false;
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
     (void)mod;
+
+    // ARCHIVO is modal for navigation/content, while the two physical safety
+    // controls remain immediately reachable. A first click on a tab therefore
+    // closes ARCHIVO and is consumed instead of changing workspace underneath.
+    if(mFileMenuOpen && Contains(Header(), x, y) &&
+       !Contains(HeaderArmButton(), x, y) &&
+       !Contains(HeaderBlackoutButton(), x, y))
+    {
+      mFileMenuOpen = false;
+      SetDirty(false);
+      return;
+    }
 
     // The shell is always first. Workspace navigation is presentation-only and
     // can never touch physical authority. ARM and APAGÓN are explicit actions.
@@ -53,14 +68,35 @@ public:
       mLiveConfigIndex = -1;
       mDraggingMemory = -1;
       if(mLiveOpen)
-        mLiveMessage = "EN VIVO · operación limpia; CONFIGURAR abre Learn, modo y fade sólo para una memoria.";
+        mLiveMessage = "EN VIVO · operación limpia; EDITAR abre DMX, MIDI, modo y fade sólo para una memoria.";
       SetDirty(false);
       return;
     }
 
     if(Contains(HeaderArmButton(), x, y))
     {
-      ReportLive(mPlug.ToggleTakeOutputArmFromUI());
+      const bool takeArmed = mPlug.TakeOutputArmed();
+      const bool modelArmed = mPlug.OutputArmed();
+
+      // The header is the single global authority control. If either legacy
+      // model authority or Take authority is active, one DESARMAR gesture must
+      // remove every voluntary authority represented by this button. Never
+      // show DESARMAR and then route the click into an incompatible ARM path.
+      if(takeArmed || modelArmed)
+      {
+        if(takeArmed)
+          ReportLive(mPlug.ToggleTakeOutputArmFromUI());
+        if(modelArmed)
+          mPlug.ForceDisarmFromUI();
+        if(modelArmed && !takeArmed)
+        {
+          mLiveMessageError = false;
+          mLiveMessage = "SALIDA DESARMADA · autoridad física retirada";
+        }
+      }
+      else
+        ReportLive(mPlug.ToggleTakeOutputArmFromUI());
+
       SetDirty(false);
       return;
     }
@@ -77,12 +113,8 @@ public:
       return;
     }
 
-    if(mPlug.UiWorkspace() == 1)
-    {
-      HandleLiveMouseDown(x, y);
-      return;
-    }
-
+    // File operations remain reachable from every workspace, including
+    // EN VIVO. The old ordering let the live surface swallow ARCHIVO clicks.
     if(Contains(ArchiveButton(), x, y))
     {
       mFileMenuOpen = !mFileMenuOpen;
@@ -102,9 +134,17 @@ public:
       }
       if(!Contains(FileMenuPanel(), x, y))
       {
+        // Safety: dismissing the menu never clicks through into a live control.
         mFileMenuOpen = false;
         SetDirty(false);
+        return;
       }
+    }
+
+    if(mPlug.UiWorkspace() == 1)
+    {
+      HandleLiveMouseDown(x, y);
+      return;
     }
   }
 
@@ -268,10 +308,17 @@ private:
                "RGB LIVE CONTROL",
                IRECT(header.L + 14.0F, header.T + 4.0F,
                      header.L + 245.0F, header.T + 31.0F));
+    std::string projectName = mPlug.ProjectName();
+    if(projectName == "Untitled AEYLA Show")
+      projectName = "AEYLA";  // Legacy project default: preserve stored intent.
+    else if(projectName.empty() || projectName == "Untitled Show")
+      projectName = "SIN TÍTULO";
+    const std::string showContext =
+        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.6 PRETEST";
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · SHOW / AEYLA · R10.5 PRETEST",
+               showContext.c_str(),
                IRECT(header.L + 14.0F, header.T + 28.0F,
-                     header.L + 330.0F, header.T + 45.0F));
+                     header.L + 440.0F, header.T + 45.0F));
 
     // Sparse Campo Vivo signature: identity cue, not decoration.
     g.DrawLine(IColor(255, 232, 166, 201), header.L + 14.0F, header.T + 43.0F,
@@ -288,23 +335,50 @@ private:
     {
       const auto tab = NavTab(index);
       const bool selected = active == static_cast<int>(index);
+      if(selected)
+      {
+        g.FillRoundRect(IColor(255, 31, 23, 39), tab, 6.0F);
+        g.DrawRoundRect(kBrand, tab, 6.0F, nullptr, 1.0F);
+      }
+      else
+        g.DrawRoundRect(IColor(150, 47, 51, 62), tab, 6.0F, nullptr, 1.0F);
       g.DrawText(IText(10.4F, selected ? kText : kMuted, "AeylaUI",
                        EAlign::Center, EVAlign::Middle), tabs[index], tab);
       if(selected)
-        g.FillRect(kBrand, IRECT(tab.L + 12.0F, tab.B - 2.0F,
-                                tab.R - 12.0F, tab.B));
+        g.FillRoundRect(kBrand, IRECT(tab.L + 18.0F, tab.B - 2.5F,
+                                     tab.R - 18.0F, tab.B), 1.2F);
     }
 
     const auto tx = mPlug.ArtNetOutputStatus();
+    const bool physicalAuthority = tx.enabled || tx.override_enabled;
     const float statusRight = HeaderArmButton().L - 8.0F;
-    const float statusLeft = std::max(header.L + 470.0F, statusRight - 156.0F);
+    const float statusLeft = std::max(header.L + 470.0F, statusRight - 168.0F);
     if(statusRight - statusLeft > 70.0F)
     {
-      const std::string net = mPlug.BackendReady()
-          ? "ART-NET · " + std::to_string(tx.configured_fps) + " Hz"
-          : "ART-NET · SIN SALIDA";
+      std::string net = "ART-NET · SIN SALIDA";
+      IColor netColor = kWarn;
+      if(tx.fail_closed)
+      {
+        net = "ART-NET · FAIL-CLOSED";
+        netColor = kDanger;
+      }
+      else if(physicalAuthority && tx.blackout_latched)
+      {
+        net = "APAGÓN · " + std::to_string(tx.configured_fps) + " Hz";
+        netColor = kDanger;
+      }
+      else if(physicalAuthority)
+      {
+        net = "ART-NET TX · " + std::to_string(tx.configured_fps) + " Hz";
+        netColor = kGood;
+      }
+      else if(mPlug.BackendReady())
+      {
+        net = "ART-NET · LISTA / SIN CARRIER";
+        netColor = kCyan;
+      }
       Pill(g, IRECT(statusLeft, header.T + 10.0F, statusRight, header.T + 40.0F),
-           net, mPlug.BackendReady() ? kGood : kWarn);
+           net, netColor);
     }
 
     const bool armed = mPlug.TakeOutputArmed() || mPlug.OutputArmed();
@@ -325,11 +399,16 @@ private:
     g.FillRect(kBackground, footer);
     g.DrawLine(kLine, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
+    const auto tx = mPlug.ArtNetOutputStatus();
+    const bool physicalAuthority = tx.enabled || tx.override_enabled;
     IColor rail = kBrand;
-    if(mPlug.TakeRecording() || mPlug.TakeOutputLive()) rail = kDanger;
-    else if(!mPlug.RuntimeHealthy() || mPlug.RenderingOffline()) rail = kDanger;
+    if(mPlug.TakeRecording() || mPlug.TakeOutputLive() ||
+       (physicalAuthority && tx.blackout_latched))
+      rail = kDanger;
+    else if(!mPlug.RuntimeHealthy() || mPlug.RenderingOffline() || tx.fail_closed)
+      rail = kDanger;
     else if(mPlug.TakePlaying()) rail = kGood;
-    else if(mPlug.TakeOutputArmed()) rail = kWarn;
+    else if(physicalAuthority) rail = kWarn;
     g.FillRect(rail, IRECT(footer.L, footer.T, footer.R, footer.T + 2.0F));
 
     const auto compactLive = CompactLiveButton();
@@ -358,25 +437,35 @@ private:
 
     std::string operation;
     IColor operationColor = kMuted;
-    if(mPlug.TakeRecording()) {
+    if(tx.fail_closed) {
+      operation = "FAIL-CLOSED · REARME MANUAL";
+      operationColor = kDanger;
+    }
+    else if(physicalAuthority && tx.blackout_latched) {
+      operation = "APAGÓN · DMX 0 · CARRIER " +
+          std::to_string(tx.configured_fps) + " Hz";
+      operationColor = kDanger;
+    }
+    else if(mPlug.TakeRecording()) {
       operation = "REC · CAPTURANDO";
       operationColor = kDanger;
     }
     else if(mPlug.TakeOutputLive()) {
-      operation = "AL AIRE";
+      operation = "AL AIRE · CARRIER ACTIVO";
       operationColor = kDanger;
     }
     else if(mPlug.TakePlaying()) {
       operation = "PLAY · REPRODUCIENDO";
       operationColor = kGood;
     }
-    else if(mPlug.TakeOutputArmed()) {
-      operation = "ART-NET ARMADA · CARRIER ACTIVO";
+    else if(physicalAuthority) {
+      operation = "ART-NET ARMADA · CARRIER " +
+          std::to_string(tx.configured_fps) + " Hz";
       operationColor = kWarn;
     }
     else if(mPlug.BackendReady()) {
-      operation = "ART-NET LISTA · DESARMADA";
-      operationColor = kGood;
+      operation = "ART-NET LISTA · SIN CARRIER";
+      operationColor = kCyan;
     }
     else {
       operation = "SALIDA NO PREPARADA";
@@ -468,7 +557,7 @@ private:
     mLiveConfigIndex = -1;
     mDraggingMemory = -1;
     mLiveMessageError = false;
-    mLiveMessage = "EN VIVO · selecciona una memoria para operar; CONFIGURAR abre Learn/fade/modo sólo en esa memoria.";
+    mLiveMessage = "EN VIVO · selecciona una memoria para operar; EDITAR abre DMX/MIDI/modo/fade sólo en esa memoria.";
     SetDirty(false);
   }
 
@@ -478,21 +567,22 @@ private:
     const float right = mRECT.R - 16.0F;
     const float top = Header().B + 8.0F;
 
-    mLiveCloseButton = {};
-    mLivePanicButton = {};
-    mLiveArmButton = {};
-
     const float transportTop = top;
-    const float transportGap = 7.0F;
-    const float transportW = 92.0F;
+    const float transportGap = 8.0F;
+    const float transportW = std::clamp(
+        ((right - left) - transportGap * 3.0F) / 4.0F, 118.0F, 176.0F);
+    const float transportTotal = transportW * 4.0F + transportGap * 3.0F;
+    const float transportLeft = left + std::max(0.0F,
+        ((right - left) - transportTotal) * 0.5F);
     for(std::size_t index = 0U; index < mLiveTransport.size(); ++index)
     {
-      const float x = left + static_cast<float>(index) * (transportW + transportGap);
+      const float x = transportLeft +
+          static_cast<float>(index) * (transportW + transportGap);
       mLiveTransport[index] = IRECT(x, transportTop, x + transportW,
-                                   transportTop + 34.0F);
+                                   transportTop + 40.0F);
     }
 
-    const float contentTop = transportTop + 44.0F;
+    const float contentTop = transportTop + 52.0F;
     const float contentBottom = Footer().T - 38.0F;
     const float split = left + (right - left) * 0.31F;
     mLiveSetlistPanel = IRECT(left, contentTop, split - 9.0F, contentBottom);
@@ -502,7 +592,9 @@ private:
 
     const std::size_t songCount = std::min<std::size_t>(
         mPlug.SongCount(), mLiveSongRows.size());
-    const float rowTop = mLiveSetlistPanel.T + 50.0F;
+    const bool compactLiveSetlist = mLiveSetlistPanel.H() < 470.0F;
+    const float rowTop = mLiveSetlistPanel.T +
+        (compactLiveSetlist ? 64.0F : 104.0F);
     const float available = std::max(1.0F, mLiveSetlistPanel.B - rowTop - 8.0F);
     const float rowH = std::clamp(
         available / std::max<std::size_t>(songCount, 1U), 22.0F, 31.0F);
@@ -570,11 +662,26 @@ private:
     static constexpr std::array<const char*, 4U> transport{
         "PREV", "PLAY / GO", "HOLD", "NEXT"};
     for(std::size_t index = 0U; index < mLiveTransport.size(); ++index)
+    {
+      IColor fill = kRaised;
+      IColor border = kLine;
+      IColor text = kText;
+      if(index == 1U)
+      {
+        fill = mPlug.TakePlaying() ? IColor(255, 10, 44, 25)
+                                   : IColor(255, 13, 28, 20);
+        border = kGood;
+        text = kGood;
+      }
+      else if(index == 2U)
+      {
+        fill = IColor(255, 38, 28, 12);
+        border = kWarn;
+        text = kWarn;
+      }
       Button(g, mLiveTransport[index], transport[index],
-             index == 1U && mPlug.TakePlaying()
-                 ? IColor(255, 10, 44, 25) : kRaised,
-             index == 1U ? kGood : kLine,
-             index == 1U ? kGood : kText, 9.7F);
+             fill, border, text, 9.7F);
+    }
 
     DrawLiveSetlist(g);
     DrawLiveMemories(g);
@@ -600,21 +707,59 @@ private:
 
     const std::size_t prepared = mPlug.ActiveSongIndex();
     const int live = mPlug.ActiveTakeSongIndex();
-    std::string summary = "PREPARADA ";
-    if(prepared < mPlug.SongCount())
-      summary += std::to_string(prepared + 1U) + " · " + mPlug.SongName(prepared);
-    else
-      summary += "—";
+    const bool compactStatus = mLiveSetlistPanel.H() < 470.0F;
+
+    std::string airName = "—";
     if(live >= 0 && static_cast<std::size_t>(live) < mPlug.SongCount())
-      summary += "   |   AL AIRE " + std::to_string(live + 1) + " · " +
-                 mPlug.SongName(static_cast<std::size_t>(live));
+      airName = std::to_string(live + 1) + " · " +
+                mPlug.SongName(static_cast<std::size_t>(live));
+    std::string preparedName = "—";
+    if(prepared < mPlug.SongCount())
+      preparedName = std::to_string(prepared + 1U) + " · " +
+                     mPlug.SongName(prepared);
+
+    if(compactStatus)
+    {
+      const IRECT status(mLiveSetlistPanel.L + 9.0F,
+                         mLiveSetlistPanel.T + 29.0F,
+                         mLiveSetlistPanel.R - 9.0F,
+                         mLiveSetlistPanel.T + 57.0F);
+      g.FillRoundRect(IColor(255, 12, 14, 19), status, 5.0F);
+      g.DrawRoundRect(kLine, status, 5.0F, nullptr, 1.0F);
+      const std::string compact = "AIRE " + airName +
+          "   ·   PREP " + preparedName;
+      g.DrawText(IText(8.2F, kMuted, "AeylaUI",
+                       EAlign::Near, EVAlign::Middle),
+                 compact.c_str(), status.GetPadded(-7.0F));
+    }
     else
-      summary += "   |   AL AIRE —";
-    g.DrawText(IText(8.4F, kMuted, "AeylaUI",
-                     EAlign::Near, EVAlign::Middle),
-               summary.c_str(),
-               IRECT(mLiveSetlistPanel.L + 11.0F, mLiveSetlistPanel.T + 24.0F,
-                     mLiveSetlistPanel.R - 10.0F, mLiveSetlistPanel.T + 46.0F));
+    {
+      const IRECT air(mLiveSetlistPanel.L + 9.0F,
+                      mLiveSetlistPanel.T + 29.0F,
+                      mLiveSetlistPanel.R - 9.0F,
+                      mLiveSetlistPanel.T + 61.0F);
+      const IRECT prep(mLiveSetlistPanel.L + 9.0F,
+                       mLiveSetlistPanel.T + 66.0F,
+                       mLiveSetlistPanel.R - 9.0F,
+                       mLiveSetlistPanel.T + 98.0F);
+      g.FillRoundRect(IColor(255, 43, 13, 20), air, 5.0F);
+      g.DrawRoundRect(kDanger, air, 5.0F, nullptr, 1.0F);
+      g.DrawText(IText(7.8F, kDanger, "AeylaUI",
+                       EAlign::Near, EVAlign::Top),
+                 "AL AIRE", air.GetPadded(-7.0F));
+      g.DrawText(IText(10.6F, kText, "AeylaUI",
+                       EAlign::Near, EVAlign::Bottom),
+                 airName.c_str(), air.GetPadded(-7.0F));
+
+      g.FillRoundRect(IColor(255, 8, 23, 31), prep, 5.0F);
+      g.DrawRoundRect(kCyan, prep, 5.0F, nullptr, 1.0F);
+      g.DrawText(IText(7.8F, kCyan, "AeylaUI",
+                       EAlign::Near, EVAlign::Top),
+                 "PREPARADA", prep.GetPadded(-7.0F));
+      g.DrawText(IText(10.6F, kText, "AeylaUI",
+                       EAlign::Near, EVAlign::Bottom),
+                 preparedName.c_str(), prep.GetPadded(-7.0F));
+    }
 
     const std::size_t count = std::min<std::size_t>(
         mPlug.SongCount(), mLiveSongRows.size());
@@ -663,7 +808,7 @@ private:
                      mLiveMemoryPanel.R - 10.0F, mLiveMemoryPanel.T + 26.0F));
     g.DrawText(IText(8.3F, kMuted, "AeylaUI",
                      EAlign::Far, EVAlign::Middle),
-               "OPERAR PRIMERO · CONFIGURAR SÓLO CUANDO SEA NECESARIO",
+               "OPERACIÓN · EDITAR = DMX / MIDI / FADE",
                IRECT(mLiveMemoryPanel.L + 11.0F, mLiveMemoryPanel.T + 5.0F,
                      mLiveMemoryPanel.R - 11.0F, mLiveMemoryPanel.T + 26.0F));
 
@@ -693,8 +838,8 @@ private:
                      card.R - 106.0F, card.T + 27.0F));
 
     const std::string dmx = view.configured
-        ? "DMX " + std::to_string(view.channel_count) + " CH"
-        : (view.learning ? "DMX PASO 1/2" : "DMX SIN CONFIGURAR");
+        ? "DMX · " + std::to_string(view.channel_count) + " CH"
+        : (view.learning ? "DMX · PASO 2/2" : "DMX · SIN APRENDER");
     const std::string midi = MidiLabel(view);
     g.DrawText(IText(8.4F, view.configured ? kGood : kWarn, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
@@ -710,7 +855,7 @@ private:
                      card.R - 10.0F, card.T + 48.0F));
 
     Button(g, mLiveConfigButtons[index],
-           configuring ? "CONFIGURANDO" : "CONFIGURAR",
+           configuring ? "EDITANDO" : "EDITAR",
            configuring ? IColor(255, 30, 20, 37) : kRaised,
            configuring ? kBrand : kLine,
            configuring ? kBrand : kMuted, 8.2F);
@@ -728,20 +873,38 @@ private:
       const aeyla::live_memory_session::MemoryView& view)
   {
     const auto& control = mLiveMainControls[index];
-    const bool on = view.target_level > 0.5F;
     const bool ready = view.configured;
-    g.FillRoundRect(on ? IColor(255, 12, 46, 31) : IColor(255, 10, 11, 15),
-                    control, 6.0F);
-    g.DrawRoundRect(on ? kGood : (ready ? kLine : kWarn),
-                    control, 6.0F, nullptr, on ? 1.6F : 1.0F);
-    g.DrawText(IText(17.0F, on ? kGood : (ready ? kText : kWarn),
+    const bool actualOn = view.level > 0.5F;
+    const bool targetOn = view.target_level > 0.5F;
+    const bool transitioning = ready && view.transitioning;
+    const IColor stateColor = !ready ? kWarn :
+        (transitioning ? kWarn : (actualOn ? kGood : kText));
+    const IColor border = !ready ? kWarn :
+        (transitioning ? kWarn : (actualOn ? kGood : kLine));
+    const IColor fill = actualOn
+        ? IColor(255, 12, 46, 31)
+        : (transitioning ? IColor(255, 38, 28, 12)
+                         : IColor(255, 10, 11, 15));
+    std::string state = "APRENDER DMX";
+    if(ready)
+      state = transitioning
+          ? (targetOn ? "FADE → ON" : "FADE → OFF")
+          : (actualOn ? "ON" : "OFF");
+    const std::string fade = view.fade_ms == 100U ? "0.1 s"
+        : (view.fade_ms == 1500U ? "1.5 s" : "1.0 s");
+    const std::string detail = ready
+        ? "BOTÓN · FADE " + fade
+        : "TOCA PARA CONFIGURAR";
+
+    g.FillRoundRect(fill, control, 6.0F);
+    g.DrawRoundRect(border, control, 6.0F, nullptr,
+                    actualOn || transitioning ? 1.6F : 1.0F);
+    g.DrawText(IText(19.0F, stateColor,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
-               ready ? (on ? "ON" : "OFF") : "CONFIGURA DMX",
-               control.GetPadded(-6.0F));
+               state.c_str(), control.GetPadded(-6.0F));
     g.DrawText(IText(8.2F, kMuted, "AeylaUI",
                      EAlign::Center, EVAlign::Bottom),
-               ready ? "BOTÓN / TOGGLE" : "el MIDI puede mapearse antes",
-               control.GetPadded(-7.0F));
+               detail.c_str(), control.GetPadded(-7.0F));
   }
 
   void DrawFaderOperation(
@@ -760,10 +923,10 @@ private:
     {
       g.DrawText(IText(14.0F, kWarn, "AeylaUI",
                        EAlign::Center, EVAlign::Middle),
-                 "CONFIGURA DMX", control);
+                 "APRENDER DMX", control);
       g.DrawText(IText(8.2F, kMuted, "AeylaUI",
                        EAlign::Center, EVAlign::Bottom),
-                 "el MIDI CC puede mapearse antes", control.GetPadded(-7.0F));
+                 "TOCA PARA CONFIGURAR", control.GetPadded(-7.0F));
       return;
     }
 
@@ -771,8 +934,8 @@ private:
     if(normalized > 0.0F)
       g.FillRoundRect(kBrand, IRECT(track.L, track.T, handleX, track.B), 5.0F);
     g.DrawRoundRect(kLine, track, 5.0F, nullptr, 1.0F);
-    const IRECT handle(handleX - 7.0F, track.T - 11.0F,
-                       handleX + 7.0F, track.B + 11.0F);
+    const IRECT handle(handleX - 8.0F, track.T - 12.0F,
+                       handleX + 8.0F, track.B + 12.0F);
     g.FillRoundRect(kText, handle, 4.0F);
     g.DrawRoundRect(kBrand, handle, 4.0F, nullptr, 1.1F);
     const std::string percentage =
@@ -828,7 +991,7 @@ private:
       instructionColor = kBrand;
     }
     else {
-      instruction = "DMX: deja esta memoria OFF en Avolites para el paso 1. MIDI puede aprenderse antes o después.";
+      instruction = "DMX: memoria OFF → captura 1/2. Luego ON → captura 2/2.";
     }
     g.DrawText(IText(8.1F, instructionColor, "AeylaUI",
                      EAlign::Near, EVAlign::Middle),
@@ -859,30 +1022,6 @@ private:
   void HandleLiveMouseDown(float x, float y)
   {
     BuildLiveLayout();
-    if(Contains(mLiveCloseButton, x, y))
-    {
-      mPlug.SetUiWorkspaceFromUI(0);
-      mLiveOpen = false;
-      mLiveConfigIndex = -1;
-      mDraggingMemory = -1;
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mLivePanicButton, x, y))
-    {
-      mPlug.SetBlackoutFromUI(!mPlug.GlobalBlackout());
-      SetLiveMessage(true, mPlug.GlobalBlackout()
-          ? "APAGÓN ACTIVO · salida desarmada y memorias OFF."
-          : "APAGÓN DESACTIVADO · ARM sigue siendo manual.");
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mLiveArmButton, x, y))
-    {
-      ReportLive(mPlug.ToggleTakeOutputArmFromUI());
-      SetDirty(false);
-      return;
-    }
 
     if(Contains(mLiveTransport[0], x, y))
     {
@@ -932,19 +1071,28 @@ private:
 
     for(std::size_t index = 0U; index < mLiveMemoryCards.size(); ++index)
     {
+      const auto view = mPlug.LiveMemoryViewFromUI(index);
       if(Contains(mLiveConfigButtons[index], x, y))
       {
+        const bool activeOrFading = view.transitioning ||
+            view.level > 0.005F || view.target_level > 0.005F;
+        if(activeOrFading && mLiveConfigIndex != static_cast<int>(index))
+        {
+          SetLiveMessage(false, view.name +
+              " · llévala a OFF / 0% antes de editar DMX, MIDI, modo o fade.");
+          SetDirty(false);
+          return;
+        }
         mLiveConfigIndex = mLiveConfigIndex == static_cast<int>(index)
             ? -1 : static_cast<int>(index);
         mDraggingMemory = -1;
         SetLiveMessage(true, mLiveConfigIndex == static_cast<int>(index)
-            ? "CONFIGURAR · sólo esta memoria expone DMX/MIDI/modo/fade."
+            ? "EDITAR · DMX / MIDI / modo / fade de esta memoria."
             : "OPERACIÓN · controles de autoría ocultos.");
         SetDirty(false);
         return;
       }
 
-      const auto view = mPlug.LiveMemoryViewFromUI(index);
       if(mLiveConfigIndex == static_cast<int>(index))
       {
         if(Contains(mLiveDmxButtons[index], x, y))
@@ -986,7 +1134,15 @@ private:
       if(view.mode == aeyla::output::LiveMemoryControlMode::toggle &&
          Contains(mLiveMainControls[index], x, y))
       {
-        ReportLive(mPlug.ToggleLiveMemoryFromUI(index));
+        if(!view.configured)
+        {
+          mLiveConfigIndex = static_cast<int>(index);
+          mDraggingMemory = -1;
+          SetLiveMessage(false, view.name +
+              " · primero aprende DMX: captura OFF y luego ON.");
+        }
+        else
+          ReportLive(mPlug.ToggleLiveMemoryFromUI(index));
         SetDirty(false);
         return;
       }
@@ -995,7 +1151,10 @@ private:
       {
         if(!view.configured)
         {
-          ReportLive(mPlug.SetLiveMemoryLevelFromUI(index, 0.0F));
+          mLiveConfigIndex = static_cast<int>(index);
+          mDraggingMemory = -1;
+          SetLiveMessage(false, view.name +
+              " · primero aprende DMX: captura OFF y luego ON.");
           SetDirty(false);
           return;
         }
@@ -1039,14 +1198,8 @@ private:
     g.DrawRoundRect(outer, frame, 8.0F, nullptr, 4.5F);
     g.DrawRoundRect(inner, frame.GetPadded(-2.0F), 7.0F, nullptr, 1.5F);
 
-    const float badgeW = recording ? 72.0F : 82.0F;
-    const IRECT badge(mRECT.MW() - badgeW * 0.5F, mRECT.T + 5.0F,
-                      mRECT.MW() + badgeW * 0.5F, mRECT.T + 30.0F);
-    g.FillRoundRect(IColor(255, 9, 10, 13), badge, 5.0F);
-    g.DrawRoundRect(inner, badge, 5.0F, nullptr, 1.2F);
-    g.DrawText(IText(10.3F, base, "AeylaUI",
-                     EAlign::Center, EVAlign::Middle),
-               recording ? "● REC" : "▶ PLAY", badge);
+    // Header/footer already communicate REC/PLAY. Keep only the peripheral
+    // pulse so operator state is visible without covering navigation or status.
   }
 
   void SetLiveMessage(bool ok, std::string message)
@@ -1137,9 +1290,6 @@ private:
   std::string mLiveMessage{
       "EN VIVO · memorias en OFF hasta configuración y ARM explícito."};
 
-  IRECT mLiveCloseButton{};
-  IRECT mLivePanicButton{};
-  IRECT mLiveArmButton{};
   std::array<IRECT, 4U> mLiveTransport{};
   IRECT mLiveSetlistPanel{};
   IRECT mLiveMemoryPanel{};
