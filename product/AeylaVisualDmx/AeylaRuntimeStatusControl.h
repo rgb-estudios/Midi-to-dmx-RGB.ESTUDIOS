@@ -33,8 +33,11 @@ public:
   bool IsHit(float x, float y) const override
   {
     if(Contains(Header(), x, y) || Contains(Footer(), x, y)) return true;
+    // A modal file menu owns the whole editor surface while open. Otherwise a
+    // click outside the panel can fall through to MainControl and trigger a
+    // transport/timeline/system action while the menu remains visible.
+    if(mFileMenuOpen) return Contains(mRECT, x, y);
     if(mPlug.UiWorkspace() == 1) return Contains(mRECT, x, y);
-    if(mFileMenuOpen && Contains(FileMenuPanel(), x, y)) return true;
     return false;
   }
 
@@ -60,7 +63,28 @@ public:
 
     if(Contains(HeaderArmButton(), x, y))
     {
-      ReportLive(mPlug.ToggleTakeOutputArmFromUI());
+      const bool takeArmed = mPlug.TakeOutputArmed();
+      const bool modelArmed = mPlug.OutputArmed();
+
+      // The header is the single global authority control. If either legacy
+      // model authority or Take authority is active, one DESARMAR gesture must
+      // remove every voluntary authority represented by this button. Never
+      // show DESARMAR and then route the click into an incompatible ARM path.
+      if(takeArmed || modelArmed)
+      {
+        if(takeArmed)
+          ReportLive(mPlug.ToggleTakeOutputArmFromUI());
+        if(modelArmed)
+          mPlug.ForceDisarmFromUI();
+        if(modelArmed && !takeArmed)
+        {
+          mLiveMessageError = false;
+          mLiveMessage = "SALIDA DESARMADA · autoridad física retirada";
+        }
+      }
+      else
+        ReportLive(mPlug.ToggleTakeOutputArmFromUI());
+
       SetDirty(false);
       return;
     }
