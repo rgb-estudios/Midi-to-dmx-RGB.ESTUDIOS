@@ -1,3 +1,4 @@
+# one-shot R10.4 stamp trigger
 name: r104-version-stamp
 
 on:
