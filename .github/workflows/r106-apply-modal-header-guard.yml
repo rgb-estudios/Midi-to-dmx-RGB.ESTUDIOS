@@ -1,0 +1,34 @@
+name: r106-apply-modal-header-guard
+
+on:
+  push:
+    branches:
+      - rgb/r10.6-pro-ui-stabilization-20260830
+    paths:
+      - patches/r106_modal_header_guard.py
+      - .github/workflows/r106-apply-modal-header-guard.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rgb/r10.6-pro-ui-stabilization-20260830
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply modal header guard
+        run: |
+          python patches/r106_modal_header_guard.py
+          git diff --check
+          git config user.name "rgb-estudios-r10.6-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add product/AeylaVisualDmx/AeylaRuntimeStatusControl.h
+          git rm patches/r106_modal_header_guard.py
+          git rm .github/workflows/r106-apply-modal-header-guard.yml
+          git diff --cached --quiet && { echo "No R10.6 modal changes produced"; exit 1; }
+          git commit -m "fix(r10.6): consume modal header navigation clicks"
+          git push origin HEAD:rgb/r10.6-pro-ui-stabilization-20260830
