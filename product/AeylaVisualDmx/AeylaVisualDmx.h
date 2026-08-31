@@ -459,6 +459,19 @@ public:
     return mGlobalBlackout.load(std::memory_order_acquire);
   }
 
+  // Canonical product workspace shared by the UI layers. This is presentation
+  // state only: changing workspace never touches ARM, blackout or transport.
+  void SetUiWorkspaceFromUI(int workspace) noexcept
+  {
+    mUiWorkspace.store(std::clamp(workspace, 0, 3),
+                       std::memory_order_release);
+  }
+
+  [[nodiscard]] int UiWorkspace() const noexcept
+  {
+    return mUiWorkspace.load(std::memory_order_acquire);
+  }
+
   [[nodiscard]] bool BackendReady() const noexcept
   {
     return mBackendReady.load(std::memory_order_acquire);
@@ -710,6 +723,7 @@ private:
   std::atomic<bool> mOutputArmed{false};
   std::atomic<bool> mGlobalBlackout{true};
   std::atomic<bool> mEffectiveBlackout{true};
+  std::atomic<int> mUiWorkspace{0};
   std::atomic<bool> mBackendReady{false};
   std::atomic<bool> mProjectValid{false};
   std::atomic<int> mLastMidiNote{-1};

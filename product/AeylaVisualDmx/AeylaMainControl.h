@@ -26,6 +26,7 @@ public:
 
   void Draw(IGraphics& g) override
   {
+    SyncWorkspaceFromProduct();
     BuildLayout();
     g.FillRect(kBackground, mRECT);
     DrawHeader(g);
@@ -44,22 +45,25 @@ public:
 
     if(Contains(mTakeEditorTab, x, y))
     {
-      mWorkspaceView = WorkspaceView::take_editor;
-      mMessage = "TOMA / EDICIÓN · captura, recorte y reproducción de muestras DMX.";
+      mPlug.SetUiWorkspaceFromUI(0);
+      SyncWorkspaceFromProduct();
+      mMessage = "TOMA · captura, edición y reproducción DMX.";
       SetDirty(false);
       return;
     }
     if(Contains(mNetworkOutputTab, x, y))
     {
-      mWorkspaceView = WorkspaceView::network_output;
-      mMessage = "RED / SALIDA · adaptadores, IPv4, armado y telemetría Art-Net.";
+      mPlug.SetUiWorkspaceFromUI(3);
+      SyncWorkspaceFromProduct();
+      mMessage = "SISTEMA · red, salida Art-Net y diagnóstico.";
       SetDirty(false);
       return;
     }
     if(Contains(mMidiShowTab, x, y))
     {
-      mWorkspaceView = WorkspaceView::midi_show;
-      mMessage = "MIDI / SHOW · automatización sincronizada por muestras del DAW.";
+      mPlug.SetUiWorkspaceFromUI(2);
+      SyncWorkspaceFromProduct();
+      mMessage = "MIDI · automatización y Learn del show.";
       SetDirty(false);
       return;
     }
@@ -69,7 +73,7 @@ public:
       const bool enable = !mPlug.GlobalBlackout();
       mPlug.SetBlackoutFromUI(enable);
       mMessage = enable
-          ? "APAGÓN ACTIVO · salida desarmada."
+          ? "APAGÓN TOTAL · DMX 0 continuo; ARM se conserva."
           : (mPlug.EffectiveBlackout()
                  ? "APAGÓN DESACTIVADO · el negro del show no bloquea la toma; arma manualmente."
                  : "APAGÓN DESACTIVADO · el armado sigue siendo manual.");
@@ -441,6 +445,16 @@ private:
   inline static const IColor kAccentDark{255, 84, 25, 33};
   inline static const IColor kGood{255, 70, 205, 137};
   inline static const IColor kWarn{255, 238, 159, 64};
+
+  void SyncWorkspaceFromProduct() noexcept
+  {
+    switch(mPlug.UiWorkspace())
+    {
+      case 2: mWorkspaceView = WorkspaceView::midi_show; break;
+      case 3: mWorkspaceView = WorkspaceView::network_output; break;
+      default: mWorkspaceView = WorkspaceView::take_editor; break;
+    }
+  }
 
   static bool Contains(const IRECT& rect, float x, float y) noexcept
   {

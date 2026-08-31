@@ -22,6 +22,7 @@ public:
 
   void Draw(IGraphics& g) override
   {
+    mLiveOpen = mPlug.UiWorkspace() == 1;
     if(mLiveOpen)
       DrawLive(g);
     else
@@ -31,32 +32,54 @@ public:
 
   bool IsHit(float x, float y) const override
   {
-    if(mLiveOpen)
-      return Contains(mRECT, x, y);
-    if(Contains(ArchiveButton(), x, y)) return true;
-    const auto topLive = TopLiveTab();
-    if(topLive.W() > 0.0F && Contains(topLive, x, y)) return true;
-    const auto compactLive = CompactLiveButton();
-    if(compactLive.W() > 0.0F && Contains(compactLive, x, y)) return true;
+    if(Contains(Header(), x, y) || Contains(Footer(), x, y)) return true;
+    if(mPlug.UiWorkspace() == 1) return Contains(mRECT, x, y);
     if(mFileMenuOpen && Contains(FileMenuPanel(), x, y)) return true;
-    return Footer().Contains(x, y);
+    return false;
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
     (void)mod;
-    if(mLiveOpen)
+
+    // The shell is always first. Workspace navigation is presentation-only and
+    // can never touch physical authority. ARM and APAGÓN are explicit actions.
+    for(std::size_t index = 0U; index < 4U; ++index)
     {
-      HandleLiveMouseDown(x, y);
+      if(!Contains(NavTab(index), x, y)) continue;
+      mPlug.SetUiWorkspaceFromUI(static_cast<int>(index));
+      mLiveOpen = index == 1U;
+      mFileMenuOpen = false;
+      mLiveConfigIndex = -1;
+      mDraggingMemory = -1;
+      if(mLiveOpen)
+        mLiveMessage = "EN VIVO · operación limpia; CONFIGURAR abre Learn, modo y fade sólo para una memoria.";
+      SetDirty(false);
       return;
     }
 
-    const auto topLive = TopLiveTab();
-    const auto compactLive = CompactLiveButton();
-    if((topLive.W() > 0.0F && Contains(topLive, x, y)) ||
-       (compactLive.W() > 0.0F && Contains(compactLive, x, y)))
+    if(Contains(HeaderArmButton(), x, y))
     {
-      OpenLiveWorkspace();
+      ReportLive(mPlug.ToggleTakeOutputArmFromUI());
+      SetDirty(false);
+      return;
+    }
+
+    if(Contains(HeaderBlackoutButton(), x, y))
+    {
+      const bool enable = !mPlug.GlobalBlackout();
+      mPlug.SetBlackoutFromUI(enable);
+      mLiveMessageError = false;
+      mLiveMessage = enable
+          ? "APAGÓN TOTAL · DMX 0 continuo · ARM y carrier conservados"
+          : "APAGÓN LIBERADO · vuelve el estado subyacente sin rearmar";
+      SetDirty(false);
+      return;
+    }
+
+    if(mPlug.UiWorkspace() == 1)
+    {
+      HandleLiveMouseDown(x, y);
       return;
     }
 
@@ -123,6 +146,32 @@ private:
   inline static const IColor kBrand{255, 202, 145, 255};
   inline static const IColor kCyan{255, 68, 214, 255};
 
+  [[nodiscard]] IRECT Header() const noexcept
+  {
+    return IRECT(mRECT.L, mRECT.T, mRECT.R, mRECT.T + 82.0F);
+  }
+
+  [[nodiscard]] IRECT NavTab(std::size_t index) const noexcept
+  {
+    const float left = mRECT.L + 14.0F;
+    const float width = std::clamp((mRECT.W() - 28.0F) * 0.105F, 88.0F, 112.0F);
+    const float gap = 5.0F;
+    const float x = left + static_cast<float>(index) * (width + gap);
+    return IRECT(x, mRECT.T + 49.0F, x + width, mRECT.T + 78.0F);
+  }
+
+  [[nodiscard]] IRECT HeaderBlackoutButton() const noexcept
+  {
+    return IRECT(mRECT.R - 150.0F, mRECT.T + 10.0F,
+                 mRECT.R - 12.0F, mRECT.T + 40.0F);
+  }
+
+  [[nodiscard]] IRECT HeaderArmButton() const noexcept
+  {
+    return IRECT(mRECT.R - 260.0F, mRECT.T + 10.0F,
+                 mRECT.R - 158.0F, mRECT.T + 40.0F);
+  }
+
   [[nodiscard]] IRECT Footer() const noexcept
   {
     return IRECT(mRECT.L, mRECT.B - 46.0F, mRECT.R, mRECT.B);
@@ -135,20 +184,8 @@ private:
                  footer.R - 12.0F, footer.B - 7.0F);
   }
 
-  [[nodiscard]] IRECT CompactLiveButton() const noexcept
-  {
-    if(mRECT.W() >= 1080.0F) return {};
-    const auto footer = Footer();
-    return IRECT(footer.R - 226.0F, footer.T + 7.0F,
-                 footer.R - 126.0F, footer.B - 7.0F);
-  }
-
-  [[nodiscard]] IRECT TopLiveTab() const noexcept
-  {
-    if(mRECT.W() < 1080.0F) return {};
-    return IRECT(mRECT.L + 624.0F, mRECT.T + 26.0F,
-                 mRECT.L + 724.0F, mRECT.T + 72.0F);
-  }
+  [[nodiscard]] IRECT CompactLiveButton() const noexcept { return {}; }
+  [[nodiscard]] IRECT TopLiveTab() const noexcept { return {}; }
 
   [[nodiscard]] IRECT FileMenuPanel() const noexcept
   {
@@ -214,44 +251,72 @@ private:
 
   void DrawNormal(IGraphics& g)
   {
-    DrawBrandHeader(g);
-    DrawTopLiveAccess(g);
+    DrawUnifiedHeader(g);
     DrawFooter(g);
     if(mFileMenuOpen)
       DrawFileMenu(g);
   }
 
-  void DrawBrandHeader(IGraphics& g)
+  void DrawUnifiedHeader(IGraphics& g)
   {
-    const IRECT cover(mRECT.L + 8.0F, mRECT.T + 8.0F,
-                      mRECT.L + 300.0F, mRECT.T + 82.0F);
-    g.FillRect(kBackground, cover);
-    g.DrawText(IText(20.0F, kText, "AeylaUI",
-                     EAlign::Near, EVAlign::Middle),
+    const auto header = Header();
+    g.FillRect(kBackground, header);
+    g.DrawLine(kLine, header.L, header.B - 1.0F, header.R, header.B - 1.0F,
+               nullptr, 1.0F);
+
+    g.DrawText(IText(18.5F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
                "RGB LIVE CONTROL",
-               IRECT(cover.L + 6.0F, cover.T + 1.0F,
-                     cover.R - 5.0F, cover.T + 34.0F));
-    g.DrawText(IText(9.5F, kMuted, "AeylaUI",
-                     EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · SHOW / AEYLA · R10.4 PRETEST",
-               IRECT(cover.L + 6.0F, cover.T + 31.0F,
-                     cover.R - 5.0F, cover.T + 50.0F));
+               IRECT(header.L + 14.0F, header.T + 4.0F,
+                     header.L + 245.0F, header.T + 31.0F));
+    g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "RGB ESTUDIOS · SHOW / AEYLA · R10.5 PRETEST",
+               IRECT(header.L + 14.0F, header.T + 28.0F,
+                     header.L + 330.0F, header.T + 45.0F));
 
-    const float left = cover.L + 6.0F;
-    g.DrawLine(IColor(255, 232, 166, 201), left, cover.T + 58.0F,
-               left + 105.0F, cover.T + 58.0F, nullptr, 1.0F);
-    g.DrawLine(kBrand, left + 11.0F, cover.T + 61.0F,
-               left + 126.0F, cover.T + 61.0F, nullptr, 1.0F);
-    g.DrawLine(IColor(255, 137, 216, 255), left, cover.T + 64.0F,
-               left + 96.0F, cover.T + 64.0F, nullptr, 1.0F);
-  }
+    // Sparse Campo Vivo signature: identity cue, not decoration.
+    g.DrawLine(IColor(255, 232, 166, 201), header.L + 14.0F, header.T + 43.0F,
+               header.L + 104.0F, header.T + 43.0F, nullptr, 1.0F);
+    g.DrawLine(kBrand, header.L + 23.0F, header.T + 46.0F,
+               header.L + 123.0F, header.T + 46.0F, nullptr, 1.0F);
+    g.DrawLine(kCyan, header.L + 14.0F, header.T + 47.5F,
+               header.L + 94.0F, header.T + 47.5F, nullptr, 1.0F);
 
-  void DrawTopLiveAccess(IGraphics& g)
-  {
-    const auto top = TopLiveTab();
-    if(top.W() > 0.0F)
-      Button(g, top, "EN VIVO", IColor(255, 24, 17, 31),
-             kBrand, kBrand, 11.2F);
+    static constexpr std::array<const char*, 4U> tabs{
+        "TOMA", "EN VIVO", "MIDI", "SISTEMA"};
+    const int active = mPlug.UiWorkspace();
+    for(std::size_t index = 0U; index < tabs.size(); ++index)
+    {
+      const auto tab = NavTab(index);
+      const bool selected = active == static_cast<int>(index);
+      g.DrawText(IText(10.4F, selected ? kText : kMuted, "AeylaUI",
+                       EAlign::Center, EVAlign::Middle), tabs[index], tab);
+      if(selected)
+        g.FillRect(kBrand, IRECT(tab.L + 12.0F, tab.B - 2.0F,
+                                tab.R - 12.0F, tab.B));
+    }
+
+    const auto tx = mPlug.ArtNetOutputStatus();
+    const float statusRight = HeaderArmButton().L - 8.0F;
+    const float statusLeft = std::max(header.L + 470.0F, statusRight - 156.0F);
+    if(statusRight - statusLeft > 70.0F)
+    {
+      const std::string net = mPlug.BackendReady()
+          ? "ART-NET · " + std::to_string(tx.configured_fps) + " Hz"
+          : "ART-NET · SIN SALIDA";
+      Pill(g, IRECT(statusLeft, header.T + 10.0F, statusRight, header.T + 40.0F),
+           net, mPlug.BackendReady() ? kGood : kWarn);
+    }
+
+    const bool armed = mPlug.TakeOutputArmed() || mPlug.OutputArmed();
+    Button(g, HeaderArmButton(), armed ? "DESARMAR" : "ARMAR",
+           armed ? IColor(255, 18, 31, 24) : kRaised,
+           armed ? kGood : kLine, armed ? kGood : kText, 9.6F);
+
+    const bool blackout = mPlug.GlobalBlackout();
+    Button(g, HeaderBlackoutButton(),
+           blackout ? "APAGÓN TOTAL ACTIVO" : "APAGÓN TOTAL",
+           blackout ? kDanger : IColor(255, 26, 13, 17), kDanger,
+           blackout ? kText : kDanger, 8.9F);
   }
 
   void DrawFooter(IGraphics& g)
@@ -397,6 +462,7 @@ private:
 
   void OpenLiveWorkspace()
   {
+    mPlug.SetUiWorkspaceFromUI(1);
     mLiveOpen = true;
     mFileMenuOpen = false;
     mLiveConfigIndex = -1;
@@ -410,13 +476,13 @@ private:
   {
     const float left = mRECT.L + 16.0F;
     const float right = mRECT.R - 16.0F;
-    const float top = mRECT.T + 14.0F;
+    const float top = Header().B + 8.0F;
 
-    mLiveCloseButton = IRECT(right - 78.0F, top, right, top + 32.0F);
-    mLivePanicButton = IRECT(right - 206.0F, top, right - 86.0F, top + 32.0F);
-    mLiveArmButton = IRECT(right - 344.0F, top, right - 214.0F, top + 32.0F);
+    mLiveCloseButton = {};
+    mLivePanicButton = {};
+    mLiveArmButton = {};
 
-    const float transportTop = top + 48.0F;
+    const float transportTop = top;
     const float transportGap = 7.0F;
     const float transportW = 92.0F;
     for(std::size_t index = 0U; index < mLiveTransport.size(); ++index)
@@ -426,13 +492,13 @@ private:
                                    transportTop + 34.0F);
     }
 
-    const float contentTop = transportTop + 46.0F;
-    const float contentBottom = mRECT.B - 58.0F;
+    const float contentTop = transportTop + 44.0F;
+    const float contentBottom = Footer().T - 38.0F;
     const float split = left + (right - left) * 0.31F;
     mLiveSetlistPanel = IRECT(left, contentTop, split - 9.0F, contentBottom);
     mLiveMemoryPanel = IRECT(split + 9.0F, contentTop, right, contentBottom);
-    mLiveMessageRect = IRECT(left, contentBottom + 7.0F,
-                             right, mRECT.B - 10.0F);
+    mLiveMessageRect = IRECT(left, contentBottom + 6.0F,
+                             right, Footer().T - 5.0F);
 
     const std::size_t songCount = std::min<std::size_t>(
         mPlug.SongCount(), mLiveSongRows.size());
@@ -501,45 +567,6 @@ private:
     BuildLiveLayout();
     g.FillRect(kBackground, mRECT);
 
-    g.DrawText(IText(21.0F, kText, "AeylaUI",
-                     EAlign::Near, EVAlign::Middle),
-               "RGB LIVE CONTROL",
-               IRECT(mRECT.L + 18.0F, mRECT.T + 5.0F,
-                     mRECT.L + 260.0F, mRECT.T + 34.0F));
-    g.DrawText(IText(9.2F, kMuted, "AeylaUI",
-                     EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · SHOW / AEYLA · EN VIVO · R10.4 PRETEST",
-               IRECT(mRECT.L + 18.0F, mRECT.T + 30.0F,
-                     mRECT.L + 410.0F, mRECT.T + 47.0F));
-
-    const auto tx = mPlug.ArtNetOutputStatus();
-    const auto rx = mPlug.ArtNetCaptureStatus();
-    const std::string authority = mPlug.TakeOutputLive()
-        ? "AL AIRE · " + std::to_string(tx.configured_fps) + " Hz"
-        : (mPlug.TakeOutputArmed()
-              ? "ARMADA · CARRIER " + std::to_string(tx.configured_fps) + " Hz"
-              : "SALIDA DESARMADA");
-    Pill(g, IRECT(mRECT.L + 420.0F, mRECT.T + 15.0F,
-                  mRECT.L + 610.0F, mRECT.T + 43.0F),
-         authority,
-         mPlug.TakeOutputLive() ? kDanger :
-             (mPlug.TakeOutputArmed() ? kWarn : kMuted));
-    Pill(g, IRECT(mRECT.L + 618.0F, mRECT.T + 15.0F,
-                  mRECT.L + 780.0F, mRECT.T + 43.0F),
-         rx.signal_present ? "AVOLITES RX OK" : "AVOLITES SIN SEÑAL",
-         rx.signal_present ? kGood : kWarn);
-
-    Button(g, mLiveArmButton,
-           mPlug.TakeOutputArmed() ? "DESARMAR" : "ARMAR SALIDA",
-           mPlug.TakeOutputArmed() ? IColor(255, 39, 29, 14) : kRaised,
-           mPlug.TakeOutputArmed() ? kWarn : kLine,
-           mPlug.TakeOutputArmed() ? kWarn : kText, 9.5F);
-    Button(g, mLivePanicButton,
-           mPlug.GlobalBlackout() ? "SALIR APAGÓN" : "PANIC / APAGÓN",
-           IColor(255, 49, 14, 22), kDanger, kDanger, 9.3F);
-    Button(g, mLiveCloseButton, "VOLVER", IColor(255, 24, 17, 31),
-           kBrand, kBrand, 9.5F);
-
     static constexpr std::array<const char*, 4U> transport{
         "PREV", "PLAY / GO", "HOLD", "NEXT"};
     for(std::size_t index = 0U; index < mLiveTransport.size(); ++index)
@@ -555,6 +582,10 @@ private:
     g.DrawText(IText(9.8F, mLiveMessageError ? kDanger : kMuted,
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
                mLiveMessage.c_str(), mLiveMessageRect);
+    DrawUnifiedHeader(g);
+    DrawFooter(g);
+    if(mFileMenuOpen)
+      DrawFileMenu(g);
   }
 
   void DrawLiveSetlist(IGraphics& g)
@@ -830,6 +861,7 @@ private:
     BuildLiveLayout();
     if(Contains(mLiveCloseButton, x, y))
     {
+      mPlug.SetUiWorkspaceFromUI(0);
       mLiveOpen = false;
       mLiveConfigIndex = -1;
       mDraggingMemory = -1;
