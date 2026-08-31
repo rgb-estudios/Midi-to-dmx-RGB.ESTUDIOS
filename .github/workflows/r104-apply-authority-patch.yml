@@ -20,11 +20,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: true
-      - name: Apply deterministic R10.4 authority patch
+      - name: Apply deterministic R10.4 authority repair
         run: |
-          test -f patches/r10.4-persistent-authority.patch
-          git apply --check patches/r10.4-persistent-authority.patch
-          git apply patches/r10.4-persistent-authority.patch
+          test -f patches/r10.4_apply.py
+          python3 patches/r10.4_apply.py
+          git diff --check
           git config user.name "rgb-estudios-r10.4-bot"
           git config user.email "actions@users.noreply.github.com"
           git add product/AeylaVisualDmx/AeylaVisualDmx.cpp \
@@ -33,5 +33,6 @@ jobs:
                   src/runtime/runtime_safety_state.cpp \
                   tests/test_runtime_safety.cpp \
                   tests/test_application_model.cpp
+          git diff --cached --quiet && { echo "No source changes produced"; exit 1; }
           git commit -m "fix(r10.4): preserve Art-Net authority across host and song navigation"
           git push origin HEAD:rgb/r10.4-persistent-operator-authority-20260830
