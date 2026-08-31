@@ -29,7 +29,8 @@ public:
     SyncWorkspaceFromProduct();
     BuildLayout();
     g.FillRect(kBackground, mRECT);
-    DrawHeader(g);
+    // R10.6: the canonical shell/header is owned exclusively by
+    // AeylaRuntimeStatusControl. MainControl renders workspace content only.
     DrawSetlist(g);
     if(mWorkspaceView == WorkspaceView::take_editor)
       DrawTakeEditor(g);
@@ -43,50 +44,10 @@ public:
   {
     BuildLayout();
 
-    if(Contains(mTakeEditorTab, x, y))
-    {
-      mPlug.SetUiWorkspaceFromUI(0);
-      SyncWorkspaceFromProduct();
-      mMessage = "TOMA · captura, edición y reproducción DMX.";
-      SetDirty(false);
+    // R10.6: never leave hidden duplicate controls below the canonical shell.
+    // RuntimeStatusControl owns every header hit-zone (navigation, ARM, APAGÓN).
+    if(Contains(mHeader, x, y))
       return;
-    }
-    if(Contains(mNetworkOutputTab, x, y))
-    {
-      mPlug.SetUiWorkspaceFromUI(3);
-      SyncWorkspaceFromProduct();
-      mMessage = "SISTEMA · red, salida Art-Net y diagnóstico.";
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mMidiShowTab, x, y))
-    {
-      mPlug.SetUiWorkspaceFromUI(2);
-      SyncWorkspaceFromProduct();
-      mMessage = "MIDI · automatización y Learn del show.";
-      SetDirty(false);
-      return;
-    }
-
-    if(Contains(mBlackoutButton, x, y))
-    {
-      const bool enable = !mPlug.GlobalBlackout();
-      mPlug.SetBlackoutFromUI(enable);
-      mMessage = enable
-          ? "APAGÓN TOTAL · DMX 0 continuo; ARM se conserva."
-          : (mPlug.EffectiveBlackout()
-                 ? "APAGÓN DESACTIVADO · el negro del show no bloquea la toma; arma manualmente."
-                 : "APAGÓN DESACTIVADO · el armado sigue siendo manual.");
-      SetDirty(false);
-      return;
-    }
-
-    if(Contains(mTakeArmButton, x, y))
-    {
-      Report(mPlug.ToggleTakeOutputArmFromUI());
-      SetDirty(false);
-      return;
-    }
 
     const std::size_t songCount = mPlug.SongCount();
     for(std::size_t index = 0; index < songCount && index < mSongRows.size(); ++index)
@@ -435,14 +396,17 @@ private:
   inline static const IColor kBackground{255, 7, 8, 11};
   inline static const IColor kPanel{255, 14, 16, 21};
   inline static const IColor kPanelRaised{255, 21, 24, 31};
-  inline static const IColor kPanelSelected{255, 30, 25, 30};
+  inline static const IColor kPanelSelected{255, 27, 22, 34};
   inline static const IColor kLine{255, 43, 48, 59};
   inline static const IColor kLineStrong{255, 73, 80, 95};
   inline static const IColor kText{255, 235, 238, 242};
   inline static const IColor kMuted{255, 135, 143, 157};
   inline static const IColor kFaint{255, 88, 95, 108};
-  inline static const IColor kAccent{255, 229, 48, 61};
-  inline static const IColor kAccentDark{255, 84, 25, 33};
+  inline static const IColor kAccent{255, 202, 145, 255};
+  inline static const IColor kAccentDark{255, 53, 35, 67};
+  inline static const IColor kCyan{255, 68, 214, 255};
+  inline static const IColor kDanger{255, 231, 45, 55};
+  inline static const IColor kDangerDark{255, 66, 18, 25};
   inline static const IColor kGood{255, 70, 205, 137};
   inline static const IColor kWarn{255, 238, 159, 64};
 
@@ -968,7 +932,7 @@ private:
         ? mMessage
         : mPlug.ActiveTakeStatus();
     g.DrawText(IText(12.0F,
-                     mPlug.TakeRecording() ? kAccent :
+                     mPlug.TakeRecording() ? kDanger :
                          (compact && !mMessage.empty() ? kWarn : kMuted),
                      "AeylaUI", EAlign::Near, EVAlign::Middle),
                editorStatus.c_str(),
@@ -1038,7 +1002,7 @@ private:
         if(motion > 0.0F)
         {
           const float motionTop = graphBottom - motion * (graphBottom - graphTop);
-          g.FillRect(IColor(220, 229, 48, 61),
+          g.FillRect(IColor(220, 68, 214, 255),
                      IRECT(left, motionTop, std::max(left + 1.0F, right),
                            std::min(graphBottom, motionTop + 2.0F)));
         }
@@ -1099,11 +1063,12 @@ private:
     Button(g, mRecordButton,
            mPlug.TakeRecording() ? "DETENER + GUARDAR TOMA" :
                (recordBlocked ? "GRABACIÓN BLOQUEADA" : "GRABAR NUEVA TOMA"),
-           mPlug.TakeRecording() ? kAccentDark :
+           mPlug.TakeRecording() ? kDangerDark :
                (recordBlocked ? IColor(255, 54, 42, 22) : kPanelRaised),
-           mPlug.TakeRecording() ? kAccent :
+           mPlug.TakeRecording() ? kDanger :
                (recordBlocked ? kWarn : kLineStrong),
-           recordBlocked ? kWarn : kText);
+           mPlug.TakeRecording() ? kDanger :
+               (recordBlocked ? kWarn : kText));
     const bool playBlocked = !mPlug.TakePlaying() &&
         (mPlug.TakeRecording() || !editor.available);
     Button(g, mPlayButton,

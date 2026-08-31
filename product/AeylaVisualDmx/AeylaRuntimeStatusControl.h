@@ -77,12 +77,8 @@ public:
       return;
     }
 
-    if(mPlug.UiWorkspace() == 1)
-    {
-      HandleLiveMouseDown(x, y);
-      return;
-    }
-
+    // File operations remain reachable from every workspace, including
+    // EN VIVO. The old ordering let the live surface swallow ARCHIVO clicks.
     if(Contains(ArchiveButton(), x, y))
     {
       mFileMenuOpen = !mFileMenuOpen;
@@ -102,9 +98,17 @@ public:
       }
       if(!Contains(FileMenuPanel(), x, y))
       {
+        // Safety: dismissing the menu never clicks through into a live control.
         mFileMenuOpen = false;
         SetDirty(false);
+        return;
       }
+    }
+
+    if(mPlug.UiWorkspace() == 1)
+    {
+      HandleLiveMouseDown(x, y);
+      return;
     }
   }
 
@@ -269,7 +273,7 @@ private:
                IRECT(header.L + 14.0F, header.T + 4.0F,
                      header.L + 245.0F, header.T + 31.0F));
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · SHOW / AEYLA · R10.5 PRETEST",
+               "RGB ESTUDIOS · SHOW / AEYLA · R10.6 PRETEST",
                IRECT(header.L + 14.0F, header.T + 28.0F,
                      header.L + 330.0F, header.T + 45.0F));
 
@@ -288,11 +292,18 @@ private:
     {
       const auto tab = NavTab(index);
       const bool selected = active == static_cast<int>(index);
+      if(selected)
+      {
+        g.FillRoundRect(IColor(255, 31, 23, 39), tab, 6.0F);
+        g.DrawRoundRect(kBrand, tab, 6.0F, nullptr, 1.0F);
+      }
+      else
+        g.DrawRoundRect(IColor(150, 47, 51, 62), tab, 6.0F, nullptr, 1.0F);
       g.DrawText(IText(10.4F, selected ? kText : kMuted, "AeylaUI",
                        EAlign::Center, EVAlign::Middle), tabs[index], tab);
       if(selected)
-        g.FillRect(kBrand, IRECT(tab.L + 12.0F, tab.B - 2.0F,
-                                tab.R - 12.0F, tab.B));
+        g.FillRoundRect(kBrand, IRECT(tab.L + 18.0F, tab.B - 2.5F,
+                                     tab.R - 18.0F, tab.B), 1.2F);
     }
 
     const auto tx = mPlug.ArtNetOutputStatus();
@@ -502,7 +513,9 @@ private:
 
     const std::size_t songCount = std::min<std::size_t>(
         mPlug.SongCount(), mLiveSongRows.size());
-    const float rowTop = mLiveSetlistPanel.T + 50.0F;
+    const bool compactLiveSetlist = mLiveSetlistPanel.H() < 470.0F;
+    const float rowTop = mLiveSetlistPanel.T +
+        (compactLiveSetlist ? 64.0F : 104.0F);
     const float available = std::max(1.0F, mLiveSetlistPanel.B - rowTop - 8.0F);
     const float rowH = std::clamp(
         available / std::max<std::size_t>(songCount, 1U), 22.0F, 31.0F);
@@ -570,11 +583,26 @@ private:
     static constexpr std::array<const char*, 4U> transport{
         "PREV", "PLAY / GO", "HOLD", "NEXT"};
     for(std::size_t index = 0U; index < mLiveTransport.size(); ++index)
+    {
+      IColor fill = kRaised;
+      IColor border = kLine;
+      IColor text = kText;
+      if(index == 1U)
+      {
+        fill = mPlug.TakePlaying() ? IColor(255, 10, 44, 25)
+                                   : IColor(255, 13, 28, 20);
+        border = kGood;
+        text = kGood;
+      }
+      else if(index == 2U)
+      {
+        fill = IColor(255, 38, 28, 12);
+        border = kWarn;
+        text = kWarn;
+      }
       Button(g, mLiveTransport[index], transport[index],
-             index == 1U && mPlug.TakePlaying()
-                 ? IColor(255, 10, 44, 25) : kRaised,
-             index == 1U ? kGood : kLine,
-             index == 1U ? kGood : kText, 9.7F);
+             fill, border, text, 9.7F);
+    }
 
     DrawLiveSetlist(g);
     DrawLiveMemories(g);
@@ -600,21 +628,59 @@ private:
 
     const std::size_t prepared = mPlug.ActiveSongIndex();
     const int live = mPlug.ActiveTakeSongIndex();
-    std::string summary = "PREPARADA ";
-    if(prepared < mPlug.SongCount())
-      summary += std::to_string(prepared + 1U) + " · " + mPlug.SongName(prepared);
-    else
-      summary += "—";
+    const bool compactStatus = mLiveSetlistPanel.H() < 470.0F;
+
+    std::string airName = "—";
     if(live >= 0 && static_cast<std::size_t>(live) < mPlug.SongCount())
-      summary += "   |   AL AIRE " + std::to_string(live + 1) + " · " +
-                 mPlug.SongName(static_cast<std::size_t>(live));
+      airName = std::to_string(live + 1) + " · " +
+                mPlug.SongName(static_cast<std::size_t>(live));
+    std::string preparedName = "—";
+    if(prepared < mPlug.SongCount())
+      preparedName = std::to_string(prepared + 1U) + " · " +
+                     mPlug.SongName(prepared);
+
+    if(compactStatus)
+    {
+      const IRECT status(mLiveSetlistPanel.L + 9.0F,
+                         mLiveSetlistPanel.T + 29.0F,
+                         mLiveSetlistPanel.R - 9.0F,
+                         mLiveSetlistPanel.T + 57.0F);
+      g.FillRoundRect(IColor(255, 12, 14, 19), status, 5.0F);
+      g.DrawRoundRect(kLine, status, 5.0F, nullptr, 1.0F);
+      const std::string compact = "AIRE " + airName +
+          "   ·   PREP " + preparedName;
+      g.DrawText(IText(8.2F, kMuted, "AeylaUI",
+                       EAlign::Near, EVAlign::Middle),
+                 compact.c_str(), status.GetPadded(-7.0F));
+    }
     else
-      summary += "   |   AL AIRE —";
-    g.DrawText(IText(8.4F, kMuted, "AeylaUI",
-                     EAlign::Near, EVAlign::Middle),
-               summary.c_str(),
-               IRECT(mLiveSetlistPanel.L + 11.0F, mLiveSetlistPanel.T + 24.0F,
-                     mLiveSetlistPanel.R - 10.0F, mLiveSetlistPanel.T + 46.0F));
+    {
+      const IRECT air(mLiveSetlistPanel.L + 9.0F,
+                      mLiveSetlistPanel.T + 29.0F,
+                      mLiveSetlistPanel.R - 9.0F,
+                      mLiveSetlistPanel.T + 61.0F);
+      const IRECT prep(mLiveSetlistPanel.L + 9.0F,
+                       mLiveSetlistPanel.T + 66.0F,
+                       mLiveSetlistPanel.R - 9.0F,
+                       mLiveSetlistPanel.T + 98.0F);
+      g.FillRoundRect(IColor(255, 43, 13, 20), air, 5.0F);
+      g.DrawRoundRect(kDanger, air, 5.0F, nullptr, 1.0F);
+      g.DrawText(IText(7.8F, kDanger, "AeylaUI",
+                       EAlign::Near, EVAlign::Top),
+                 "AL AIRE", air.GetPadded(-7.0F));
+      g.DrawText(IText(10.6F, kText, "AeylaUI",
+                       EAlign::Near, EVAlign::Bottom),
+                 airName.c_str(), air.GetPadded(-7.0F));
+
+      g.FillRoundRect(IColor(255, 8, 23, 31), prep, 5.0F);
+      g.DrawRoundRect(kCyan, prep, 5.0F, nullptr, 1.0F);
+      g.DrawText(IText(7.8F, kCyan, "AeylaUI",
+                       EAlign::Near, EVAlign::Top),
+                 "PREPARADA", prep.GetPadded(-7.0F));
+      g.DrawText(IText(10.6F, kText, "AeylaUI",
+                       EAlign::Near, EVAlign::Bottom),
+                 preparedName.c_str(), prep.GetPadded(-7.0F));
+    }
 
     const std::size_t count = std::min<std::size_t>(
         mPlug.SongCount(), mLiveSongRows.size());
@@ -710,7 +776,7 @@ private:
                      card.R - 10.0F, card.T + 48.0F));
 
     Button(g, mLiveConfigButtons[index],
-           configuring ? "CONFIGURANDO" : "CONFIGURAR",
+           configuring ? "EDITANDO" : "EDITAR",
            configuring ? IColor(255, 30, 20, 37) : kRaised,
            configuring ? kBrand : kLine,
            configuring ? kBrand : kMuted, 8.2F);
@@ -734,7 +800,7 @@ private:
                     control, 6.0F);
     g.DrawRoundRect(on ? kGood : (ready ? kLine : kWarn),
                     control, 6.0F, nullptr, on ? 1.6F : 1.0F);
-    g.DrawText(IText(17.0F, on ? kGood : (ready ? kText : kWarn),
+    g.DrawText(IText(19.0F, on ? kGood : (ready ? kText : kWarn),
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                ready ? (on ? "ON" : "OFF") : "CONFIGURA DMX",
                control.GetPadded(-6.0F));
@@ -771,8 +837,8 @@ private:
     if(normalized > 0.0F)
       g.FillRoundRect(kBrand, IRECT(track.L, track.T, handleX, track.B), 5.0F);
     g.DrawRoundRect(kLine, track, 5.0F, nullptr, 1.0F);
-    const IRECT handle(handleX - 7.0F, track.T - 11.0F,
-                       handleX + 7.0F, track.B + 11.0F);
+    const IRECT handle(handleX - 8.0F, track.T - 12.0F,
+                       handleX + 8.0F, track.B + 12.0F);
     g.FillRoundRect(kText, handle, 4.0F);
     g.DrawRoundRect(kBrand, handle, 4.0F, nullptr, 1.1F);
     const std::string percentage =
@@ -1039,14 +1105,8 @@ private:
     g.DrawRoundRect(outer, frame, 8.0F, nullptr, 4.5F);
     g.DrawRoundRect(inner, frame.GetPadded(-2.0F), 7.0F, nullptr, 1.5F);
 
-    const float badgeW = recording ? 72.0F : 82.0F;
-    const IRECT badge(mRECT.MW() - badgeW * 0.5F, mRECT.T + 5.0F,
-                      mRECT.MW() + badgeW * 0.5F, mRECT.T + 30.0F);
-    g.FillRoundRect(IColor(255, 9, 10, 13), badge, 5.0F);
-    g.DrawRoundRect(inner, badge, 5.0F, nullptr, 1.2F);
-    g.DrawText(IText(10.3F, base, "AeylaUI",
-                     EAlign::Center, EVAlign::Middle),
-               recording ? "● REC" : "▶ PLAY", badge);
+    // Header/footer already communicate REC/PLAY. Keep only the peripheral
+    // pulse so operator state is visible without covering navigation or status.
   }
 
   void SetLiveMessage(bool ok, std::string message)
