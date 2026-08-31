@@ -1,0 +1,54 @@
+name: r106-apply-midi-show-live-lock
+
+on:
+  push:
+    branches:
+      - rgb/r10.6-pro-ui-stabilization-20260830
+    paths:
+      - tools/r106_midi_show_lock_patch.py
+      - .github/workflows/r106-apply-midi-show-live-lock.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rgb/r10.6-pro-ui-stabilization-20260830
+          fetch-depth: 0
+      - name: Apply guarded MIDI SHOW lock patch
+        run: python3 tools/r106_midi_show_lock_patch.py
+      - name: Verify live configuration lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          HDR=product/AeylaVisualDmx/AeylaVisualDmx.h
+          MIDI=product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp
+          UI=product/AeylaVisualDmx/AeylaMainControl.h
+          SHOW=product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp
+          CORE=product/AeylaVisualDmx/AeylaVisualDmx.cpp
+          grep -Fq 'ShowMidiConfigurationLocked() const noexcept' "$HDR"
+          test "$(grep -Fc 'if(ShowMidiConfigurationLocked())' "$MIDI")" -eq 3
+          grep -Fq 'MIDI SHOW ACTIVO · BLOQUEADO' "$UI"
+          grep -Fq 'LANZAR CANCIÓN 01–15' "$UI"
+          grep -Fq 'RELOJ · MUESTRAS DEL DAW · SIN DERIVA ACUMULATIVA' "$UI"
+          grep -Fq 'SEGURIDAD · MIDI NO ARMA ART-NET NI LIBERA APAGÓN' "$UI"
+          grep -Fq 'mPendingMidiLearnPacked.store(0U' "$SHOW"
+          grep -Fq 'mPendingMidiLearnPacked.store(0U' "$CORE"
+          ! grep -Fq 'MIDI nunca arma Art-Net' "$UI"
+          ! grep -Fq 'REC STOP finaliza · el plugin no usa MTC.' "$UI"
+      - name: Commit result and remove applicator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/r106_midi_show_lock_patch.py
+          rm -f .github/workflows/r106-apply-midi-show-live-lock.yml
+          git config user.name 'rgb-estudios-r10.6-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(r10.6): freeze MIDI SHOW configuration while live'
+          git push origin HEAD:rgb/r10.6-pro-ui-stabilization-20260830
