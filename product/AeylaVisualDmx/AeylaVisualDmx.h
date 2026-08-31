@@ -216,7 +216,7 @@ public:
   // closing the editor never owns the socket and never changes Art-Net ARM.
   [[nodiscard]] std::size_t LiveMemoryCount() const noexcept
   {
-    return aeyla::live_memory_session::kOperatorMemoryCount;
+    return aeyla::live_memory_session::memory_count(this);
   }
 
   [[nodiscard]] aeyla::live_memory_session::MemoryView LiveMemoryViewFromUI(
@@ -225,6 +225,26 @@ public:
     aeyla::live_memory_session::register_runtime(
         this, &mArtNetOutput, &mArtNetCapture);
     return aeyla::live_memory_session::view(this, index);
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult AddLiveMemoryFromUI()
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::add_memory(this);
+    if(result.succeeded) CommitLiveMemoryPersistenceIfDirtyFromUI();
+    return {result.succeeded, {}, result.message};
+  }
+
+  [[nodiscard]] aeyla::product::AuthoringResult RenameLiveMemoryFromUI(
+      std::size_t index, std::string_view name)
+  {
+    aeyla::live_memory_session::register_runtime(
+        this, &mArtNetOutput, &mArtNetCapture);
+    const auto result = aeyla::live_memory_session::rename_memory(
+        this, index, name);
+    if(result.succeeded) CommitLiveMemoryPersistenceIfDirtyFromUI();
+    return {result.succeeded, {}, result.message};
   }
 
   [[nodiscard]] aeyla::product::AuthoringResult LearnLiveMemoryFromAvolitesFromUI(

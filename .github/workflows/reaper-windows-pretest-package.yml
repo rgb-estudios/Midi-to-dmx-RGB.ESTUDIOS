@@ -11,6 +11,7 @@ on:
       - docs/R10_4_AUTHORITY_CONTRACT.md
       - docs/R10_5_BLACKOUT_UI_CONTRACT.md
       - docs/R10_6_PRO_UI_PRETEST.md
+      - docs/R10_7_LIVE_MEMORIES_PRETEST.md
       - tools/maintenance/windows/**
       - tools/network/**
       - .github/workflows/reaper-windows-pretest-package.yml
@@ -22,7 +23,7 @@ env:
 
 jobs:
   package-windows-reaper-pretest:
-    name: Windows / RGB Live Control R10.6 / manual REAPER pretest
+    name: Windows / RGB Live Control R10.7 / manual REAPER pretest
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -96,10 +97,11 @@ jobs:
           Copy-Item docs/AEYLA_R10_FIELD_PRETEST_ES.md (Join-Path $root "R10_FIELD_PRETEST_ES.md")
           Copy-Item docs/R10_5_BLACKOUT_UI_CONTRACT.md (Join-Path $root "R10_5_BLACKOUT_UI_CONTRACT.md")
           Copy-Item docs/R10_6_PRO_UI_PRETEST.md (Join-Path $root "R10_6_PRO_UI_PRETEST.md")
+          Copy-Item docs/R10_7_LIVE_MEMORIES_PRETEST.md (Join-Path $root "R10_7_LIVE_MEMORIES_PRETEST.md")
 
           @'
           RGB LIVE CONTROL — RGB ESTUDIOS
-          SHOW / AEYLA — R10.6 WINDOWS / REAPER PRETEST
+          SHOW / AEYLA — R10.7 WINDOWS / REAPER PRETEST
 
           ESTADO
           PRETEST_NOT_SHOW_CANDIDATE. CI verde no significa Show Ready.
@@ -108,7 +110,7 @@ jobs:
           1. Cierra REAPER, Ableton y cualquier host VST3.
           2. Ejecuta CLEAN_INSTALL_AEYLA.cmd.
           3. Abre REAPER y re-scan VST3 si RGB Live Control no aparece automaticamente.
-          4. Confirma visualmente R10.6 PRETEST y revisa BUILD_ID.txt.
+          4. Confirma visualmente R10.7 PRETEST y revisa BUILD_ID.txt.
 
           AUTORIDAD FISICA HEREDADA DE R10.5
           - ARMAR obtiene y mantiene autoridad Art-Net.
@@ -120,7 +122,7 @@ jobs:
           - Cambio de ventana/pestana/PREPARADA/PREV/NEXT/PLAY/PAUSA/HOLD/STOP no puede retirar ARM.
           - Fallos reales de backend/runtime, render offline, shutdown y cambio fisico TX conservan fail-closed.
 
-          INTERFAZ / INTERACCION R10.6
+          INTERFAZ / INTERACCION R10.7
           TOMA | EN VIVO | MIDI | SISTEMA
           - Un solo shell RGB Live Control.
           - Un solo ARM y un solo APAGON: no quedan hit-zones antiguas debajo del header.
@@ -137,9 +139,12 @@ jobs:
           - PREPARADA no sustituye AL AIRE hasta GO/PLAY explicito.
           - A -> B usa reemplazo atomico sin blackout intermedio.
 
-          EN VIVO
-          - FRONTAL, HUMO/HAZE, BASE BLANCA y TEST LUMINARIAS.
-          - Operacion muestra pad/fader; EDITAR contiene Learn, modo y fade.
+          EN VIVO R10.7
+          - Cuatro memorias grandes por pagina: 1-4 / 5-8.
+          - + MEMORIA amplia el show hasta un maximo de 8 sin comprimir executors.
+          - Cada memoria se puede renombrar; nombre, cantidad, DMX y MIDI persisten en live.bin v2.
+          - Shows R10.6 live.bin v1 abren con sus cuatro memorias historicas sin conversion destructiva.
+          - Operacion muestra pad/fader; EDITAR contiene NOMBRE / DMX / MIDI / MODO / FADE.
           - DMX Learn usa snapshots OFF -> ON y mascara sparse de slots cambiados.
 
           GATE FISICO OBLIGATORIO
@@ -147,12 +152,13 @@ jobs:
           2. Activa APAGON TOTAL: receptor sigue ~44 Hz, todos los slots 0 y ARM sigue activo.
           3. Libera APAGON: vuelve el estado subyacente sin rearmar.
           4. Cambia TOMA/EN VIVO/MIDI/SISTEMA al menos 10 veces: sin caida de carrier ni blackout accidental.
-          5. Abre ARCHIVO en EN VIVO, cierralo fuera y confirma que no se activa ninguna memoria.
-          6. A AL AIRE -> B PREPARADA -> GO: B entra sin corte.
-          7. DESARMAR: la autoridad termina.
-          8. Re-ARM y APAGON/PANIC: cero DMX debe imponerse inmediatamente.
+          5. Renombra una memoria, guarda, cierra y reabre: nombre y definicion deben persistir.
+          6. + MEMORIA crea la memoria 5, cambia a 5-8 y permite Learn/renombrado.
+          7. A AL AIRE -> B PREPARADA -> GO: B entra sin corte.
+          8. DESARMAR: la autoridad termina.
+          9. Re-ARM y APAGON/PANIC: cero DMX debe imponerse inmediatamente.
 
-          Lee R10_5_BLACKOUT_UI_CONTRACT.md, R10_6_PRO_UI_PRETEST.md y R10_FIELD_PRETEST_ES.md.
+          Lee R10_5_BLACKOUT_UI_CONTRACT.md, R10_6_PRO_UI_PRETEST.md, R10_7_LIVE_MEMORIES_PRETEST.md y R10_FIELD_PRETEST_ES.md.
           '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_REAPER.txt")
 
           $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
@@ -165,7 +171,7 @@ jobs:
           "VST3_BINARY_SHA256=$hash" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "NETWORK_HELPER_SHA256=$helperHash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
-          "BUILD_KIND=RGB_LIVE_CONTROL_R10_6_REAPER_WINDOWS_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "BUILD_KIND=RGB_LIVE_CONTROL_R10_7_REAPER_WINDOWS_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "HOST_STATE_SCHEMA=1.4" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
           "STATUS=PRETEST_NOT_SHOW_CANDIDATE" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
 
@@ -178,7 +184,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RGB-Live-Control-R10.6-REAPER-Windows-PRETEST
+          name: RGB-Live-Control-R10.7-REAPER-Windows-PRETEST
           path: reaper-pretest/**
           if-no-files-found: error
           retention-days: 90

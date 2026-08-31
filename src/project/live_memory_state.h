@@ -10,8 +10,12 @@
 
 namespace aeyla::project {
 
-inline constexpr std::size_t kPersistentLiveMemoryCount = 4U;
+inline constexpr std::size_t kPersistentLiveMemoryCapacity = 8U;
+// Compatibility alias for code that treats this as the compile-time storage bound.
+inline constexpr std::size_t kPersistentLiveMemoryCount = kPersistentLiveMemoryCapacity;
+inline constexpr std::size_t kDefaultPersistentLiveMemoryCount = 4U;
 inline constexpr std::size_t kMaximumLiveMemoryChannels = 512U;
+inline constexpr std::size_t kMaximumPersistentLiveMemoryNameBytes = 48U;
 inline constexpr std::uint32_t kMaximumPersistentLiveFadeMs = 60000U;
 
 enum class PersistentLiveMemoryMode : std::uint8_t {
@@ -32,6 +36,7 @@ struct PersistentLiveMemoryChannel {
 };
 
 struct PersistentLiveMemory {
+  std::string name;
   bool configured{false};
   PersistentLiveMemoryMode mode{PersistentLiveMemoryMode::toggle};
   std::uint32_t fade_ms{1000U};
@@ -43,9 +48,18 @@ struct PersistentLiveMemory {
 };
 
 struct LiveMemoryPersistentState {
-  std::array<PersistentLiveMemory, kPersistentLiveMemoryCount> memories{};
+  std::uint8_t memory_count{
+      static_cast<std::uint8_t>(kDefaultPersistentLiveMemoryCount)};
+  std::array<PersistentLiveMemory, kPersistentLiveMemoryCapacity> memories{};
 
   LiveMemoryPersistentState() {
+    static constexpr std::array<const char*, kPersistentLiveMemoryCapacity>
+        kDefaultNames{
+            "FRONTAL", "HUMO / HAZE", "BASE BLANCA", "TEST LUMINARIAS",
+            "MEMORIA 5", "MEMORIA 6", "MEMORIA 7", "MEMORIA 8"};
+    for(std::size_t index = 0U; index < memories.size(); ++index)
+      memories[index].name = kDefaultNames[index];
+
     // Match the operator workspace defaults exactly: HUMO/HAZE is a continuous
     // fader even before it has learned any DMX channels. This keeps legacy
     // packages and fresh projects identical to a freshly initialized session.

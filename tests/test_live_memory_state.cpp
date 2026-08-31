@@ -19,6 +19,10 @@ int main() {
   using namespace aeyla::project;
 
   LiveMemoryPersistentState state;
+  state.memory_count = 6U;
+  state.memories[0].name = "CONTRA VIOLINES";
+  state.memories[4].name = "STROBE";
+  state.memories[5].name = "PÚBLICO";
 
   auto& front = state.memories[0];
   front.configured = true;
@@ -104,10 +108,57 @@ int main() {
           "invalid live.bin magic was accepted");
 
   auto badVersion = encoded;
-  badVersion[8] = 2U;
+  badVersion[8] = 99U;
   badVersion[9] = 0U;
   require(!decode_live_memory_persistent_state(badVersion).ok(),
           "unsupported live.bin version was accepted");
+
+  // R10.7 backward compatibility: decode the exact v1/4-memory shape and
+  // synthesize the historical default names without rewriting the file.
+  std::vector<std::uint8_t> legacyV1{
+      'A','E','Y','L','A','L','I','V', 1U,0U, 4U,0U};
+  const auto appendLegacyMemory = [&](std::uint8_t mode) {
+    legacyV1.push_back(0U);  // configured
+    legacyV1.push_back(mode);
+    legacyV1.push_back(0U);  // MIDI kind
+    legacyV1.push_back(0U);  // MIDI channel
+    legacyV1.push_back(0U);  // MIDI number
+    legacyV1.push_back(0U);  // reserved in v1
+    legacyV1.push_back(0xE8U);
+    legacyV1.push_back(0x03U);
+    legacyV1.push_back(0U);
+    legacyV1.push_back(0U);  // 1000 ms
+    legacyV1.push_back(0U);
+    legacyV1.push_back(0U);  // zero channels
+  };
+  appendLegacyMemory(0U);
+  appendLegacyMemory(1U);
+  appendLegacyMemory(0U);
+  appendLegacyMemory(0U);
+  const auto legacyDecoded = decode_live_memory_persistent_state(legacyV1);
+  require(legacyDecoded.ok(),
+          legacyDecoded.diagnostics.empty()
+              ? "legacy v1 decode failed without diagnostic"
+              : legacyDecoded.diagnostics.front());
+  require(legacyDecoded.state->memory_count == 4U &&
+              legacyDecoded.state->memories[0].name == "FRONTAL" &&
+              legacyDecoded.state->memories[1].name == "HUMO / HAZE" &&
+              legacyDecoded.state->memories[3].name == "TEST LUMINARIAS",
+          "legacy v1 names/count were not migrated in memory");
+
+  auto tooLongName = state;
+  tooLongName.memories[0].name.assign(49U, 'X');
+  diagnostics.clear();
+  require(encode_live_memory_persistent_state(tooLongName, diagnostics).empty() &&
+              !diagnostics.empty(),
+          "live-memory name longer than 48 bytes was encoded");
+
+  auto tooMany = state;
+  tooMany.memory_count = 9U;
+  diagnostics.clear();
+  require(encode_live_memory_persistent_state(tooMany, diagnostics).empty() &&
+              !diagnostics.empty(),
+          "live-memory count above 8 was encoded");
 
   auto trailing = encoded;
   trailing.push_back(0U);
