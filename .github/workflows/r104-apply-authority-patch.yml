@@ -1,0 +1,37 @@
+name: r104-apply-authority-patch
+
+on:
+  pull_request:
+    branches:
+      - rgb/r10.4-tooling-base-temp
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-authority-patch:
+    if: github.event.pull_request.head.ref == 'rgb/r10.4-persistent-operator-authority-20260830'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout R10.4 head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Apply deterministic R10.4 authority patch
+        run: |
+          test -f patches/r10.4-persistent-authority.patch
+          git apply --check patches/r10.4-persistent-authority.patch
+          git apply patches/r10.4-persistent-authority.patch
+          git config user.name "rgb-estudios-r10.4-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add product/AeylaVisualDmx/AeylaVisualDmx.cpp \
+                  product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp \
+                  src/product/application_model.cpp \
+                  src/runtime/runtime_safety_state.cpp \
+                  tests/test_runtime_safety.cpp \
+                  tests/test_application_model.cpp
+          git commit -m "fix(r10.4): preserve Art-Net authority across host and song navigation"
+          git push origin HEAD:rgb/r10.4-persistent-operator-authority-20260830
