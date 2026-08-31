@@ -1,0 +1,47 @@
+name: r106-apply-identity-network-ui
+
+on:
+  push:
+    branches:
+      - rgb/r10.6-pro-ui-stabilization-20260830
+    paths:
+      - tools/r106_identity_network_ui_patch.py
+      - .github/workflows/r106-apply-identity-network-ui.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rgb/r10.6-pro-ui-stabilization-20260830
+          fetch-depth: 0
+      - name: Apply guarded UI patch
+        run: python3 tools/r106_identity_network_ui_patch.py
+      - name: Verify visible identity and safe network sequence
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'IPv4 TX / MÁSCARA DE SUBRED' product/AeylaVisualDmx/AeylaMainControl.h
+          grep -Fq 'RGB ESTUDIOS · OPERACIÓN BLOQUEADA' product/AeylaVisualDmx/AeylaMainControl.h
+          grep -Fq 'REC STOP finaliza · el plugin no usa MTC.' product/AeylaVisualDmx/AeylaMainControl.h
+          grep -Fq 'SALIDA DESARMADA · APAGÓN ACTIVO' product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp
+          grep -Fq 'CAMBIO EN CURSO · se agregará' product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp
+          grep -Fq 'SALIDA DESARMADA · APAGÓN ACTIVO' product/AeylaVisualDmx/AeylaVisualDmx.cpp
+          ! grep -Fq 'IPv4 AEYLA / MÁSCARA DE SUBRED' product/AeylaVisualDmx/AeylaMainControl.h
+          ! grep -Fq 'AEYLA · OPERACIÓN BLOQUEADA' product/AeylaVisualDmx/AeylaMainControl.h
+      - name: Commit result and remove applicator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f tools/r106_identity_network_ui_patch.py
+          rm -f .github/workflows/r106-apply-identity-network-ui.yml
+          git config user.name 'rgb-estudios-r10.6-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'refactor(r10.6): clarify network safety and product identity'
+          git push origin HEAD:rgb/r10.6-pro-ui-stabilization-20260830
