@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - rgb/r10.4-persistent-operator-authority-20260830
+  pull_request:
+    branches:
+      - rgb/r10.3-operator-ui-learn-fix-20260830
 
 permissions:
   contents: read
