@@ -13,6 +13,13 @@ La aplicación expone una sola navegación principal:
 El shell canónico pertenece exclusivamente a `AeylaRuntimeStatusControl`.
 `AeylaMainControl` no dibuja ni recibe eventos del header legado.
 
+### Identidad visible
+
+- Producto / fabricante: `RGB LIVE CONTROL · RGB ESTUDIOS`.
+- El artista o show no forma parte del nombre del plugin: el shell muestra `SHOW / <nombre del proyecto>` usando el proyecto realmente abierto.
+- Proyectos nuevos usan un nombre neutro (`Untitled Show` / `SIN TÍTULO`).
+- Los identificadores internos históricos (`AeylaVisualDmx`, `AyVD`, namespaces y bundle de compatibilidad) no se renombran dentro de R10.6 para no romper reconocimiento de sesiones existentes.
+
 ### Regla de autoridad
 
 Cambiar de workspace es sólo presentación. Nunca puede:
@@ -96,6 +103,28 @@ Reglas adicionales:
 
 Un MIDI Learn completado en el runtime thread debe consolidar el estado persistente de memorias y marcar inmediatamente el proyecto como `SIN GUARDAR`. Guardar sigue siendo una acción explícita del usuario; la corrección sólo evita que el footer afirme falsamente `GUARDADO`.
 
+### MIDI SHOW durante operación
+
+Mientras exista autoridad física (`TakeOutputArmed`, `OutputArmed`, `enabled` u `override_enabled`), la configuración MIDI SHOW queda congelada:
+
+- no se puede activar ni desactivar MIDI SHOW;
+- no se puede cambiar el canal;
+- no se puede iniciar MIDI Learn;
+- los controles de configuración muestran `BLOQUEADO`.
+
+Este bloqueo **no detiene la operación MIDI ya configurada**: PREV/NEXT/PLAY/PAUSA/STOP/REC y lanzamiento de canciones siguen procesándose normalmente. Sólo se congela la mutación del mapa.
+
+Al adquirir autoridad física se cancela cualquier Learn pendiente y también cualquier nota aprendida en el callback que aún no haya sido consolidada. La primera nota del show nunca puede convertirse accidentalmente en una operación de remapeo.
+
+### Sincronía real
+
+La sincronía implementada en R10.6 se apoya en:
+
+- transporte / muestras del DAW;
+- marcador MIDI SHOW para el ancla de captura.
+
+No existe un receptor MTC operativo en esta arquitectura; la UI no debe anunciar `MTC` como fuente de sincronía disponible.
+
 ## 6. SISTEMA / RED
 
 Los cambios de red son acciones de configuración, no acciones de operación EN VIVO.
@@ -104,12 +133,23 @@ Mientras exista autoridad física voluntaria, queda prohibido modificar:
 
 - adaptador RX;
 - adaptador TX;
-- IPv4/máscara TX;
+- edición de IPv4/máscara TX;
+- aplicación de IPv4/máscara TX;
 - actualización de la lista de adaptadores.
 
-La condición se evalúa tanto en la UI como en la capa funcional. Los selectores y `APLICAR IP` deben mostrar `BLOQUEADA · SALIDA ARMADA`, y el backend debe rechazar la mutación aunque una ruta de UI futura omita el bloqueo visual.
+La condición se evalúa tanto en la UI como en la capa funcional. Los selectores y `APLICAR IP` deben mostrar estado bloqueado, y el backend debe rechazar la mutación aunque una ruta de UI futura omita el bloqueo visual.
+
+Si el editor de IPv4 se abrió desarmado pero la autoridad cambia antes de confirmar el texto, la edición se descarta y se restaura el valor del adaptador TX realmente seleccionado.
 
 Cambiar adaptador o red nunca puede usar el click de configuración como un `DISARM` implícito. El operador debe ejecutar `DESARMAR` explícitamente primero. Los `disarm()` defensivos internos pueden conservarse como fallback, pero no sustituyen este preflight.
+
+### Secuencia segura de cambio de red
+
+La aplicación deja APAGÓN latched deliberadamente tras una mutación de red. La recuperación correcta es:
+
+`DESARMAR → CAMBIAR/APLICAR RED → APAGÓN ACTIVO → ARMAR CARRIER NEGRO → VERIFICAR RUTA → LIBERAR APAGÓN`
+
+APAGÓN no se libera automáticamente al terminar un cambio de red.
 
 ## 7. ARCHIVO
 
@@ -134,7 +174,7 @@ Header, footer y SISTEMA deben ser coherentes entre sí:
 - AL AIRE: rojo;
 - PREPARADA: cyan;
 - reproducción normal: verde;
-- HOLD/advertencia: ámbar.
+- HOLD/advertencia/bloqueo de configuración: ámbar.
 
 ## 9. Gate de interacción R10.6
 
@@ -157,9 +197,16 @@ La build no avanza a prueba física hasta validar:
 15. Un MIDI Learn exitoso cambia el footer a `SIN GUARDAR` sin auto-guardar.
 16. REC/PLAY no ocultan ni interceptan cabecera.
 17. Con salida ARMADA, RX/TX/IP/refresh permanecen bloqueados y ningún click de SISTEMA retira carrier o autoridad.
-18. Después de `DESARMAR`, los cambios de RX/TX/IP vuelven a estar disponibles.
-19. APAGÓN/PANIC/DESARMAR conservan los tests de autoridad R10.5.
-20. Carga/guardado `.aeylashow` no restaura niveles activos ni ARM.
+18. Con salida ARMADA, el campo IPv4 no entra en edición ni conserva una edición iniciada antes de ARMAR.
+19. Después de `DESARMAR`, los cambios de RX/TX/IP vuelven a estar disponibles.
+20. Tras aplicar una red, APAGÓN permanece activo; se puede ARMAR carrier negro y sólo después liberar APAGÓN manualmente.
+21. Con salida ARMADA, MIDI SHOW conserva el mapa activo pero bloquea modo, canal y Learn.
+22. Iniciar MIDI Learn → ARMAR antes de tocar una nota cancela Learn; la siguiente nota opera el mapa existente y no lo modifica.
+23. MIDI SHOW continúa operando PREV/NEXT/PLAY/PAUSA/STOP mientras su configuración está bloqueada.
+24. La UI de captura sólo anuncia fuentes de sincronía realmente implementadas: DAW / MIDI SHOW, no MTC.
+25. El shell identifica `RGB LIVE CONTROL / RGB ESTUDIOS` como producto y toma el nombre del show desde el proyecto abierto.
+26. APAGÓN/PANIC/DESARMAR conservan los tests de autoridad R10.5.
+27. Carga/guardado `.aeylashow` no restaura niveles activos ni ARM.
 
 ## 10. Criterio de entrega
 
