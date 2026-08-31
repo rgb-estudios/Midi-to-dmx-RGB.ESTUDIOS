@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   apply:
-    runs-on: windows-2025
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,7 +23,7 @@ jobs:
       - name: Apply PANIC semantics
         shell: bash
         run: |
-          python patches/r105_panic_semantics.py
+          python3 patches/r105_panic_semantics.py
           git diff --check
           git config user.name "rgb-estudios-r10.5-bot"
           git config user.email "actions@users.noreply.github.com"
