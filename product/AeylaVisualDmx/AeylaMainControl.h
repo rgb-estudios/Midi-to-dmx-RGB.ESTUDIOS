@@ -884,7 +884,7 @@ private:
       if(selected) g.FillRoundRect(kPanelSelected, row, 5.0F);
       if(selected) g.DrawRoundRect(kAccent, row, 5.0F, nullptr, 1.0F);
       if(onAir)
-        g.FillRoundRect(kGood,
+        g.FillRoundRect(kDanger,
                         IRECT(row.R - 12.0F, row.T + 7.0F,
                               row.R - 6.0F, row.B - 7.0F), 3.0F);
       char number[8];
@@ -1016,7 +1016,7 @@ private:
       if(outX < mTimeline.R)
         g.FillRect(IColor(190, 8, 9, 12), IRECT(outX, mTimeline.T, mTimeline.R, mTimeline.B));
       if(outX > inX)
-        g.DrawRect(kGood, IRECT(inX, mTimeline.T + 1.0F, outX,
+        g.DrawRect(kCyan, IRECT(inX, mTimeline.T + 1.0F, outX,
                                 mTimeline.B - 1.0F), nullptr, 1.0F);
       g.DrawLine(kGood, inX, mTimeline.T, inX, mTimeline.B, nullptr, 3.0F);
       g.DrawLine(kGood, outX, mTimeline.T, outX, mTimeline.B, nullptr, 3.0F);
@@ -1213,9 +1213,9 @@ private:
     const std::string preparedStatus = mPlug.SongCount() == 0U
         ? preparedName
         : std::to_string(prepared + 1U) + " · " + preparedName;
-    StatusRow(g, mMidiPreparedStatus, "PREPARADA", preparedStatus, kWarn);
-    StatusRow(g, mMidiActiveStatus, "ACTIVA",
-              activeName, active >= 0 ? kGood : kFaint);
+    StatusRow(g, mMidiPreparedStatus, "PREPARADA", preparedStatus, kCyan);
+    StatusRow(g, mMidiActiveStatus, "AL AIRE",
+              activeName, active >= 0 ? kDanger : kFaint);
     g.FillRoundRect(IColor(255, 11, 13, 18), mMidiMessageStatus, 6.0F);
     g.DrawRoundRect(kLine, mMidiMessageStatus, 6.0F, nullptr, 1.0F);
     const std::string message = mPlug.ShowMidiStatus();
@@ -1277,13 +1277,13 @@ private:
     DrawRouteCard(g, mRxCard, "ENTRADA / ADAPTADOR RX",
                   mPlug.RxInterfaceStatus(), mPlug.CaptureInputStatus(),
                   mRxPrevious, mRxNext,
-                  capture.storage_failed ? kAccent :
+                  capture.storage_failed ? kDanger :
                       (capture.signal_present ? kGood : kWarn),
                   routeSelectionBlocked);
     DrawRouteCard(g, mTxCard, "SALIDA / ADAPTADOR TX",
                   mPlug.TxInterfaceStatus(), mPlug.OutputBackendStatus(),
                   mTxPrevious, mTxNext,
-                  output.fail_closed ? kAccent :
+                  output.fail_closed ? kDanger :
                       (mPlug.BackendReady() ? kGood : kWarn),
                   routeSelectionBlocked);
 
@@ -1325,24 +1325,36 @@ private:
                     capture.running ? "ESPERANDO ART-NET" : "RECEPTOR DETENIDO",
                     static_cast<unsigned>(capture.port_address + 1U));
 
+    const bool physicalAuthority = output.enabled || output.override_enabled;
     char transmission[220];
-    if(output.running)
+    if(physicalAuthority && output.blackout_latched)
       std::snprintf(transmission, sizeof(transmission),
-                    "%u Hz · %llu paquetes · %llu errores · %llu retrasos",
+                    "APAGÓN · %u Hz · %llu paquetes negros · %llu errores",
+                    static_cast<unsigned>(output.configured_fps),
+                    static_cast<unsigned long long>(output.blackout_packets),
+                    static_cast<unsigned long long>(output.send_errors));
+    else if(physicalAuthority)
+      std::snprintf(transmission, sizeof(transmission),
+                    "CARRIER %u Hz · %llu paquetes · %llu errores · %llu retrasos",
                     static_cast<unsigned>(output.configured_fps),
                     static_cast<unsigned long long>(output.sent_packets),
                     static_cast<unsigned long long>(output.send_errors),
                     static_cast<unsigned long long>(output.timing_misses));
+    else if(output.running)
+      std::snprintf(transmission, sizeof(transmission),
+                    "MOTOR LISTO · SIN CARRIER · %llu errores acumulados",
+                    static_cast<unsigned long long>(output.send_errors));
     else
       std::snprintf(transmission, sizeof(transmission),
                     "MOTOR DETENIDO · %llu errores acumulados",
                     static_cast<unsigned long long>(output.send_errors));
 
     const std::string authority = output.fail_closed
-        ? "FALLO ENCLAVADO · REARME MANUAL"
-        : (mPlug.TakeOutputLive() ? "TOMA AL AIRE" :
-            (mPlug.TakeOutputArmed() ? "ARMADA · ESPERA REPRODUCIR" :
-                                      "DESARMADA"));
+        ? "FAIL-CLOSED · REARME MANUAL"
+        : (physicalAuthority && output.blackout_latched
+            ? "APAGÓN TOTAL · ARM CONSERVADO"
+            : (mPlug.TakeOutputLive() ? "TOMA AL AIRE" :
+                (physicalAuthority ? "ARMADA · CARRIER ACTIVO" : "DESARMADA")));
     constexpr float rowHeight = 26.0F;
     const IRECT rowBounds(mRouting.L + 14.0F, infoTop,
                           mRouting.R - 14.0F, infoTop + rowHeight);
@@ -1354,12 +1366,16 @@ private:
     StatusRow(g, rowBounds, "RECEPCIÓN", reception,
               capture.signal_present ? kGood : kWarn);
     StatusRow(g, transmissionRow, "TRANSMISIÓN", transmission,
-              output.fail_closed || output.consecutive_send_errors > 0U ? kWarn :
-                  (output.running ? kGood : kFaint));
+              output.fail_closed || output.consecutive_send_errors > 0U
+                  ? kDanger
+                  : (physicalAuthority
+                      ? (output.blackout_latched ? kDanger : kGood)
+                      : (output.running ? kCyan : kFaint)));
     StatusRow(g, authorityRow, "AUTORIDAD", authority,
-              output.fail_closed ? kAccent :
-                  (mPlug.TakeOutputLive() ? kAccent :
-                      (mPlug.TakeOutputArmed() ? kWarn : kGood)));
+              output.fail_closed || (physicalAuthority && output.blackout_latched)
+                  ? kDanger
+                  : (mPlug.TakeOutputLive() ? kDanger :
+                      (physicalAuthority ? kWarn : kCyan)));
 
     const std::string networkStatus = mPlug.NetworkConfigurationStatus();
     g.DrawText(IText(12.0F,

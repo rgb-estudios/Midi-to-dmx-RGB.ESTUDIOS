@@ -331,15 +331,35 @@ private:
     }
 
     const auto tx = mPlug.ArtNetOutputStatus();
+    const bool physicalAuthority = tx.enabled || tx.override_enabled;
     const float statusRight = HeaderArmButton().L - 8.0F;
-    const float statusLeft = std::max(header.L + 470.0F, statusRight - 156.0F);
+    const float statusLeft = std::max(header.L + 470.0F, statusRight - 168.0F);
     if(statusRight - statusLeft > 70.0F)
     {
-      const std::string net = mPlug.BackendReady()
-          ? "ART-NET · " + std::to_string(tx.configured_fps) + " Hz"
-          : "ART-NET · SIN SALIDA";
+      std::string net = "ART-NET · SIN SALIDA";
+      IColor netColor = kWarn;
+      if(tx.fail_closed)
+      {
+        net = "ART-NET · FAIL-CLOSED";
+        netColor = kDanger;
+      }
+      else if(physicalAuthority && tx.blackout_latched)
+      {
+        net = "APAGÓN · " + std::to_string(tx.configured_fps) + " Hz";
+        netColor = kDanger;
+      }
+      else if(physicalAuthority)
+      {
+        net = "ART-NET TX · " + std::to_string(tx.configured_fps) + " Hz";
+        netColor = kGood;
+      }
+      else if(mPlug.BackendReady())
+      {
+        net = "ART-NET · LISTA / SIN CARRIER";
+        netColor = kCyan;
+      }
       Pill(g, IRECT(statusLeft, header.T + 10.0F, statusRight, header.T + 40.0F),
-           net, mPlug.BackendReady() ? kGood : kWarn);
+           net, netColor);
     }
 
     const bool armed = mPlug.TakeOutputArmed() || mPlug.OutputArmed();
@@ -360,11 +380,16 @@ private:
     g.FillRect(kBackground, footer);
     g.DrawLine(kLine, footer.L, footer.T, footer.R, footer.T, nullptr, 1.0F);
 
+    const auto tx = mPlug.ArtNetOutputStatus();
+    const bool physicalAuthority = tx.enabled || tx.override_enabled;
     IColor rail = kBrand;
-    if(mPlug.TakeRecording() || mPlug.TakeOutputLive()) rail = kDanger;
-    else if(!mPlug.RuntimeHealthy() || mPlug.RenderingOffline()) rail = kDanger;
+    if(mPlug.TakeRecording() || mPlug.TakeOutputLive() ||
+       (physicalAuthority && tx.blackout_latched))
+      rail = kDanger;
+    else if(!mPlug.RuntimeHealthy() || mPlug.RenderingOffline() || tx.fail_closed)
+      rail = kDanger;
     else if(mPlug.TakePlaying()) rail = kGood;
-    else if(mPlug.TakeOutputArmed()) rail = kWarn;
+    else if(physicalAuthority) rail = kWarn;
     g.FillRect(rail, IRECT(footer.L, footer.T, footer.R, footer.T + 2.0F));
 
     const auto compactLive = CompactLiveButton();
@@ -393,25 +418,35 @@ private:
 
     std::string operation;
     IColor operationColor = kMuted;
-    if(mPlug.TakeRecording()) {
+    if(tx.fail_closed) {
+      operation = "FAIL-CLOSED · REARME MANUAL";
+      operationColor = kDanger;
+    }
+    else if(physicalAuthority && tx.blackout_latched) {
+      operation = "APAGÓN · DMX 0 · CARRIER " +
+          std::to_string(tx.configured_fps) + " Hz";
+      operationColor = kDanger;
+    }
+    else if(mPlug.TakeRecording()) {
       operation = "REC · CAPTURANDO";
       operationColor = kDanger;
     }
     else if(mPlug.TakeOutputLive()) {
-      operation = "AL AIRE";
+      operation = "AL AIRE · CARRIER ACTIVO";
       operationColor = kDanger;
     }
     else if(mPlug.TakePlaying()) {
       operation = "PLAY · REPRODUCIENDO";
       operationColor = kGood;
     }
-    else if(mPlug.TakeOutputArmed()) {
-      operation = "ART-NET ARMADA · CARRIER ACTIVO";
+    else if(physicalAuthority) {
+      operation = "ART-NET ARMADA · CARRIER " +
+          std::to_string(tx.configured_fps) + " Hz";
       operationColor = kWarn;
     }
     else if(mPlug.BackendReady()) {
-      operation = "ART-NET LISTA · DESARMADA";
-      operationColor = kGood;
+      operation = "ART-NET LISTA · SIN CARRIER";
+      operationColor = kCyan;
     }
     else {
       operation = "SALIDA NO PREPARADA";
@@ -513,21 +548,22 @@ private:
     const float right = mRECT.R - 16.0F;
     const float top = Header().B + 8.0F;
 
-    mLiveCloseButton = {};
-    mLivePanicButton = {};
-    mLiveArmButton = {};
-
     const float transportTop = top;
-    const float transportGap = 7.0F;
-    const float transportW = 92.0F;
+    const float transportGap = 8.0F;
+    const float transportW = std::clamp(
+        ((right - left) - transportGap * 3.0F) / 4.0F, 118.0F, 176.0F);
+    const float transportTotal = transportW * 4.0F + transportGap * 3.0F;
+    const float transportLeft = left + std::max(0.0F,
+        ((right - left) - transportTotal) * 0.5F);
     for(std::size_t index = 0U; index < mLiveTransport.size(); ++index)
     {
-      const float x = left + static_cast<float>(index) * (transportW + transportGap);
+      const float x = transportLeft +
+          static_cast<float>(index) * (transportW + transportGap);
       mLiveTransport[index] = IRECT(x, transportTop, x + transportW,
-                                   transportTop + 34.0F);
+                                   transportTop + 40.0F);
     }
 
-    const float contentTop = transportTop + 44.0F;
+    const float contentTop = transportTop + 52.0F;
     const float contentBottom = Footer().T - 38.0F;
     const float split = left + (right - left) * 0.31F;
     mLiveSetlistPanel = IRECT(left, contentTop, split - 9.0F, contentBottom);
@@ -753,7 +789,7 @@ private:
                      mLiveMemoryPanel.R - 10.0F, mLiveMemoryPanel.T + 26.0F));
     g.DrawText(IText(8.3F, kMuted, "AeylaUI",
                      EAlign::Far, EVAlign::Middle),
-               "OPERAR PRIMERO · CONFIGURAR SÓLO CUANDO SEA NECESARIO",
+               "4 ACCESOS · DMX / MIDI DENTRO DE EDITAR",
                IRECT(mLiveMemoryPanel.L + 11.0F, mLiveMemoryPanel.T + 5.0F,
                      mLiveMemoryPanel.R - 11.0F, mLiveMemoryPanel.T + 26.0F));
 
@@ -949,30 +985,6 @@ private:
   void HandleLiveMouseDown(float x, float y)
   {
     BuildLiveLayout();
-    if(Contains(mLiveCloseButton, x, y))
-    {
-      mPlug.SetUiWorkspaceFromUI(0);
-      mLiveOpen = false;
-      mLiveConfigIndex = -1;
-      mDraggingMemory = -1;
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mLivePanicButton, x, y))
-    {
-      mPlug.SetBlackoutFromUI(!mPlug.GlobalBlackout());
-      SetLiveMessage(true, mPlug.GlobalBlackout()
-          ? "APAGÓN ACTIVO · salida desarmada y memorias OFF."
-          : "APAGÓN DESACTIVADO · ARM sigue siendo manual.");
-      SetDirty(false);
-      return;
-    }
-    if(Contains(mLiveArmButton, x, y))
-    {
-      ReportLive(mPlug.ToggleTakeOutputArmFromUI());
-      SetDirty(false);
-      return;
-    }
 
     if(Contains(mLiveTransport[0], x, y))
     {
@@ -1022,19 +1034,28 @@ private:
 
     for(std::size_t index = 0U; index < mLiveMemoryCards.size(); ++index)
     {
+      const auto view = mPlug.LiveMemoryViewFromUI(index);
       if(Contains(mLiveConfigButtons[index], x, y))
       {
+        const bool activeOrFading = view.transitioning ||
+            view.level > 0.005F || view.target_level > 0.005F;
+        if(activeOrFading && mLiveConfigIndex != static_cast<int>(index))
+        {
+          SetLiveMessage(false, view.name +
+              " · llévala a OFF / 0% antes de editar DMX, MIDI, modo o fade.");
+          SetDirty(false);
+          return;
+        }
         mLiveConfigIndex = mLiveConfigIndex == static_cast<int>(index)
             ? -1 : static_cast<int>(index);
         mDraggingMemory = -1;
         SetLiveMessage(true, mLiveConfigIndex == static_cast<int>(index)
-            ? "CONFIGURAR · sólo esta memoria expone DMX/MIDI/modo/fade."
+            ? "EDITAR · DMX / MIDI / modo / fade de esta memoria."
             : "OPERACIÓN · controles de autoría ocultos.");
         SetDirty(false);
         return;
       }
 
-      const auto view = mPlug.LiveMemoryViewFromUI(index);
       if(mLiveConfigIndex == static_cast<int>(index))
       {
         if(Contains(mLiveDmxButtons[index], x, y))
@@ -1076,7 +1097,15 @@ private:
       if(view.mode == aeyla::output::LiveMemoryControlMode::toggle &&
          Contains(mLiveMainControls[index], x, y))
       {
-        ReportLive(mPlug.ToggleLiveMemoryFromUI(index));
+        if(!view.configured)
+        {
+          mLiveConfigIndex = static_cast<int>(index);
+          mDraggingMemory = -1;
+          SetLiveMessage(false, view.name +
+              " · primero aprende DMX: captura OFF y luego ON.");
+        }
+        else
+          ReportLive(mPlug.ToggleLiveMemoryFromUI(index));
         SetDirty(false);
         return;
       }
@@ -1085,7 +1114,10 @@ private:
       {
         if(!view.configured)
         {
-          ReportLive(mPlug.SetLiveMemoryLevelFromUI(index, 0.0F));
+          mLiveConfigIndex = static_cast<int>(index);
+          mDraggingMemory = -1;
+          SetLiveMessage(false, view.name +
+              " · primero aprende DMX: captura OFF y luego ON.");
           SetDirty(false);
           return;
         }
@@ -1221,9 +1253,6 @@ private:
   std::string mLiveMessage{
       "EN VIVO · memorias en OFF hasta configuración y ARM explícito."};
 
-  IRECT mLiveCloseButton{};
-  IRECT mLivePanicButton{};
-  IRECT mLiveArmButton{};
   std::array<IRECT, 4U> mLiveTransport{};
   IRECT mLiveSetlistPanel{};
   IRECT mLiveMemoryPanel{};

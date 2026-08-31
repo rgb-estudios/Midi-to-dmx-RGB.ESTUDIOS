@@ -1007,6 +1007,11 @@ void AeylaVisualDmx::DrainHostEventsLocked()
       continue;
     mModel.handle_host_event(event);
   }
+
+  // MIDI Learn is finalized on this non-realtime thread. Persist its authored
+  // binding into the project controller and mark the project unsaved here so
+  // the footer cannot continue to claim GUARDADO after a successful Learn.
+  CommitLiveMemoryPersistenceDirtyLocked();
 }
 
 void AeylaVisualDmx::RefreshHostStateCacheLocked()
