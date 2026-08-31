@@ -283,6 +283,7 @@ class ArtNetOutputWorker::Impl final {
     stop_requested_.store(false, std::memory_order_release);
     enabled_.store(false, std::memory_order_release);
     override_enabled_.store(false, std::memory_order_release);
+    blackout_latched_.store(false, std::memory_order_release);
     fail_closed_.store(false, std::memory_order_release);
     blackout_burst_remaining_.store(0U, std::memory_order_release);
     sent_packets_.store(0U, std::memory_order_relaxed);
@@ -411,6 +412,17 @@ class ArtNetOutputWorker::Impl final {
     return override_enabled_.load(std::memory_order_acquire);
   }
 
+  void set_blackout_latched(bool enabled) noexcept {
+    blackout_latched_.store(enabled, std::memory_order_release);
+    if(enabled)
+      live_memories_.reset_levels();
+    wake_.notify_all();
+  }
+
+  bool blackout_latched() const noexcept {
+    return blackout_latched_.load(std::memory_order_acquire);
+  }
+
   bool configure_live_memory(std::size_t index,
                              const LiveMemoryDefinition& definition,
                              std::string& error_message) {
@@ -422,6 +434,7 @@ class ArtNetOutputWorker::Impl final {
   }
 
   bool live_authority_active() const noexcept {
+    if(blackout_latched_.load(std::memory_order_acquire)) return false;
     return override_enabled_.load(std::memory_order_acquire) ||
            enabled_.load(std::memory_order_acquire);
   }
@@ -476,6 +489,7 @@ class ArtNetOutputWorker::Impl final {
     result.running = running_.load(std::memory_order_acquire);
     result.enabled = enabled_.load(std::memory_order_acquire);
     result.override_enabled = override_enabled_.load(std::memory_order_acquire);
+    result.blackout_latched = blackout_latched_.load(std::memory_order_acquire);
     result.fail_closed = fail_closed_.load(std::memory_order_acquire);
     result.configured_fps = config_.frames_per_second;
     result.published_generation =
@@ -526,6 +540,7 @@ class ArtNetOutputWorker::Impl final {
     const bool already = fail_closed_.exchange(true, std::memory_order_acq_rel);
     enabled_.store(false, std::memory_order_release);
     override_enabled_.store(false, std::memory_order_release);
+    blackout_latched_.store(false, std::memory_order_release);
     live_memories_.reset_levels();
     if(already) return;
     fail_closed_events_.fetch_add(1U, std::memory_order_relaxed);
@@ -594,12 +609,21 @@ class ArtNetOutputWorker::Impl final {
         continue;
       }
 
+      const bool base_enabled = enabled_.load(std::memory_order_acquire);
+      const bool override_enabled =
+          override_enabled_.load(std::memory_order_acquire);
+      const bool blackout_latched =
+          blackout_latched_.load(std::memory_order_acquire);
       const auto remaining =
           blackout_burst_remaining_.load(std::memory_order_acquire);
-      if(remaining > 0U) {
+      if(blackout_latched && (base_enabled || override_enabled)) {
+        // Absolute physical priority: no Take or live-memory frame can leak
+        // through while APAGÓN TOTAL is latched. ARM remains untouched.
+        (void)transmit(blackout, 0U, true);
+      } else if(remaining > 0U) {
         (void)transmit(blackout, 0U, true);
         consume_one_blackout_frame();
-      } else if(override_enabled_.load(std::memory_order_acquire)) {
+      } else if(override_enabled) {
         DmxUniverse latest{};
         std::uint64_t generation = 0U;
         if(snapshot_override(latest, generation)) {
@@ -651,6 +675,7 @@ class ArtNetOutputWorker::Impl final {
   std::atomic<bool> running_{false};
   std::atomic<bool> enabled_{false};
   std::atomic<bool> override_enabled_{false};
+  std::atomic<bool> blackout_latched_{false};
   std::atomic<bool> fail_closed_{false};
   std::atomic<std::uint32_t> blackout_burst_remaining_{0U};
 
@@ -738,6 +763,14 @@ void ArtNetOutputWorker::set_override_enabled(bool enabled) noexcept {
 
 bool ArtNetOutputWorker::override_enabled() const noexcept {
   return impl_->override_enabled();
+}
+
+void ArtNetOutputWorker::set_blackout_latched(bool enabled) noexcept {
+  impl_->set_blackout_latched(enabled);
+}
+
+bool ArtNetOutputWorker::blackout_latched() const noexcept {
+  return impl_->blackout_latched();
 }
 
 bool ArtNetOutputWorker::configure_live_memory(

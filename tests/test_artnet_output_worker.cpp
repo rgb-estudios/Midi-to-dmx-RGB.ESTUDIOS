@@ -263,6 +263,35 @@ int main() {
   check(observed_101,
         "worker must refresh the newly published latest frame at fixed cadence");
 
+  // R10.5 APAGÓN TOTAL: force continuous zero DMX without dropping base
+  // authority. Clear must reveal the latest desired frame without re-ARM.
+  worker.set_blackout_latched(true);
+  check(worker.stats().enabled && worker.stats().blackout_latched,
+        "latched blackout must preserve armed base authority");
+  int blackout_frames = 0;
+  for(int attempt = 0; attempt < 8; ++attempt) {
+    const auto packet = receive_packet(receiver.socket);
+    if(is_artdmx(packet) && payload_is_zero(packet))
+      ++blackout_frames;
+    if(blackout_frames >= 4) break;
+  }
+  check(blackout_frames >= 4,
+        "latched blackout must transmit continuous zero DMX, not one burst");
+
+  worker.set_blackout_latched(false);
+  bool resumed_after_blackout = false;
+  for(int attempt = 0; attempt < 6; ++attempt) {
+    const auto packet = receive_packet(receiver.socket);
+    if(is_artdmx(packet) && packet.size() > 19U &&
+       packet[18] == 101U && packet[19] == 77U) {
+      resumed_after_blackout = true;
+      break;
+    }
+  }
+  check(resumed_after_blackout && worker.stats().enabled &&
+            !worker.stats().blackout_latched,
+        "releasing blackout must reveal latest frame without a second ARM");
+
   worker.set_enabled(false);
   check(receive_until_blackout(receiver.socket, 6),
         "disabling output must emit a zero-DMX ArtDMX safety packet");

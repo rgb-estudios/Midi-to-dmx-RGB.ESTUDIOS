@@ -148,21 +148,20 @@ aeyla::product::AuthoringResult AeylaVisualDmx::RenameSongFromUI(
 
 void AeylaVisualDmx::SetBlackoutFromUI(bool enabled)
 {
-  if(enabled)
-  {
-    mTakeScheduler.disarm();
-    mActiveTakeSongIndex.store(-1, std::memory_order_release);
-  }
-
   GetParam(kParamBlackout)->Set(enabled ? 1.0 : 0.0);
   mParamBlackout.store(enabled, std::memory_order_release);
 
   const std::scoped_lock lock(mModelMutex);
-  mModel.release_transients();
   if(enabled)
-    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::operator_disarm);
+    mModel.release_transients();
   mModel.set_blackout(enabled);
   SyncSnapshotToAtomicsLocked();
+
+  // R10.5: APAGÓN TOTAL is a physical mask, not DISARM. The single Art-Net
+  // worker keeps its lease/carrier and transmits zero at 44 Hz above Take and
+  // EN VIVO. Releasing APAGÓN reveals the underlying current state without a
+  // second ARM action.
+  mArtNetOutput.set_blackout_latched(enabled);
   PublishOutputFrameLocked(
       mRenderingOffline.load(std::memory_order_acquire));
 }
