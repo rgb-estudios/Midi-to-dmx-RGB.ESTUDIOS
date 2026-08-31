@@ -66,8 +66,15 @@ int main() {
   state.set_project_valid(true);
   state.set_backend_ready(true);
   check(state.request_arm(), "may arm before host deactivation test");
+  state.set_blackout(false);
+  (void)state.consume_pending_actions();
   state.on_host_deactivation();
-  check(!state.output_armed() && state.blackout(), "host deactivation must be safe");
+  check(state.output_armed() && !state.blackout(),
+        "host/editor deactivation must preserve explicit operator authority");
+  actions = state.consume_pending_actions();
+  check(!actions.release_transients && !actions.force_haze_zero &&
+            !actions.publish_safe_frame,
+        "host/editor deactivation must not request a physical withdrawal frame");
 
   state.set_project_valid(true);
   state.set_backend_ready(true);

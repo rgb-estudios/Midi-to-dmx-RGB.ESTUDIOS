@@ -615,8 +615,9 @@ bool ApplicationModel::select_song(std::size_t song_index) {
   if (song_index >= show_program_.songs.size()) return false;
   if (song_index == active_song_index_ && cue_runtime_.has_value()) return true;
 
-  safety_.disarm(runtime::RuntimeSafetyReason::project_reload);
-  safety_.set_blackout(true);
+  // Song selection is PREPARADA navigation, not a project reload and not an
+  // operator safety command. Preserve ARM/global blackout while rebuilding the
+  // artistic cue runtime for the newly prepared song.
   active_executor_ = -1;
   executor_velocity_ = 0.0F;
   active_song_index_ = song_index;

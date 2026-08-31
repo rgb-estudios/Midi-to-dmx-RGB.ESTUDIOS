@@ -331,8 +331,10 @@ void AeylaVisualDmx::OnReset()
 {
   mLastMidiNote.store(-1, std::memory_order_relaxed);
   mAudioTransportRunning.store(false, std::memory_order_release);
-  mHostResetPending.store(true, std::memory_order_release);
 
+  // Host/device reset is not an operator withdrawal command. REAPER may call
+  // this while rebuilding or refocusing the plug-in. Keep physical Art-Net
+  // authority untouched; only release transient MIDI state.
   aeyla::runtime::HostEvent event{};
   event.type = aeyla::runtime::HostEventType::all_notes_off;
   (void)mHostIngress.try_submit(event);
@@ -340,8 +342,9 @@ void AeylaVisualDmx::OnReset()
 
 void AeylaVisualDmx::OnActivate(bool active)
 {
-  if(!active)
-    mHostDeactivationPending.store(true, std::memory_order_release);
+  // Editor/host activation is not DESARMAR and is not APAGÓN TOTAL.
+  // Physical authority survives normal focus/window lifecycle changes.
+  (void)active;
 }
 
 void AeylaVisualDmx::OnParamChange(int paramIdx)
@@ -574,31 +577,16 @@ void AeylaVisualDmx::RuntimeTick() noexcept
 
     if(mHostResetPending.exchange(false, std::memory_order_acq_rel))
     {
-      ClearShowMidiCommandsLocked();
-      mTakeScheduler.stop_reset();
-      mTakeScheduler.disarm();
-      mLoadedTakeSongIndex.store(-1, std::memory_order_release);
-      mActiveTakeSongIndex.store(-1, std::memory_order_release);
-      if(ShowMidiMapping().enabled)
-        mMidiPreflightCursor.store(0, std::memory_order_release);
-      mModel.release_transients();
-      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
-      mModel.set_blackout(true);
-      mParamBlackout.store(true, std::memory_order_release);
-      SetShowMidiMessage(
-          "HOST RESET · SALIDA DESARMADA · toma invalidada y pendiente de recarga");
+      // Defensive compatibility for a reset flag queued before R10.4. Never
+      // convert a host reset into an operator blackout or scheduler disarm.
+      SetShowMidiMessage("HOST RESET · AUTORIDAD ART-NET CONSERVADA");
     }
 
     if(mHostDeactivationPending.exchange(false, std::memory_order_acq_rel))
     {
-      ClearShowMidiCommandsLocked();
-      if(ShowMidiMapping().enabled)
-        mMidiPreflightCursor.store(0, std::memory_order_release);
-      mTakeScheduler.disarm();
-      mModel.release_transients();
-      mModel.disarm(aeyla::runtime::RuntimeSafetyReason::host_deactivation);
-      mModel.set_blackout(true);
-      mParamBlackout.store(true, std::memory_order_release);
+      // Losing editor/host activation is a normal DAW lifecycle event. It must
+      // not alter scheduler ARM, carrier, active Take or operator blackout.
+      SetShowMidiMessage("HOST INACTIVO · AUTORIDAD ART-NET CONSERVADA");
     }
 
     ApplyPendingParameterStateLocked();
@@ -1206,13 +1194,6 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
 {
   if(direction == 0 || TakeRecording())
     return false;
-  const bool preserveTakeAuthority = TakeOutputArmed();
-  if(!preserveTakeAuthority)
-  {
-    mTakeScheduler.stop_reset();
-    mTakeScheduler.disarm();
-    mActiveTakeSongIndex.store(-1, std::memory_order_release);
-  }
   const std::scoped_lock lock(mModelMutex);
   const auto& snapshot = mModel.snapshot();
   if(snapshot.song_count == 0U)
@@ -1241,8 +1222,6 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
                                 std::memory_order_release);
   SetShowMidiMessage("PREPARADA · " + mModel.snapshot().active_song_name +
                      " · la canción al aire continúa");
-  if(!preserveTakeAuthority)
-    mParamBlackout.store(true, std::memory_order_release);
   mLastProjectedSongId.clear();
   mLastProjectedTick = 0U;
   SyncSnapshotToAtomicsLocked();

@@ -172,15 +172,8 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
   if(TakeRecording())
     return false;
 
-  // Only an armed Take owns the PREPARADA/ACTIVA two-state contract. In every
-  // other mode retain the original safe selection boundary.
-  if(!TakeOutputArmed())
-  {
-    mTakeScheduler.stop_reset();
-    mTakeScheduler.disarm();
-    mActiveTakeSongIndex.store(-1, std::memory_order_release);
-  }
-
+  // Selecting PREPARADA is metadata/navigation only. It never owns physical
+  // Art-Net authority and therefore may not disarm or latch blackout.
   const std::scoped_lock lock(mModelMutex);
   if(!mModel.select_song(songIndex))
     return false;
