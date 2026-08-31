@@ -56,8 +56,8 @@ int main() {
   check(model.snapshot().project_valid, "canonical development project should be valid");
   check(model.snapshot().project_dirty,
         "new untitled development project should begin dirty");
-  check(model.snapshot().project_name == "Untitled AEYLA Show",
-        "snapshot must expose the project-owned name");
+  check(model.snapshot().project_name == "Untitled Show",
+        "snapshot must expose the neutral project-owned name");
   check(model.snapshot().song_count == 0U && !model.snapshot().performance_ready,
         "new project must be saveable authoring state but not performance-ready");
   check(!model.snapshot().backend_ready, "null backend must not report ready");
