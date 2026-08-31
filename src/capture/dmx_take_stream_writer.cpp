@@ -106,12 +106,6 @@ std::filesystem::path temporary_path(const std::filesystem::path& target) {
   return path;
 }
 
-std::filesystem::path backup_path(const std::filesystem::path& target) {
-  auto path = target;
-  path += ".bak";
-  return path;
-}
-
 void remove_quietly(const std::filesystem::path& path) noexcept {
   std::error_code error;
   (void)std::filesystem::remove(path, error);
@@ -162,6 +156,23 @@ class DmxTakeStreamWriter::Impl final {
     std::string directory_error;
     if(!prepare_take_directory(config.target_path.parent_path(), directory_error)) {
       error_message = std::move(directory_error);
+      return false;
+    }
+
+    // Production RAW takes are immutable. A capture must never repurpose an
+    // existing .aeylatake path, even if a filename collision is extremely
+    // unlikely. Fail before opening the temporary stream so the previous RAW
+    // remains byte-for-byte untouched.
+    std::error_code target_error;
+    const bool target_exists =
+        std::filesystem::exists(config.target_path, target_error);
+    if(target_error) {
+      error_message = "Could not inspect streamed Take target";
+      return false;
+    }
+    if(target_exists) {
+      error_message =
+          "Streamed Take target already exists; RAW recordings are immutable";
       return false;
     }
 
@@ -349,30 +360,25 @@ class DmxTakeStreamWriter::Impl final {
       return false;
     }
 
-    const auto backup = backup_path(config_.target_path);
-    const bool existed = std::filesystem::exists(config_.target_path, fs_error);
+    // Re-check immediately before publish to close the race between start()
+    // and finalize(). If another actor created the path while we recorded, the
+    // capture fails closed and the pre-existing RAW is never replaced.
+    const bool target_exists =
+        std::filesystem::exists(config_.target_path, fs_error);
     if(fs_error) {
-      error_message = "Could not inspect streamed Take target";
+      error_message = "Could not inspect streamed Take target before publish";
       remove_quietly(temporary_path_);
       return false;
     }
-    if(existed) {
-      remove_quietly(backup);
-      std::filesystem::rename(config_.target_path, backup, fs_error);
-      if(fs_error) {
-        error_message = "Could not create streamed Take backup: " +
-                        fs_error.message();
-        remove_quietly(temporary_path_);
-        return false;
-      }
+    if(target_exists) {
+      error_message =
+          "Streamed Take target appeared during capture; RAW recordings are immutable";
+      remove_quietly(temporary_path_);
+      return false;
     }
 
     std::filesystem::rename(temporary_path_, config_.target_path, fs_error);
     if(fs_error) {
-      if(existed) {
-        std::error_code restore_error;
-        std::filesystem::rename(backup, config_.target_path, restore_error);
-      }
       error_message = "Could not install streamed Take: " + fs_error.message();
       remove_quietly(temporary_path_);
       return false;

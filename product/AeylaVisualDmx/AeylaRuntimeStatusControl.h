@@ -39,12 +39,10 @@ public:
     const IColor danger(255, 231, 45, 55);
     const IColor verify(255, 68, 214, 255);
 
-    // R10 verification beacon. The overlay remains outside the artistic UI so
-    // an operator can confirm which field build is loaded at a glance.
     const IRECT verifyAura(mRECT.L + 10.0F, mRECT.T + 51.0F,
-                           mRECT.L + 312.0F, mRECT.T + 82.0F);
+                           mRECT.L + 320.0F, mRECT.T + 82.0F);
     const IRECT verifyBadge(mRECT.L + 14.0F, mRECT.T + 55.0F,
-                            mRECT.L + 308.0F, mRECT.T + 78.0F);
+                            mRECT.L + 316.0F, mRECT.T + 78.0F);
     const bool recording = mPlug.TakeRecording();
     const auto midiMapping = mPlug.ShowMidiMapping();
     const bool midiShowEnabled = midiMapping.enabled;
@@ -60,10 +58,10 @@ public:
         "N" + std::to_string(midiMapping.capture_start_note) + " START / N" +
         std::to_string(midiMapping.capture_stop_note) + " STOP";
     const std::string verifyLabel = recording
-        ? "R10 PRETEST  ·  " + captureKeys + "  ·  CAPTURANDO"
+        ? "R10.1 PRETEST  ·  " + captureKeys + "  ·  CAPTURANDO"
         : (midiShowEnabled
-              ? "R10 PRETEST  ·  " + captureKeys + "  ·  LISTO"
-              : "R10 PRETEST  ·  " + captureKeys + "  ·  MIDI SHOW OFF");
+              ? "R10.1 PRETEST  ·  " + captureKeys + "  ·  LISTO"
+              : "R10.1 PRETEST  ·  " + captureKeys + "  ·  MIDI SHOW OFF");
     g.DrawText(IText(10.5F, recording ? danger : verify,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                verifyLabel.c_str(), verifyBadge.GetPadded(-5.0F));
@@ -206,7 +204,6 @@ public:
     }
 
     BuildButtons();
-
     if(Contains(mButtons[0], x, y))
     {
       if(mPlug.TakeRecording())
@@ -245,9 +242,9 @@ public:
     if(Contains(mButtons[4], x, y))
     {
       mLiveOpen = true;
+      mLiveMessageError = false;
       mLiveMessage = "EN VIVO · PREPARADA no reemplaza AL AIRE hasta una acción de reproducción.";
       SetDirty(false);
-      return;
     }
   }
 
@@ -343,23 +340,22 @@ private:
     const float right = mRECT.R - 18.0F;
     const float top = mRECT.T + 18.0F;
     mLiveCloseButton = IRECT(right - 78.0F, top, right, top + 34.0F);
-    mLivePanicButton = IRECT(right - 206.0F, top, right - 88.0F, top + 34.0F);
-    mLiveArmButton = IRECT(right - 346.0F, top, right - 216.0F, top + 34.0F);
+    mLivePanicButton = IRECT(right - 210.0F, top, right - 88.0F, top + 34.0F);
+    mLiveArmButton = IRECT(right - 354.0F, top, right - 220.0F, top + 34.0F);
 
-    const float transportTop = top + 52.0F;
-    constexpr float transportWidth = 88.0F;
-    constexpr float transportGap = 8.0F;
+    const float transportTop = top + 54.0F;
+    constexpr std::array<float, 4U> widths{82.0F, 112.0F, 82.0F, 82.0F};
+    float tx = left;
     for(std::size_t index = 0U; index < mLiveTransport.size(); ++index)
     {
-      const float x = left + static_cast<float>(index) *
-          (transportWidth + transportGap);
-      mLiveTransport[index] =
-          IRECT(x, transportTop, x + transportWidth, transportTop + 34.0F);
+      mLiveTransport[index] = IRECT(tx, transportTop,
+                                   tx + widths[index], transportTop + 36.0F);
+      tx += widths[index] + 8.0F;
     }
 
-    const float contentTop = transportTop + 50.0F;
+    const float contentTop = transportTop + 52.0F;
     const float contentBottom = mRECT.B - 66.0F;
-    const float split = left + (right - left) * 0.42F;
+    const float split = left + (right - left) * 0.36F;
     mLiveSetlistPanel = IRECT(left, contentTop, split - 10.0F, contentBottom);
     mLiveMemoryPanel = IRECT(split + 10.0F, contentTop, right, contentBottom);
     mLiveMessageRect = IRECT(left, contentBottom + 10.0F,
@@ -367,10 +363,10 @@ private:
 
     const std::size_t songCount = std::min<std::size_t>(
         mPlug.SongCount(), mLiveSongRows.size());
-    const float rowTop = mLiveSetlistPanel.T + 34.0F;
+    const float rowTop = mLiveSetlistPanel.T + 38.0F;
     const float availableRows = std::max(1.0F, mLiveSetlistPanel.B - rowTop - 10.0F);
     const float rowHeight = std::clamp(
-        availableRows / std::max<std::size_t>(songCount, 1U), 22.0F, 32.0F);
+        availableRows / std::max<std::size_t>(songCount, 1U), 24.0F, 34.0F);
     for(std::size_t index = 0U; index < mLiveSongRows.size(); ++index)
     {
       if(index >= songCount)
@@ -384,28 +380,47 @@ private:
                                    y + rowHeight - 3.0F);
     }
 
-    const float memoryTop = mLiveMemoryPanel.T + 34.0F;
-    const float memoryAvailable = mLiveMemoryPanel.B - memoryTop - 8.0F;
-    const float cardHeight = std::max(78.0F,
-        (memoryAvailable - 24.0F) / static_cast<float>(mLiveMemoryCards.size()));
+    const float gridLeft = mLiveMemoryPanel.L + 8.0F;
+    const float gridRight = mLiveMemoryPanel.R - 8.0F;
+    const float gridTop = mLiveMemoryPanel.T + 40.0F;
+    const float gridBottom = mLiveMemoryPanel.B - 8.0F;
+    constexpr float gridGap = 10.0F;
+    const float cardW = (gridRight - gridLeft - gridGap) * 0.5F;
+    const float cardH = (gridBottom - gridTop - gridGap) * 0.5F;
+
     for(std::size_t index = 0U; index < mLiveMemoryCards.size(); ++index)
     {
-      const float y = memoryTop + static_cast<float>(index) * (cardHeight + 8.0F);
-      const IRECT card(mLiveMemoryPanel.L + 8.0F, y,
-                       mLiveMemoryPanel.R - 8.0F, y + cardHeight);
+      const std::size_t column = index % 2U;
+      const std::size_t row = index / 2U;
+      const float x = gridLeft + static_cast<float>(column) * (cardW + gridGap);
+      const float y = gridTop + static_cast<float>(row) * (cardH + gridGap);
+      const IRECT card(x, y, x + cardW, y + cardH);
       mLiveMemoryCards[index] = card;
-      const float controlsTop = card.T + 32.0F;
-      const float buttonHeight = 26.0F;
-      mLiveLearnButtons[index] = IRECT(card.L + 10.0F, controlsTop,
-                                       card.L + 108.0F, controlsTop + buttonHeight);
-      mLiveModeButtons[index] = IRECT(card.L + 116.0F, controlsTop,
-                                      card.L + 218.0F, controlsTop + buttonHeight);
-      mLiveFadeButtons[index] = IRECT(card.L + 226.0F, controlsTop,
-                                      card.L + 310.0F, controlsTop + buttonHeight);
-      mLiveMainButtons[index] = IRECT(card.R - 116.0F, controlsTop,
-                                      card.R - 10.0F, controlsTop + buttonHeight);
-      mLiveFaders[index] = IRECT(card.L + 10.0F, card.B - 22.0F,
-                                 card.R - 10.0F, card.B - 9.0F);
+
+      const float chipTop = card.T + 35.0F;
+      const float chipH = 24.0F;
+      const float usable = card.W() - 20.0F;
+      const float chipW = (usable - 18.0F) * 0.25F;
+      float chipX = card.L + 10.0F;
+      mLiveLearnButtons[index] = IRECT(chipX, chipTop,
+                                       chipX + chipW, chipTop + chipH);
+      chipX += chipW + 6.0F;
+      mLiveModeButtons[index] = IRECT(chipX, chipTop,
+                                      chipX + chipW, chipTop + chipH);
+      chipX += chipW + 6.0F;
+      mLiveFadeButtons[index] = IRECT(chipX, chipTop,
+                                      chipX + chipW, chipTop + chipH);
+      chipX += chipW + 6.0F;
+      mLiveMidiButtons[index] = IRECT(chipX, chipTop,
+                                      card.R - 10.0F, chipTop + chipH);
+
+      const float controlTop = chipTop + chipH + 10.0F;
+      const float controlBottom = card.B - 10.0F;
+      mLiveMainButtons[index] = IRECT(card.L + 10.0F, controlTop,
+                                      card.R - 10.0F, controlBottom);
+      const float trackY = controlTop + (controlBottom - controlTop) * 0.54F;
+      mLiveFaders[index] = IRECT(card.L + 22.0F, trackY - 5.0F,
+                                 card.R - 22.0F, trackY + 5.0F);
     }
   }
 
@@ -413,6 +428,7 @@ private:
   {
     BuildLiveLayout();
     const IColor background(255, 8, 9, 12);
+    const IColor panel(255, 12, 14, 18);
     const IColor raised(255, 21, 23, 29);
     const IColor line(255, 47, 51, 62);
     const IColor text(255, 226, 229, 234);
@@ -423,32 +439,41 @@ private:
     const IColor verify(255, 68, 214, 255);
 
     g.FillRect(background, mRECT);
-    g.DrawText(IText(22.0F, text, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "EN VIVO", IRECT(mRECT.L + 20.0F, mRECT.T + 12.0F,
-                                  mRECT.L + 180.0F, mRECT.T + 52.0F));
+    g.DrawText(IText(23.0F, text, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "EN VIVO", IRECT(mRECT.L + 20.0F, mRECT.T + 8.0F,
+                                  mRECT.L + 180.0F, mRECT.T + 42.0F));
+    g.DrawText(IText(9.5F, muted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "OPERACIÓN DE SHOW · R10.1 PRETEST",
+               IRECT(mRECT.L + 20.0F, mRECT.T + 38.0F,
+                     mRECT.L + 300.0F, mRECT.T + 58.0F));
 
     const auto tx = mPlug.ArtNetOutputStatus();
-    std::string authority = "DESARMADA";
+    const auto rx = mPlug.ArtNetCaptureStatus();
+    std::string authority = "SALIDA DESARMADA";
     IColor authorityColor = muted;
     if(mPlug.TakeOutputLive()) {
-      authority = "AL AIRE · CARRIER " + std::to_string(tx.configured_fps) + " Hz";
+      authority = "AL AIRE · " + std::to_string(tx.configured_fps) + " Hz";
       authorityColor = danger;
     }
     else if(mPlug.TakeOutputArmed()) {
-      authority = "ARMADA · HOLD/CARRIER " + std::to_string(tx.configured_fps) + " Hz";
+      authority = "ARMADA · CARRIER " + std::to_string(tx.configured_fps) + " Hz";
       authorityColor = warning;
     }
-    g.DrawText(IText(12.0F, authorityColor, "AeylaUI",
-                     EAlign::Near, EVAlign::Middle),
-               authority.c_str(),
-               IRECT(mRECT.L + 190.0F, mRECT.T + 12.0F,
-                     mRECT.L + 520.0F, mRECT.T + 52.0F));
+    DrawStatusPill(g,
+                   IRECT(mRECT.L + 315.0F, mRECT.T + 18.0F,
+                         mRECT.L + 525.0F, mRECT.T + 48.0F),
+                   authority, authorityColor);
+    DrawStatusPill(g,
+                   IRECT(mRECT.L + 535.0F, mRECT.T + 18.0F,
+                         mRECT.L + 720.0F, mRECT.T + 48.0F),
+                   rx.signal_present ? "AVOLITES RX OK" : "AVOLITES RX SIN SEÑAL",
+                   rx.signal_present ? valid : warning);
 
     g.FillRoundRect(mPlug.TakeOutputArmed() ? IColor(255, 39, 29, 14) : raised,
                     mLiveArmButton, 5.0F);
     g.DrawRoundRect(mPlug.TakeOutputArmed() ? warning : line,
                     mLiveArmButton, 5.0F, nullptr, 1.0F);
-    g.DrawText(IText(11.0F, mPlug.TakeOutputArmed() ? warning : text,
+    g.DrawText(IText(10.5F, mPlug.TakeOutputArmed() ? warning : text,
                      "AeylaUI", EAlign::Center, EVAlign::Middle),
                mPlug.TakeOutputArmed() ? "DESARMAR SALIDA" : "ARMAR SALIDA",
                mLiveArmButton);
@@ -457,13 +482,13 @@ private:
     g.FillRoundRect(blackout ? IColor(255, 74, 20, 26) : IColor(255, 49, 14, 22),
                     mLivePanicButton, 5.0F);
     g.DrawRoundRect(danger, mLivePanicButton, 5.0F, nullptr, 1.2F);
-    g.DrawText(IText(11.0F, danger, "AeylaUI", EAlign::Center, EVAlign::Middle),
+    g.DrawText(IText(10.5F, danger, "AeylaUI", EAlign::Center, EVAlign::Middle),
                blackout ? "SALIR APAGÓN" : "PANIC / APAGÓN",
                mLivePanicButton);
 
     g.FillRoundRect(raised, mLiveCloseButton, 5.0F);
     g.DrawRoundRect(line, mLiveCloseButton, 5.0F, nullptr, 1.0F);
-    g.DrawText(IText(11.0F, text, "AeylaUI", EAlign::Center, EVAlign::Middle),
+    g.DrawText(IText(10.5F, text, "AeylaUI", EAlign::Center, EVAlign::Middle),
                "VOLVER", mLiveCloseButton);
 
     static constexpr std::array<const char*, 4U> transportLabels{
@@ -478,12 +503,16 @@ private:
                  transportLabels[index], mLiveTransport[index]);
     }
 
-    g.FillRoundRect(IColor(255, 12, 14, 18), mLiveSetlistPanel, 7.0F);
-    g.DrawRoundRect(line, mLiveSetlistPanel, 7.0F, nullptr, 1.0F);
+    g.FillRoundRect(panel, mLiveSetlistPanel, 8.0F);
+    g.DrawRoundRect(line, mLiveSetlistPanel, 8.0F, nullptr, 1.0F);
     g.DrawText(IText(12.0F, text, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "SETLIST · PREPARADA / AL AIRE",
-               IRECT(mLiveSetlistPanel.L + 10.0F, mLiveSetlistPanel.T + 5.0F,
-                     mLiveSetlistPanel.R - 10.0F, mLiveSetlistPanel.T + 30.0F));
+               "SETLIST",
+               IRECT(mLiveSetlistPanel.L + 12.0F, mLiveSetlistPanel.T + 5.0F,
+                     mLiveSetlistPanel.R - 12.0F, mLiveSetlistPanel.T + 27.0F));
+    g.DrawText(IText(8.5F, muted, "AeylaUI", EAlign::Near, EVAlign::Middle),
+               "PREPARADA ≠ AL AIRE",
+               IRECT(mLiveSetlistPanel.L + 12.0F, mLiveSetlistPanel.T + 22.0F,
+                     mLiveSetlistPanel.R - 12.0F, mLiveSetlistPanel.T + 38.0F));
 
     const std::size_t songCount = std::min<std::size_t>(
         mPlug.SongCount(), mLiveSongRows.size());
@@ -511,89 +540,31 @@ private:
       }
       g.FillRoundRect(rowFill, mLiveSongRows[index], 4.0F);
       g.DrawRoundRect(rowLine, mLiveSongRows[index], 4.0F, nullptr, 1.0F);
-      const std::string label = std::to_string(index + 1U) + "  " +
+      const std::string label =
+          (index + 1U < 10U ? "0" : "") + std::to_string(index + 1U) + "  " +
           mPlug.SongName(index);
-      g.DrawText(IText(10.5F, rowText, "AeylaUI",
+      g.DrawText(IText(10.2F, rowText, "AeylaUI",
                        EAlign::Near, EVAlign::Middle),
                  label.c_str(), mLiveSongRows[index].GetPadded(-8.0F));
       if(!badge.empty())
-        g.DrawText(IText(9.5F, rowText, "AeylaUI",
+        g.DrawText(IText(8.8F, rowText, "AeylaUI",
                          EAlign::Far, EVAlign::Middle),
                    badge.c_str(), mLiveSongRows[index].GetPadded(-8.0F));
     }
 
-    g.FillRoundRect(IColor(255, 12, 14, 18), mLiveMemoryPanel, 7.0F);
-    g.DrawRoundRect(line, mLiveMemoryPanel, 7.0F, nullptr, 1.0F);
+    g.FillRoundRect(panel, mLiveMemoryPanel, 8.0F);
+    g.DrawRoundRect(line, mLiveMemoryPanel, 8.0F, nullptr, 1.0F);
     g.DrawText(IText(12.0F, text, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "MEMORIAS OPERATIVAS · MASKED DMX",
-               IRECT(mLiveMemoryPanel.L + 10.0F, mLiveMemoryPanel.T + 5.0F,
-                     mLiveMemoryPanel.R - 10.0F, mLiveMemoryPanel.T + 30.0F));
+               "MEMORIAS OPERATIVAS",
+               IRECT(mLiveMemoryPanel.L + 12.0F, mLiveMemoryPanel.T + 5.0F,
+                     mLiveMemoryPanel.R - 12.0F, mLiveMemoryPanel.T + 27.0F));
+    g.DrawText(IText(8.5F, muted, "AeylaUI", EAlign::Far, EVAlign::Middle),
+               "DMX LEARN · NOTE / CC · MASKED LTP",
+               IRECT(mLiveMemoryPanel.L + 12.0F, mLiveMemoryPanel.T + 6.0F,
+                     mLiveMemoryPanel.R - 12.0F, mLiveMemoryPanel.T + 28.0F));
 
     for(std::size_t index = 0U; index < mLiveMemoryCards.size(); ++index)
-    {
-      const auto view = mPlug.LiveMemoryViewFromUI(index);
-      const bool active = view.level > 0.005F || view.target_level > 0.005F;
-      const IColor cardLine = view.learning ? verify
-          : (!view.configured ? warning : (active ? valid : line));
-      const IColor cardFill = active
-          ? IColor(255, 10, 24, 19)
-          : IColor(255, 18, 20, 25);
-      g.FillRoundRect(cardFill, mLiveMemoryCards[index], 6.0F);
-      g.DrawRoundRect(cardLine, mLiveMemoryCards[index], 6.0F, nullptr, 1.0F);
-
-      std::string status = view.name + " · ";
-      if(view.learning)
-        status += "APRENDIENDO 1/2";
-      else if(!view.configured)
-        status += "SIN APRENDER";
-      else
-        status += std::to_string(view.channel_count) + " CH · " +
-            std::to_string(static_cast<int>(std::lround(view.level * 100.0F))) + "%";
-      g.DrawText(IText(11.0F, cardLine, "AeylaUI",
-                       EAlign::Near, EVAlign::Middle),
-                 status.c_str(),
-                 IRECT(mLiveMemoryCards[index].L + 10.0F,
-                       mLiveMemoryCards[index].T + 4.0F,
-                       mLiveMemoryCards[index].R - 10.0F,
-                       mLiveMemoryCards[index].T + 28.0F));
-
-      const std::string learnLabel = view.learning ? "CAPTURAR ON" : "APRENDER";
-      DrawLiveButton(g, mLiveLearnButtons[index], learnLabel,
-                     view.learning ? verify : (view.configured ? text : warning));
-      DrawLiveButton(g, mLiveModeButtons[index],
-                     view.mode == aeyla::output::LiveMemoryControlMode::toggle
-                         ? "BOTÓN / TOGGLE" : "FADER",
-                     text);
-      const std::string fadeLabel = view.fade_ms == 100U ? "FADE 0.1"
-          : (view.fade_ms == 1500U ? "FADE 1.5" : "FADE 1.0");
-      DrawLiveButton(g, mLiveFadeButtons[index], fadeLabel, text);
-
-      if(view.mode == aeyla::output::LiveMemoryControlMode::toggle)
-      {
-        DrawLiveButton(g, mLiveMainButtons[index],
-                       view.target_level > 0.5F ? "ON" : "OFF",
-                       active ? valid : muted);
-      }
-      else
-      {
-        DrawLiveButton(g, mLiveMainButtons[index],
-                       std::to_string(static_cast<int>(
-                           std::lround(view.level * 100.0F))) + "%",
-                       active ? valid : muted);
-      }
-
-      g.FillRoundRect(IColor(255, 7, 8, 11), mLiveFaders[index], 4.0F);
-      const float normalized = std::clamp(view.level, 0.0F, 1.0F);
-      if(normalized > 0.0F)
-      {
-        const IRECT fill(mLiveFaders[index].L, mLiveFaders[index].T,
-                         mLiveFaders[index].L +
-                             mLiveFaders[index].W() * normalized,
-                         mLiveFaders[index].B);
-        g.FillRoundRect(active ? valid : verify, fill, 4.0F);
-      }
-      g.DrawRoundRect(line, mLiveFaders[index], 4.0F, nullptr, 1.0F);
-    }
+      DrawMemoryModule(g, index, line, text, muted, warning, valid, verify);
 
     const IColor messageColor = mLiveMessageError ? danger : muted;
     g.DrawText(IText(10.5F, messageColor, "AeylaUI",
@@ -601,17 +572,182 @@ private:
                mLiveMessage.c_str(), mLiveMessageRect);
   }
 
-  void DrawLiveButton(IGraphics& g,
+  void DrawMemoryModule(IGraphics& g,
+                        std::size_t index,
+                        const IColor& line,
+                        const IColor& text,
+                        const IColor& muted,
+                        const IColor& warning,
+                        const IColor& valid,
+                        const IColor& verify)
+  {
+    const auto view = mPlug.LiveMemoryViewFromUI(index);
+    const bool active = view.level > 0.005F || view.target_level > 0.005F;
+    const IColor accent = view.midi_learning ? verify
+        : (view.learning ? verify
+            : (!view.configured ? warning : (active ? valid : line)));
+    const IColor cardFill = active
+        ? IColor(255, 10, 25, 19)
+        : IColor(255, 18, 20, 25);
+    const auto& card = mLiveMemoryCards[index];
+    g.FillRoundRect(cardFill, card, 7.0F);
+    g.DrawRoundRect(accent, card, 7.0F, nullptr, active ? 1.5F : 1.0F);
+
+    g.DrawText(IText(12.0F, active ? valid : text,
+                     "AeylaUI", EAlign::Near, EVAlign::Middle),
+               view.name.c_str(),
+               IRECT(card.L + 10.0F, card.T + 5.0F,
+                     card.R - 96.0F, card.T + 29.0F));
+
+    std::string status;
+    if(view.learning)
+      status = "DMX 1/2";
+    else if(!view.configured)
+      status = "SIN DMX";
+    else
+      status = std::to_string(view.channel_count) + " CH";
+    const std::string levelText =
+        std::to_string(static_cast<int>(std::lround(view.level * 100.0F))) + "%";
+    g.DrawText(IText(10.0F, accent, "AeylaUI", EAlign::Far, EVAlign::Middle),
+               (status + " · " + levelText).c_str(),
+               IRECT(card.R - 150.0F, card.T + 5.0F,
+                     card.R - 10.0F, card.T + 29.0F));
+
+    const std::string learnLabel = view.learning ? "CAPT ON" : "DMX";
+    DrawChip(g, mLiveLearnButtons[index], learnLabel,
+             view.learning ? verify : (view.configured ? text : warning));
+    DrawChip(g, mLiveModeButtons[index],
+             view.mode == aeyla::output::LiveMemoryControlMode::toggle
+                 ? "BOTÓN" : "FADER",
+             view.mode == aeyla::output::LiveMemoryControlMode::fader
+                 ? verify : text);
+    const std::string fadeLabel = view.fade_ms == 100U ? "0.1 s"
+        : (view.fade_ms == 1500U ? "1.5 s" : "1.0 s");
+    DrawChip(g, mLiveFadeButtons[index], fadeLabel, text);
+    DrawChip(g, mLiveMidiButtons[index], MidiLabel(view),
+             view.midi_learning ? verify
+                 : (view.midi_kind == aeyla::live_memory_session::MidiBindingKind::none
+                        ? muted : valid));
+
+    if(view.mode == aeyla::output::LiveMemoryControlMode::toggle)
+      DrawTogglePad(g, index, view, text, muted, valid, line);
+    else
+      DrawFaderPad(g, index, view, text, muted, valid, verify, line);
+  }
+
+  void DrawTogglePad(IGraphics& g,
+                     std::size_t index,
+                     const aeyla::live_memory_session::MemoryView& view,
+                     const IColor& text,
+                     const IColor& muted,
+                     const IColor& valid,
+                     const IColor& line)
+  {
+    const bool on = view.target_level > 0.5F;
+    const auto& pad = mLiveMainButtons[index];
+    g.FillRoundRect(on ? IColor(255, 12, 46, 31) : IColor(255, 11, 12, 16),
+                    pad, 7.0F);
+    g.DrawRoundRect(on ? valid : line, pad, 7.0F, nullptr, on ? 1.8F : 1.0F);
+    g.DrawText(IText(16.0F, on ? valid : text,
+                     "AeylaUI", EAlign::Center, EVAlign::Middle),
+               on ? "ON" : "OFF", pad);
+    g.DrawText(IText(8.5F, on ? valid : muted,
+                     "AeylaUI", EAlign::Center, EVAlign::Bottom),
+               "TOGGLE · MIDI NOTE",
+               IRECT(pad.L + 6.0F, pad.T + 5.0F,
+                     pad.R - 6.0F, pad.B - 6.0F));
+  }
+
+  void DrawFaderPad(IGraphics& g,
+                    std::size_t index,
+                    const aeyla::live_memory_session::MemoryView& view,
+                    const IColor& text,
+                    const IColor& muted,
+                    const IColor& valid,
+                    const IColor& verify,
+                    const IColor& line)
+  {
+    const auto& pad = mLiveMainButtons[index];
+    const auto& track = mLiveFaders[index];
+    const float normalized = std::clamp(view.level, 0.0F, 1.0F);
+    const float handleX = track.L + track.W() * normalized;
+
+    g.FillRoundRect(IColor(255, 11, 12, 16), pad, 7.0F);
+    g.DrawRoundRect(view.transitioning ? verify : line,
+                    pad, 7.0F, nullptr, 1.0F);
+
+    g.DrawText(IText(9.5F, muted, "AeylaUI", EAlign::Near, EVAlign::Top),
+               "0", IRECT(track.L, pad.T + 8.0F,
+                          track.L + 30.0F, pad.T + 25.0F));
+    g.DrawText(IText(9.5F, muted, "AeylaUI", EAlign::Far, EVAlign::Top),
+               "100", IRECT(track.R - 40.0F, pad.T + 8.0F,
+                            track.R, pad.T + 25.0F));
+
+    g.FillRoundRect(IColor(255, 5, 7, 9), track, 5.0F);
+    if(normalized > 0.0F)
+    {
+      const IRECT fill(track.L, track.T, handleX, track.B);
+      g.FillRoundRect(valid, fill, 5.0F);
+    }
+    g.DrawRoundRect(line, track, 5.0F, nullptr, 1.0F);
+
+    const IRECT handle(handleX - 7.0F, track.T - 11.0F,
+                       handleX + 7.0F, track.B + 11.0F);
+    g.FillRoundRect(IColor(255, 225, 229, 235), handle, 4.0F);
+    g.DrawRoundRect(normalized > 0.0F ? valid : verify,
+                    handle, 4.0F, nullptr, 1.2F);
+
+    const std::string percentage =
+        std::to_string(static_cast<int>(std::lround(normalized * 100.0F))) + "%";
+    g.DrawText(IText(15.0F, normalized > 0.0F ? valid : text,
+                     "AeylaUI", EAlign::Center, EVAlign::Middle),
+               percentage.c_str(),
+               IRECT(pad.L + 10.0F, track.B + 14.0F,
+                     pad.R - 10.0F, pad.B - 6.0F));
+    g.DrawText(IText(8.5F, muted, "AeylaUI", EAlign::Center, EVAlign::Top),
+               "FADER CONTINUO · MIDI CC",
+               IRECT(pad.L + 10.0F, pad.T + 7.0F,
+                     pad.R - 10.0F, track.T - 10.0F));
+  }
+
+  static std::string MidiLabel(
+      const aeyla::live_memory_session::MemoryView& view)
+  {
+    if(view.midi_learning)
+      return view.mode == aeyla::output::LiveMemoryControlMode::toggle
+          ? "MIDI…NOTE" : "MIDI…CC";
+    if(view.midi_kind == aeyla::live_memory_session::MidiBindingKind::note)
+      return "N" + std::to_string(view.midi_number) +
+             "/" + std::to_string(view.midi_channel);
+    if(view.midi_kind ==
+       aeyla::live_memory_session::MidiBindingKind::control_change)
+      return "CC" + std::to_string(view.midi_number) +
+             "/" + std::to_string(view.midi_channel);
+    return "MIDI";
+  }
+
+  void DrawStatusPill(IGraphics& g,
                       const IRECT& rect,
                       const std::string& label,
                       const IColor& accent)
   {
-    const IColor raised(255, 21, 23, 29);
-    g.FillRoundRect(raised, rect, 4.0F);
-    g.DrawRoundRect(accent, rect, 4.0F, nullptr, 1.0F);
+    g.FillRoundRect(IColor(255, 13, 15, 19), rect, 6.0F);
+    g.DrawRoundRect(accent, rect, 6.0F, nullptr, 1.0F);
     g.DrawText(IText(9.5F, accent, "AeylaUI",
                      EAlign::Center, EVAlign::Middle),
-               label.c_str(), rect.GetPadded(-3.0F));
+               label.c_str(), rect.GetPadded(-4.0F));
+  }
+
+  void DrawChip(IGraphics& g,
+                const IRECT& rect,
+                const std::string& label,
+                const IColor& accent)
+  {
+    g.FillRoundRect(IColor(255, 15, 17, 22), rect, 4.0F);
+    g.DrawRoundRect(accent, rect, 4.0F, nullptr, 1.0F);
+    g.DrawText(IText(8.2F, accent, "AeylaUI",
+                     EAlign::Center, EVAlign::Middle),
+               label.c_str(), rect.GetPadded(-2.0F));
   }
 
   void HandleLiveMouseDown(float x, float y)
@@ -708,6 +844,14 @@ private:
         SetDirty(false);
         return;
       }
+      if(Contains(mLiveMidiButtons[index], x, y))
+      {
+        (void)mPlug.LiveMemoryViewFromUI(index);
+        const auto result = aeyla::live_memory_session::arm_midi_learn(&mPlug, index);
+        ReportLiveSession(result);
+        SetDirty(false);
+        return;
+      }
 
       const auto view = mPlug.LiveMemoryViewFromUI(index);
       if(view.mode == aeyla::output::LiveMemoryControlMode::toggle &&
@@ -718,8 +862,7 @@ private:
         return;
       }
       if(view.mode == aeyla::output::LiveMemoryControlMode::fader &&
-         (Contains(mLiveFaders[index], x, y) ||
-          Contains(mLiveMainButtons[index], x, y)))
+         Contains(mLiveMainButtons[index], x, y))
       {
         mDraggingMemory = static_cast<int>(index);
         ApplyFaderFromX(index, x);
@@ -749,6 +892,11 @@ private:
   }
 
   void ReportLive(const aeyla::product::AuthoringResult& result)
+  {
+    SetLiveMessage(result.succeeded, result.message);
+  }
+
+  void ReportLiveSession(const aeyla::live_memory_session::ActionResult& result)
   {
     SetLiveMessage(result.succeeded, result.message);
   }
@@ -835,6 +983,7 @@ private:
   std::array<IRECT, 4> mLiveLearnButtons{};
   std::array<IRECT, 4> mLiveModeButtons{};
   std::array<IRECT, 4> mLiveFadeButtons{};
+  std::array<IRECT, 4> mLiveMidiButtons{};
   std::array<IRECT, 4> mLiveMainButtons{};
   std::array<IRECT, 4> mLiveFaders{};
 

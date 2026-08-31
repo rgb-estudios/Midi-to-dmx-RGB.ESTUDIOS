@@ -21,6 +21,10 @@ enum class HostEventType : std::uint8_t {
 // `project_sample` is set only when the host provides a valid project sample
 // position. Absolute host transport itself uses HostTransportMailbox rather
 // than this queue so a MIDI burst cannot hide Stop/Seek/Loop truth.
+//
+// R10.1 intentionally keeps the show enum unchanged. `reserved == 1` marks a
+// normalized MIDI CC event for the EN VIVO memory layer; the runtime consumes
+// it before the artistic ApplicationModel sees the event.
 struct HostEvent {
   HostEventType type{HostEventType::note_off};
   std::uint8_t channel{0};

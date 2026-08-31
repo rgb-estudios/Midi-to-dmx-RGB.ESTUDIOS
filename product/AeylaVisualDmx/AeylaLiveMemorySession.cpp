@@ -10,17 +10,26 @@
 namespace aeyla::live_memory_session {
 namespace {
 
+constexpr std::uint8_t kLiveCcMarker = 1U;
+constexpr float kEditIdleEpsilon = 0.0001F;
+
 struct SlotState {
   output::LiveMemoryDefinition definition{};
   bool configured{false};
   bool learn_pending{false};
   DmxUniverse learn_baseline{};
+
+  bool midi_learn_pending{false};
+  MidiBindingKind midi_kind{MidiBindingKind::none};
+  std::uint8_t midi_channel{0U};
+  std::uint8_t midi_number{0U};
 };
 
 struct SessionState {
   output::ArtNetOutputWorker* output_worker{nullptr};
   capture::ArtNetCaptureWorker* capture_worker{nullptr};
   std::array<SlotState, kOperatorMemoryCount> slots{};
+  bool persistence_dirty{false};
 };
 
 std::mutex gMutex;
@@ -67,6 +76,46 @@ std::string fade_label(std::uint32_t fade_ms) {
   return std::to_string(fade_ms) + " ms";
 }
 
+project::PersistentLiveMemoryMode persistent_mode(
+    output::LiveMemoryControlMode mode) noexcept {
+  return mode == output::LiveMemoryControlMode::fader
+      ? project::PersistentLiveMemoryMode::fader
+      : project::PersistentLiveMemoryMode::toggle;
+}
+
+output::LiveMemoryControlMode runtime_mode(
+    project::PersistentLiveMemoryMode mode) noexcept {
+  return mode == project::PersistentLiveMemoryMode::fader
+      ? output::LiveMemoryControlMode::fader
+      : output::LiveMemoryControlMode::toggle;
+}
+
+project::PersistentMidiBindingKind persistent_midi_kind(
+    MidiBindingKind kind) noexcept {
+  switch(kind) {
+    case MidiBindingKind::note:
+      return project::PersistentMidiBindingKind::note;
+    case MidiBindingKind::control_change:
+      return project::PersistentMidiBindingKind::control_change;
+    case MidiBindingKind::none:
+    default:
+      return project::PersistentMidiBindingKind::none;
+  }
+}
+
+MidiBindingKind runtime_midi_kind(
+    project::PersistentMidiBindingKind kind) noexcept {
+  switch(kind) {
+    case project::PersistentMidiBindingKind::note:
+      return MidiBindingKind::note;
+    case project::PersistentMidiBindingKind::control_change:
+      return MidiBindingKind::control_change;
+    case project::PersistentMidiBindingKind::none:
+    default:
+      return MidiBindingKind::none;
+  }
+}
+
 bool reconfigure_locked(SessionState& session,
                         std::size_t index,
                         std::string& error) {
@@ -84,6 +133,64 @@ void clear_worker_definitions(SessionState& session) noexcept {
     session.output_worker->clear_live_memory(index);
 }
 
+void clear_binding(SlotState& slot) noexcept {
+  slot.midi_learn_pending = false;
+  slot.midi_kind = MidiBindingKind::none;
+  slot.midi_channel = 0U;
+  slot.midi_number = 0U;
+}
+
+void remove_duplicate_binding(SessionState& session,
+                              std::size_t keep_index,
+                              MidiBindingKind kind,
+                              std::uint8_t channel,
+                              std::uint8_t number) noexcept {
+  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+    if(index == keep_index) continue;
+    auto& slot = session.slots[index];
+    if(slot.midi_kind == kind && slot.midi_channel == channel &&
+       slot.midi_number == number)
+      clear_binding(slot);
+  }
+}
+
+bool toggle_locked(SessionState& session, std::size_t index) noexcept {
+  if(index >= session.slots.size()) return false;
+  const auto& slot = session.slots[index];
+  if(!slot.configured || session.output_worker == nullptr) return false;
+  return session.output_worker->toggle_live_memory(index);
+}
+
+bool set_fader_locked(SessionState& session,
+                      std::size_t index,
+                      float level) noexcept {
+  if(index >= session.slots.size()) return false;
+  const auto& slot = session.slots[index];
+  if(!slot.configured || session.output_worker == nullptr ||
+     slot.definition.mode != output::LiveMemoryControlMode::fader)
+    return false;
+  const float normalized = std::isfinite(level)
+      ? std::clamp(level, 0.0F, 1.0F)
+      : 0.0F;
+  return session.output_worker->set_live_memory_level(index, normalized, true);
+}
+
+bool edit_blocked_locked(SessionState& session,
+                         std::size_t index) noexcept {
+  if(index >= session.slots.size() || session.output_worker == nullptr ||
+     !session.slots[index].configured)
+    return false;
+  const auto runtime = session.output_worker->live_memory_snapshot(index);
+  return runtime.transitioning || runtime.level > kEditIdleEpsilon ||
+         runtime.target_level > kEditIdleEpsilon;
+}
+
+ActionResult active_edit_blocked(const SlotState& slot) {
+  return {false,
+          slot.definition.name +
+              " · edición bloqueada mientras la memoria está activa/fundiendo; llévala a OFF / 0% primero"};
+}
+
 }  // namespace
 
 void register_runtime(const void* owner,
@@ -93,16 +200,10 @@ void register_runtime(const void* owner,
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
 
-  // Normal UI polling may call this on every frame. Re-registering the exact
-  // same runtime must therefore be a strict no-op; otherwise simply drawing the
-  // EN VIVO page would reset an active fade to OFF.
   if(session.output_worker == output_worker &&
      session.capture_worker == capture_worker)
     return;
 
-  // If a DAW reused the same object address for a new plugin instance, stale
-  // learned state must never leak into the new runtime. Different member
-  // pointers are treated as a new instance identity and start from safe OFF.
   if(session.output_worker != nullptr || session.capture_worker != nullptr) {
     clear_worker_definitions(session);
     initialize_session(session);
@@ -144,6 +245,10 @@ MemoryView view(const void* owner, std::size_t index) {
   result.mode = slot.definition.mode;
   result.fade_ms = slot.definition.fade_ms;
   result.channel_count = slot.definition.mask.count();
+  result.midi_learning = slot.midi_learn_pending;
+  result.midi_kind = slot.midi_kind;
+  result.midi_channel = slot.midi_channel;
+  result.midi_number = slot.midi_number;
 
   if(session.output_worker != nullptr && slot.configured) {
     const auto runtime = session.output_worker->live_memory_snapshot(index);
@@ -152,6 +257,109 @@ MemoryView view(const void* owner, std::size_t index) {
     result.transitioning = runtime.transitioning;
   }
   return result;
+}
+
+project::LiveMemoryPersistentState persistent_state(const void* owner) {
+  project::LiveMemoryPersistentState result;
+  if(owner == nullptr) return result;
+
+  const std::scoped_lock lock(gMutex);
+  auto& session = ensure_session_locked(owner);
+  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+    const auto& slot = session.slots[index];
+    auto& persistent = result.memories[index];
+    persistent.configured = slot.configured;
+    persistent.mode = persistent_mode(slot.definition.mode);
+    persistent.fade_ms = slot.definition.fade_ms;
+    persistent.midi_kind = persistent_midi_kind(slot.midi_kind);
+    persistent.midi_channel = slot.midi_kind == MidiBindingKind::none
+        ? 0U : slot.midi_channel;
+    persistent.midi_number = slot.midi_kind == MidiBindingKind::none
+        ? 0U : slot.midi_number;
+    if(!slot.configured) continue;
+    persistent.channels.reserve(slot.definition.mask.count());
+    for(std::size_t channel = 0U; channel < slot.definition.target.size(); ++channel) {
+      if(!slot.definition.mask.test(channel)) continue;
+      persistent.channels.push_back({
+          static_cast<std::uint16_t>(channel + 1U),
+          slot.definition.target[channel]});
+    }
+  }
+  return result;
+}
+
+ActionResult restore_persistent_state(
+    const void* owner,
+    const project::LiveMemoryPersistentState& state) {
+  if(owner == nullptr)
+    return {false, "No hay instancia AEYLA para restaurar memorias EN VIVO"};
+
+  const auto diagnostics = project::validate_live_memory_persistent_state(state);
+  if(!diagnostics.empty())
+    return {false, "live.bin inválido · " + diagnostics.front()};
+
+  std::array<SlotState, kOperatorMemoryCount> restored{};
+  for(std::size_t index = 0U; index < restored.size(); ++index) {
+    initialize_slot(index, restored[index]);
+    const auto& source = state.memories[index];
+    auto& target = restored[index];
+    target.configured = source.configured;
+    target.definition.mode = runtime_mode(source.mode);
+    target.definition.fade_ms = source.fade_ms;
+    target.midi_kind = runtime_midi_kind(source.midi_kind);
+    target.midi_channel = source.midi_channel;
+    target.midi_number = source.midi_number;
+    if(!source.configured) continue;
+
+    for(const auto& channel : source.channels) {
+      const std::size_t zero_based = static_cast<std::size_t>(channel.slot - 1U);
+      target.definition.mask.set(zero_based);
+      target.definition.target[zero_based] = channel.value;
+    }
+    std::string definition_error;
+    if(!output::validate_live_memory_definition(
+           target.definition, definition_error))
+      return {false, target.definition.name + " · " + definition_error};
+  }
+
+  const std::scoped_lock lock(gMutex);
+  auto& session = ensure_session_locked(owner);
+  auto* output_worker = session.output_worker;
+  auto* capture_worker = session.capture_worker;
+
+  if(output_worker != nullptr) {
+    clear_worker_definitions(session);
+    for(std::size_t index = 0U; index < restored.size(); ++index) {
+      if(!restored[index].configured) continue;
+      std::string error;
+      if(!output_worker->configure_live_memory(
+             index, restored[index].definition, error)) {
+        output_worker->reset_live_memories();
+        for(std::size_t clear_index = 0U;
+            clear_index < restored.size(); ++clear_index)
+          output_worker->clear_live_memory(clear_index);
+        initialize_session(session);
+        session.output_worker = output_worker;
+        session.capture_worker = capture_worker;
+        return {false, "No se pudo restaurar memoria EN VIVO · " + error};
+      }
+    }
+    output_worker->reset_live_memories();
+  }
+
+  session.slots = std::move(restored);
+  session.persistence_dirty = false;
+  return {true, "Memorias EN VIVO restauradas · niveles seguros OFF / 0%"};
+}
+
+bool consume_persistence_dirty(const void* owner) noexcept {
+  if(owner == nullptr) return false;
+  const std::scoped_lock lock(gMutex);
+  const auto iterator = gSessions.find(owner);
+  if(iterator == gSessions.end() || !iterator->second.persistence_dirty)
+    return false;
+  iterator->second.persistence_dirty = false;
+  return true;
 }
 
 ActionResult learn_from_avolites(const void* owner, std::size_t index) {
@@ -163,6 +371,10 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   if(session.capture_worker == nullptr || session.output_worker == nullptr)
     return {false, "El runtime de red EN VIVO no está disponible"};
 
+  auto& slot = session.slots[index];
+  if(edit_blocked_locked(session, index))
+    return active_edit_blocked(slot);
+
   const auto stats = session.capture_worker->stats();
   if(!stats.running)
     return {false, "Art-Net RX no está activo · revisa RED / SALIDA"};
@@ -173,7 +385,6 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   if(!session.capture_worker->latest_frame(rx))
     return {false, "Avolites aún no entregó un frame DMX completo"};
 
-  auto& slot = session.slots[index];
   if(!slot.learn_pending) {
     slot.learn_baseline = rx;
     slot.learn_pending = true;
@@ -205,6 +416,7 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   slot.definition = learned;
   slot.configured = true;
   slot.learn_pending = false;
+  session.persistence_dirty = true;
   const auto changed = mask.count();
   return {true,
           slot.definition.name + " APRENDIDA · " +
@@ -233,7 +445,7 @@ ActionResult toggle(const void* owner, std::size_t index) {
     return {false, slot.definition.name + " · primero APRENDER desde Avolites"};
   if(session.output_worker == nullptr)
     return {false, "La salida Art-Net EN VIVO no está disponible"};
-  if(!session.output_worker->toggle_live_memory(index))
+  if(!toggle_locked(session, index))
     return {false,
             slot.definition.name +
                 " · salida física no armada o bloqueada por seguridad"};
@@ -262,7 +474,7 @@ ActionResult set_fader_level(const void* owner,
   const float normalized = std::isfinite(level)
       ? std::clamp(level, 0.0F, 1.0F)
       : 0.0F;
-  if(!session.output_worker->set_live_memory_level(index, normalized, true))
+  if(!set_fader_locked(session, index, normalized))
     return {false,
             slot.definition.name +
                 " · salida física no armada o bloqueada por seguridad"};
@@ -283,6 +495,9 @@ ActionResult cycle_fade(const void* owner,
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
+  if(edit_blocked_locked(session, index))
+    return active_edit_blocked(slot);
+
   const auto current = std::find(kFadePresetsMs.begin(),
                                  kFadePresetsMs.end(),
                                  slot.definition.fade_ms);
@@ -299,6 +514,7 @@ ActionResult cycle_fade(const void* owner,
   std::string error;
   if(slot.configured && !reconfigure_locked(session, index, error))
     return {false, "No se pudo aplicar el nuevo fade · " + error};
+  session.persistence_dirty = true;
   return {true,
           slot.definition.name + " · FADE " +
               fade_label(slot.definition.fade_ms) + " · nivel reiniciado OFF"};
@@ -310,20 +526,114 @@ ActionResult toggle_mode(const void* owner, std::size_t index) {
   const std::scoped_lock lock(gMutex);
   auto& session = ensure_session_locked(owner);
   auto& slot = session.slots[index];
+  if(edit_blocked_locked(session, index))
+    return active_edit_blocked(slot);
+
   slot.definition.mode =
       slot.definition.mode == output::LiveMemoryControlMode::toggle
           ? output::LiveMemoryControlMode::fader
           : output::LiveMemoryControlMode::toggle;
 
+  clear_binding(slot);
+
   std::string error;
   if(slot.configured && !reconfigure_locked(session, index, error))
     return {false, "No se pudo aplicar el modo de memoria · " + error};
+  session.persistence_dirty = true;
   return {true,
           slot.definition.name + " · " +
               (slot.definition.mode == output::LiveMemoryControlMode::toggle
-                   ? "BOTÓN / TOGGLE"
-                   : "FADER") +
+                   ? "BOTÓN / TOGGLE · MIDI NOTE pendiente"
+                   : "FADER · MIDI CC pendiente") +
               " · nivel reiniciado OFF"};
+}
+
+ActionResult arm_midi_learn(const void* owner, std::size_t index) {
+  if(owner == nullptr || index >= kOperatorMemoryCount)
+    return invalid_index();
+  const std::scoped_lock lock(gMutex);
+  auto& session = ensure_session_locked(owner);
+  auto& slot = session.slots[index];
+  if(!slot.configured)
+    return {false, slot.definition.name + " · primero APRENDER DMX desde Avolites"};
+
+  for(auto& candidate : session.slots)
+    candidate.midi_learn_pending = false;
+  slot.midi_learn_pending = true;
+
+  return {true,
+          slot.definition.name +
+              (slot.definition.mode == output::LiveMemoryControlMode::toggle
+                   ? " · MIDI LEARN: presiona una NOTA"
+                   : " · MIDI LEARN: mueve un FADER/KNOB CC")};
+}
+
+ActionResult clear_midi_binding(const void* owner, std::size_t index) {
+  if(owner == nullptr || index >= kOperatorMemoryCount)
+    return invalid_index();
+  const std::scoped_lock lock(gMutex);
+  auto& session = ensure_session_locked(owner);
+  auto& slot = session.slots[index];
+  const bool changed = slot.midi_kind != MidiBindingKind::none;
+  clear_binding(slot);
+  if(changed) session.persistence_dirty = true;
+  return {true, slot.definition.name + " · MIDI eliminado"};
+}
+
+bool process_midi_event(const void* owner,
+                        const runtime::HostEvent& event) {
+  if(owner == nullptr) return false;
+  const std::scoped_lock lock(gMutex);
+  const auto iterator = gSessions.find(owner);
+  if(iterator == gSessions.end()) return false;
+  auto& session = iterator->second;
+  const bool isLiveCc = event.reserved == kLiveCcMarker;
+
+  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+    auto& slot = session.slots[index];
+    if(!slot.midi_learn_pending) continue;
+
+    const bool wantsNote =
+        slot.definition.mode == output::LiveMemoryControlMode::toggle;
+    const bool validNote = wantsNote && !isLiveCc &&
+        event.type == runtime::HostEventType::note_on && event.value > 0.0F;
+    const bool validCc = !wantsNote && isLiveCc;
+    if(!validNote && !validCc)
+      return false;
+
+    slot.midi_learn_pending = false;
+    slot.midi_kind = validNote
+        ? MidiBindingKind::note
+        : MidiBindingKind::control_change;
+    slot.midi_channel = event.channel;
+    slot.midi_number = event.note;
+    remove_duplicate_binding(session, index, slot.midi_kind,
+                             slot.midi_channel, slot.midi_number);
+    session.persistence_dirty = true;
+    return true;
+  }
+
+  for(std::size_t index = 0U; index < session.slots.size(); ++index) {
+    auto& slot = session.slots[index];
+    if(slot.midi_kind == MidiBindingKind::none ||
+       slot.midi_channel != event.channel ||
+       slot.midi_number != event.note)
+      continue;
+
+    if(slot.midi_kind == MidiBindingKind::note && !isLiveCc &&
+       (event.type == runtime::HostEventType::note_on ||
+        event.type == runtime::HostEventType::note_off)) {
+      if(event.type == runtime::HostEventType::note_on && event.value > 0.0F)
+        (void)toggle_locked(session, index);
+      return true;
+    }
+
+    if(slot.midi_kind == MidiBindingKind::control_change && isLiveCc) {
+      (void)set_fader_locked(session, index, event.value);
+      return true;
+    }
+  }
+  return false;
 }
 
 void reset_levels(const void* owner) noexcept {

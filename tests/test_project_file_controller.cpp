@@ -53,6 +53,29 @@ aeyla::show::ShowProgram make_show(
   program.songs.push_back(std::move(song));
   return program;
 }
+
+aeyla::project::LiveMemoryPersistentState make_live_state() {
+  using namespace aeyla::project;
+  LiveMemoryPersistentState state;
+  auto& front = state.memories[0];
+  front.configured = true;
+  front.mode = PersistentLiveMemoryMode::toggle;
+  front.fade_ms = 1000U;
+  front.midi_kind = PersistentMidiBindingKind::note;
+  front.midi_channel = 3U;
+  front.midi_number = 64U;
+  front.channels = {{1U, 200U}, {3U, 100U}};
+
+  auto& haze = state.memories[1];
+  haze.configured = true;
+  haze.mode = PersistentLiveMemoryMode::fader;
+  haze.fade_ms = 1500U;
+  haze.midi_kind = PersistentMidiBindingKind::control_change;
+  haze.midi_channel = 2U;
+  haze.midi_number = 74U;
+  haze.channels = {{2U, 180U}};
+  return state;
+}
 }  // namespace
 
 int main() {
@@ -105,11 +128,13 @@ int main() {
   check(model.snapshot().song_count == 1U && model.snapshot().performance_ready,
         "authored show must satisfy performance preflight before save");
 
+  const auto live_state = make_live_state();
+  controller.set_live_memory_state(live_state);
   const auto package = directory / "controller.aeylashow";
   const auto saved = controller.save_as(package, "2026-08-07T04:05:00Z");
   check(saved.succeeded &&
             saved.operation == ProjectFileOperation::save_as,
-        "Save As must create, verify and report a new-path project+show save");
+        "Save As must create, verify and report a new-path project+show+live save");
   check(controller.current_path() == package,
         "Save As must adopt the selected package path");
   check(!model.snapshot().project_dirty,
@@ -129,7 +154,7 @@ int main() {
   ProjectFileController reopened(reopened_model);
   const auto opened = reopened.open(package);
   check(opened.succeeded && opened.operation == ProjectFileOperation::open,
-        "Open must validate and report a saved project+show package");
+        "Open must validate and report a saved project+show+live package");
   check(reopened.current_path() == package,
         "Open must adopt the selected package path");
   check(reopened_model.snapshot().blackout &&
@@ -145,9 +170,12 @@ int main() {
             reopened_model.project_document().visual.speed == 0.64F &&
             reopened_model.project_document().visual.white_extraction == 0.77F,
         "Open must restore authored visual state from the package");
+  check(reopened.live_memory_state() == live_state,
+        "Open must restore the persisted live-memory configuration DTO");
 
   const std::string current_project_id = reopened_model.snapshot().project_id;
   const auto current_show = reopened_model.show_program();
+  const auto current_live = reopened.live_memory_state();
   const auto invalid = directory / "invalid.aeylashow";
   {
     std::ofstream output(invalid, std::ios::binary | std::ios::trunc);
@@ -159,8 +187,9 @@ int main() {
   check(reopened.current_path() == package &&
             reopened_model.snapshot().project_id == current_project_id &&
             reopened_model.snapshot().project_valid &&
-            reopened_model.show_program() == current_show,
-        "corrupt Open must preserve the current valid project+show runtime and path");
+            reopened_model.show_program() == current_show &&
+            reopened.live_memory_state() == current_live,
+        "corrupt Open must preserve current project+show+live runtime/path state");
 
   auto incompatible = aeyla::project::make_default_project_document(
       "99999999-aaaa-4bbb-8ccc-333333333333",
@@ -179,9 +208,10 @@ int main() {
             reopened_model.snapshot().project_id == current_project_id &&
             reopened_model.snapshot().project_valid &&
             reopened_model.show_program() == current_show &&
+            reopened.live_memory_state() == current_live &&
             reopened_model.snapshot().blackout &&
             !reopened_model.snapshot().output_armed,
-        "runtime-incompatible Open must preserve the current safe valid project+show");
+        "runtime-incompatible Open must preserve current safe project+show+live state");
 
   auto partial_rig = aeyla::project::make_default_project_document(
       "77777777-aaaa-4bbb-8ccc-444444444444",
@@ -198,8 +228,9 @@ int main() {
   check(reopened.current_path() == package &&
             reopened_model.snapshot().project_id == current_project_id &&
             reopened_model.snapshot().project_valid &&
-            reopened_model.show_program() == current_show,
-        "unsupported rig-mode Open must not normalize or replace the current show");
+            reopened_model.show_program() == current_show &&
+            reopened.live_memory_state() == current_live,
+        "unsupported rig-mode Open must not replace current project+show+live state");
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);
