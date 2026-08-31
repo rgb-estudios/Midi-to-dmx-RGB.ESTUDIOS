@@ -45,6 +45,18 @@ public:
   {
     (void)mod;
 
+    // ARCHIVO is modal for navigation/content, while the two physical safety
+    // controls remain immediately reachable. A first click on a tab therefore
+    // closes ARCHIVO and is consumed instead of changing workspace underneath.
+    if(mFileMenuOpen && Contains(Header(), x, y) &&
+       !Contains(HeaderArmButton(), x, y) &&
+       !Contains(HeaderBlackoutButton(), x, y))
+    {
+      mFileMenuOpen = false;
+      SetDirty(false);
+      return;
+    }
+
     // The shell is always first. Workspace navigation is presentation-only and
     // can never touch physical authority. ARM and APAGÓN are explicit actions.
     for(std::size_t index = 0U; index < 4U; ++index)
@@ -56,7 +68,7 @@ public:
       mLiveConfigIndex = -1;
       mDraggingMemory = -1;
       if(mLiveOpen)
-        mLiveMessage = "EN VIVO · operación limpia; CONFIGURAR abre Learn, modo y fade sólo para una memoria.";
+        mLiveMessage = "EN VIVO · operación limpia; EDITAR abre DMX, MIDI, modo y fade sólo para una memoria.";
       SetDirty(false);
       return;
     }
@@ -538,7 +550,7 @@ private:
     mLiveConfigIndex = -1;
     mDraggingMemory = -1;
     mLiveMessageError = false;
-    mLiveMessage = "EN VIVO · selecciona una memoria para operar; CONFIGURAR abre Learn/fade/modo sólo en esa memoria.";
+    mLiveMessage = "EN VIVO · selecciona una memoria para operar; EDITAR abre DMX/MIDI/modo/fade sólo en esa memoria.";
     SetDirty(false);
   }
 
