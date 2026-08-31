@@ -1,0 +1,47 @@
+name: r106-fix-neutral-project-name-test
+
+on:
+  push:
+    branches:
+      - rgb/r10.6-pro-ui-stabilization-20260830
+    paths:
+      - .github/workflows/r106-fix-neutral-project-name-test.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rgb/r10.6-pro-ui-stabilization-20260830
+          fetch-depth: 0
+      - name: Update neutral project-name expectation
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('tests/test_application_model.cpp')
+          text = path.read_text(encoding='utf-8')
+          old = 'check(model.snapshot().project_name == "Untitled AEYLA Show",\n        "snapshot must expose the project-owned name");'
+          new = 'check(model.snapshot().project_name == "Untitled Show",\n        "snapshot must expose the neutral project-owned name");'
+          if old not in text:
+              raise SystemExit('guard failed: expected legacy test assertion not found')
+          if text.count(old) != 1:
+              raise SystemExit(f'guard failed: expected exactly one legacy assertion, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+      - name: Verify only intended expectation changed
+        shell: bash
+        run: |
+          grep -F 'project_name == "Untitled Show"' tests/test_application_model.cpp
+          ! grep -F 'project_name == "Untitled AEYLA Show"' tests/test_application_model.cpp
+      - name: Commit result and remove applicator
+        shell: bash
+        run: |
+          rm .github/workflows/r106-fix-neutral-project-name-test.yml
+          git config user.name "rgb-estudios-r10.6-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add tests/test_application_model.cpp .github/workflows/r106-fix-neutral-project-name-test.yml
+          git commit -m "test(r10.6): expect neutral default project name"
+          git push origin HEAD:rgb/r10.6-pro-ui-stabilization-20260830
