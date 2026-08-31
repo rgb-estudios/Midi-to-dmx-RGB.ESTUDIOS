@@ -822,10 +822,10 @@ private:
   void DrawHeader(IGraphics& g)
   {
     g.DrawText(IText(21.0F, kText, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "AEYLA",
+               "RGB ESTUDIOS",
                IRECT(mHeader.L, mHeader.T, mHeader.L + 282.0F, mHeader.B - 20.0F));
     g.DrawText(IText(12.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
-               "RGB ESTUDIOS · R09 PRETEST · MIDI REC DIRECT",
+               "SHOW CONTROL · R10.6 PRETEST",
                IRECT(mHeader.L, mHeader.B - 27.0F,
                      mHeader.L + 290.0F, mHeader.B));
 
@@ -1293,7 +1293,7 @@ private:
                  ("CAPTURA DMX: N" + std::to_string(mapping.capture_start_note) +
                   " REC START fija CERO · N" +
                   std::to_string(mapping.capture_stop_note) +
-                  " REC STOP finaliza · AEYLA no usa MTC.").c_str(),
+                  " REC STOP finaliza · el plugin no usa MTC.").c_str(),
                  IRECT(mWorkspace.L + 18.0F, footerTop + 23.0F,
                        mWorkspace.R - 18.0F, footerTop + 52.0F));
       g.DrawText(IText(12.0F, kWarn, "AeylaUI", EAlign::Near, EVAlign::Top),
@@ -1333,7 +1333,7 @@ private:
                       (mPlug.BackendReady() ? kGood : kWarn),
                   routeSelectionBlocked);
 
-    Field(g, mLocalNetworkField, "IPv4 AEYLA / MÁSCARA DE SUBRED",
+    Field(g, mLocalNetworkField, "IPv4 TX / MÁSCARA DE SUBRED",
           mLocalNetworkText.empty() ? "clic para configurar" : mLocalNetworkText,
           mLocalNetworkText.empty() ? kWarn : kText);
     const bool networkApplyBlocked =
@@ -1500,7 +1500,7 @@ private:
     mMessage = result.message;
     if(result.succeeded) return;
     if(auto* ui = GetUI())
-      ui->ShowMessageBox(result.message.c_str(), "AEYLA · OPERACIÓN BLOQUEADA", kMB_OK);
+      ui->ShowMessageBox(result.message.c_str(), "RGB ESTUDIOS · OPERACIÓN BLOQUEADA", kMB_OK);
   }
 
   void ReportInline(const aeyla::product::AuthoringResult& result)

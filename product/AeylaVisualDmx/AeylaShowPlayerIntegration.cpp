@@ -402,7 +402,8 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
       const std::scoped_lock lock(mNetworkMutex);
       mNetworkConfigurationMessage = "RED LISTA · " + network->address +
           "/" + std::to_string(network->prefix_length) + " → " +
-          network->directed_broadcast + " · U1 · SALIDA DESARMADA";
+          network->directed_broadcast +
+          " · U1 · SALIDA DESARMADA · APAGÓN ACTIVO";
       result.message = mNetworkConfigurationMessage;
     }
     return result;
@@ -423,7 +424,7 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ApplyTxNetworkFromUI(
     return {false, {}, std::move(error)};
   }
   return {true, network->address,
-          "CAMBIO EN CURSO · AEYLA agregará " + network->address + "/" +
+          "CAMBIO EN CURSO · se agregará " + network->address + "/" +
               std::to_string(network->prefix_length) + " a " + adapter.name +
               " sin borrar su red existente"};
 }

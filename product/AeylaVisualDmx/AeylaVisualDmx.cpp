@@ -845,7 +845,8 @@ void AeylaVisualDmx::ReconcileNetworkConfiguration() noexcept
       mNetworkConfigurationMessage = ready
           ? "RED LISTA · " + network->address + "/" +
                 std::to_string(network->prefix_length) + " → " +
-                network->directed_broadcast + " · U1 · SALIDA DESARMADA"
+                network->directed_broadcast +
+                " · U1 · SALIDA DESARMADA · APAGÓN ACTIVO"
           : "IPv4 APLICADA / MOTOR ART-NET BLOQUEADO · " + mOutputBackendError;
     }
     RestartCaptureInputFromRouting();
