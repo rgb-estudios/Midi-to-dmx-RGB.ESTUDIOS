@@ -255,8 +255,21 @@ public:
 
     if(Contains(mLocalNetworkField, x, y))
     {
-      BeginTextEdit(EditKind::local_network, mLocalNetworkField,
-                    mLocalNetworkText);
+      const auto output = mPlug.ArtNetOutputStatus();
+      if(mPlug.NetworkConfigurationBusy())
+        mMessage = "Espera a que termine el cambio de red actual.";
+      else if(mPlug.TakeRecording())
+        mMessage = "Detén y guarda la toma antes de editar la red TX.";
+      else if(mPlug.TakeOutputArmed() || mPlug.OutputArmed() ||
+              output.enabled || output.override_enabled)
+        mMessage = "Desarma la salida antes de editar la red TX.";
+      else
+      {
+        BeginTextEdit(EditKind::local_network, mLocalNetworkField,
+                      mLocalNetworkText);
+        return;
+      }
+      SetDirty(false);
       return;
     }
     if(Contains(mApplyNetworkButton, x, y))
@@ -364,8 +377,19 @@ public:
       Report(mPlug.RenameSongFromUI(mEditingSongIndex, value));
     else if(mEditKind == EditKind::local_network)
     {
-      mLocalNetworkText = value;
-      mMessage = "Red editada · presiona APLICAR IP Y PREPARAR ART-NET.";
+      const auto output = mPlug.ArtNetOutputStatus();
+      if(mPlug.NetworkConfigurationBusy() || mPlug.TakeRecording() ||
+         mPlug.TakeOutputArmed() || mPlug.OutputArmed() ||
+         output.enabled || output.override_enabled)
+      {
+        RestoreNetworkFieldFromSelectedTx();
+        mMessage = "Edición descartada · desarma la salida y espera que la red esté libre.";
+      }
+      else
+      {
+        mLocalNetworkText = value;
+        mMessage = "Red editada · aún no aplicada · presiona APLICAR IP Y PREPARAR ART-NET.";
+      }
     }
     else if(mEditKind == EditKind::take_in_time ||
             mEditKind == EditKind::take_out_time)
@@ -1333,12 +1357,15 @@ private:
                       (mPlug.BackendReady() ? kGood : kWarn),
                   routeSelectionBlocked);
 
-    Field(g, mLocalNetworkField, "IPv4 TX / MÁSCARA DE SUBRED",
-          mLocalNetworkText.empty() ? "clic para configurar" : mLocalNetworkText,
-          mLocalNetworkText.empty() ? kWarn : kText);
-    const bool networkApplyBlocked =
-        networkBusy || mPlug.TakeRecording() ||
-        mPlug.TakeOutputArmed() || mPlug.OutputArmed() || physicalAuthority;
+    Field(g, mLocalNetworkField,
+          routeSelectionBlocked ? "IPv4 TX / MÁSCARA · BLOQUEADA"
+                                : "IPv4 TX / MÁSCARA DE SUBRED",
+          mLocalNetworkText.empty()
+              ? (routeSelectionBlocked ? "DESARMA PARA EDITAR" : "clic para configurar")
+              : mLocalNetworkText,
+          routeSelectionBlocked ? kWarn :
+              (mLocalNetworkText.empty() ? kWarn : kText));
+    const bool networkApplyBlocked = routeSelectionBlocked;
     Button(g, mApplyNetworkButton,
            networkBusy ? "APLICANDO RED · ESPERA" :
                (mPlug.TakeRecording() ? "BLOQUEADA · GRABANDO" :
