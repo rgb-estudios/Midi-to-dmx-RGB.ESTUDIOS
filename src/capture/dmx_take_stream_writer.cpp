@@ -17,6 +17,10 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <io.h>
 #else
 #include <unistd.h>
@@ -202,7 +206,7 @@ class DmxTakeStreamWriter::Impl final {
        !write_text(file_, config_.song_name) ||
        !write_text(file_, config_.take_name) ||
        !write_text(file_, config_.source_ipv4) ||
-       !sync_file(file_)) {
+       std::fflush(file_) != 0) {
       close_file();
       remove_quietly(temporary_path_);
       error_message = "Could not initialize streamed Take file";
@@ -408,6 +412,11 @@ class DmxTakeStreamWriter::Impl final {
 
  private:
   void run() noexcept {
+#ifdef _WIN32
+    // DMX capture is only ~22 KiB/s at 44 Hz. Keep its disk worker in Windows
+    // background mode so it cannot compete with REAPER's real-time audio I/O.
+    (void)SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+#endif
     while(!stop_requested_.load(std::memory_order_acquire) || !queue_.empty()) {
       DmxUniverse frame{};
       if(queue_.try_pop(frame)) {
@@ -418,9 +427,11 @@ class DmxTakeStreamWriter::Impl final {
         }
         const auto written =
             frames_written_.fetch_add(1U, std::memory_order_release) + 1U;
-        if(written % config_.frames_per_second == 0U &&
-           !patch_frame_count(written, true)) {
-          fail("Streamed Take durable checkpoint failed");
+        const auto checkpoint_frames =
+            static_cast<std::uint64_t>(config_.frames_per_second) * 5U;
+        if(checkpoint_frames > 0U && written % checkpoint_frames == 0U &&
+           !patch_frame_count(written, false)) {
+          fail("Streamed Take buffered checkpoint failed");
           accepting_.store(false, std::memory_order_release);
           break;
         }

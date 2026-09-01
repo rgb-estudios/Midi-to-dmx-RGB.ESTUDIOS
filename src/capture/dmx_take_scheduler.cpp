@@ -447,7 +447,8 @@ void DmxTakeScheduler::update_position_locked(
 void DmxTakeScheduler::run() noexcept {
   running_.store(true, std::memory_order_release);
   using Clock = std::chrono::steady_clock;
-  constexpr auto kLoopPeriod = std::chrono::milliseconds(2);
+  constexpr auto kLegacyLoopPeriod = std::chrono::milliseconds(2);
+  constexpr auto kFileWatchdogPeriod = std::chrono::milliseconds(10);
   constexpr auto kHeartbeatTimeout = std::chrono::milliseconds(750);
   std::uint64_t lastRevision = 0U;
   auto lastHeartbeat = Clock::now();
@@ -497,7 +498,7 @@ void DmxTakeScheduler::run() noexcept {
             ? "Salida DMX desarmada: el host inició renderizado sin conexión"
             : "Salida DMX desarmada automáticamente: se perdió el pulso del host (reloj de muestras) durante PLAY";
       }
-      std::this_thread::sleep_for(kLoopPeriod);
+      std::this_thread::sleep_for(kFileWatchdogPeriod);
       continue;
     }
 
@@ -518,7 +519,7 @@ void DmxTakeScheduler::run() noexcept {
         publish_hold_locked();
     }
 
-    std::this_thread::sleep_for(kLoopPeriod);
+    std::this_thread::sleep_for(kLegacyLoopPeriod);
   }
 
   if(output_ != nullptr)

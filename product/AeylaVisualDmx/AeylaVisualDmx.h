@@ -222,8 +222,6 @@ public:
   [[nodiscard]] aeyla::live_memory_session::MemoryView LiveMemoryViewFromUI(
       std::size_t index)
   {
-    aeyla::live_memory_session::register_runtime(
-        this, &mArtNetOutput, &mArtNetCapture);
     return aeyla::live_memory_session::view(this, index);
   }
 

@@ -170,6 +170,8 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
   };
 #endif
 
+  aeyla::live_memory_session::register_runtime(
+      this, &mArtNetOutput, &mArtNetCapture);
   StartRuntimeWorker();
 }
 
@@ -992,9 +994,6 @@ void AeylaVisualDmx::DrainHostEventsLocked()
 {
   if(mHostIngress.consume_transient_release_request())
     mModel.release_transients();
-
-  aeyla::live_memory_session::register_runtime(
-      this, &mArtNetOutput, &mArtNetCapture);
 
   aeyla::runtime::HostEvent event{};
   while(mHostIngress.try_consume(event))
