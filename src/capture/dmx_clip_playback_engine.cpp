@@ -8,7 +8,10 @@
 namespace aeyla::capture {
 namespace {
 
-constexpr auto kWorkerSleep = std::chrono::milliseconds(1);
+// DMX runs at <=60 Hz (22.7 ms at the normal 44 Hz). Polling the file
+// cursor every 1 ms creates needless wakeups and mutex traffic beside the
+// audio engine. 4 ms preserves sub-frame response with far less pressure.
+constexpr auto kWorkerSleep = std::chrono::milliseconds(4);
 
 bool valid_sample_rate(double sample_rate) noexcept {
   return std::isfinite(sample_rate) &&

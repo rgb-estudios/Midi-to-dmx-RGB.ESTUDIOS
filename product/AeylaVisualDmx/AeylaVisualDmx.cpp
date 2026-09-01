@@ -520,7 +520,9 @@ void AeylaVisualDmx::StopRuntimeWorker() noexcept
 void AeylaVisualDmx::RuntimeLoop() noexcept
 {
   using Clock = std::chrono::steady_clock;
-  constexpr auto kRuntimePeriod = std::chrono::milliseconds(4);
+  // 125 Hz is comfortably above DMX frame rate and MIDI operator needs,
+  // while avoiding a 250 Hz full-model reconciliation loop beside the DAW.
+  constexpr auto kRuntimePeriod = std::chrono::milliseconds(8);
   auto next = Clock::now();
 
   while(!mRuntimeStopRequested.load(std::memory_order_acquire))
@@ -553,8 +555,11 @@ void AeylaVisualDmx::RuntimeTick() noexcept
         mLastCaptureTransportMarkerRevision = markerRevision;
       }
 
-      const auto capture = mArtNetCapture.stats();
-      (void)mCaptureSyncAnchor.observe(host, capture.recorded_frames);
+      // REC hot path: only read the lock-free frame counter. stats() also
+      // copies strings/paths and queries the disk writer, which is useful
+      // for UI diagnostics but unnecessary at runtime tick frequency.
+      const auto recordedFrames = mArtNetCapture.recorded_frames_fast();
+      (void)mCaptureSyncAnchor.observe(host, recordedFrames);
     }
     else
     {

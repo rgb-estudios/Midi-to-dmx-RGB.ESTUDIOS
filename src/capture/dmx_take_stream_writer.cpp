@@ -34,6 +34,11 @@ constexpr std::uint32_t kMaximumSongNameBytes = 512U;
 constexpr std::uint32_t kMaximumTakeNameBytes = 512U;
 constexpr std::uint32_t kMaximumSourceIpv4Bytes = 64U;
 constexpr std::uint64_t kMaximumDurationSeconds = 60U * 60U;
+// Recording shares the same storage subsystem as the DAW. A forced disk
+// cache flush every second can stall REAPER's audio recorder even though
+// this writer runs on a background thread. Keep lightweight header
+// checkpoints during REC and reserve the durable fsync/_commit for STOP.
+constexpr std::uint64_t kStreamCheckpointSeconds = 5U;
 constexpr std::uintmax_t kMaximumTakeFileBytes = 128U * 1024U * 1024U;
 constexpr std::uint64_t kFnvOffset = 14695981039346656037ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
@@ -418,9 +423,12 @@ class DmxTakeStreamWriter::Impl final {
         }
         const auto written =
             frames_written_.fetch_add(1U, std::memory_order_release) + 1U;
-        if(written % config_.frames_per_second == 0U &&
-           !patch_frame_count(written, true)) {
-          fail("Streamed Take durable checkpoint failed");
+        const auto checkpoint_frames =
+            static_cast<std::uint64_t>(config_.frames_per_second) *
+            kStreamCheckpointSeconds;
+        if(checkpoint_frames > 0U && written % checkpoint_frames == 0U &&
+           !patch_frame_count(written, false)) {
+          fail("Streamed Take checkpoint failed");
           accepting_.store(false, std::memory_order_release);
           break;
         }
