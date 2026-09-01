@@ -1,0 +1,74 @@
+name: r108-apply-performance-stability
+
+on:
+  push:
+    branches:
+      - rgb/r10.8-performance-stability-20260831
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rgb/r10.8-performance-stability-20260831
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Skip after one-shot has been consumed
+        id: staged
+        shell: bash
+        run: |
+          if [ -f tools/r108_apply_performance_stability.py ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply deterministic stabilization patch
+        if: steps.staged.outputs.present == 'true'
+        run: |
+          python3 tools/r108_apply_performance_stability.py
+          git diff --check
+
+      - name: Configure core
+        if: steps.staged.outputs.present == 'true'
+        run: cmake -S . -B build
+
+      - name: Build core
+        if: steps.staged.outputs.present == 'true'
+        run: cmake --build build --config Release -j 2
+
+      - name: Run core tests
+        if: steps.staged.outputs.present == 'true'
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Verify performance contract
+        if: steps.staged.outputs.present == 'true'
+        shell: bash
+        run: |
+          grep -q 'kStreamCheckpointSeconds = 5U' src/capture/dmx_take_stream_writer.cpp
+          grep -q 'patch_frame_count(written, false)' src/capture/dmx_take_stream_writer.cpp
+          ! grep -q 'Streamed Take durable checkpoint failed' src/capture/dmx_take_stream_writer.cpp
+          grep -q 'milliseconds(8)' product/AeylaVisualDmx/AeylaVisualDmx.cpp
+          grep -q 'recorded_frames_fast()' product/AeylaVisualDmx/AeylaVisualDmx.cpp
+          grep -q 'kWorkerSleep = std::chrono::milliseconds(4)' src/capture/dmx_clip_playback_engine.cpp
+          grep -q 'kLoopPeriod = std::chrono::milliseconds(5)' src/capture/dmx_take_scheduler.cpp
+
+      - name: Publish stabilization commit
+        if: steps.staged.outputs.present == 'true'
+        shell: bash
+        run: |
+          git config user.name "rgb-estudios-r10.8-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add product/AeylaVisualDmx/AeylaVisualDmx.cpp \
+                  src/capture/dmx_take_stream_writer.cpp \
+                  src/capture/dmx_clip_playback_engine.cpp \
+                  src/capture/dmx_take_scheduler.cpp
+          git rm tools/r108_apply_performance_stability.py
+          git diff --cached --check
+          git commit -m "perf(r10.8): reduce DAW contention during DMX recording"
+          git push origin HEAD:rgb/r10.8-performance-stability-20260831
