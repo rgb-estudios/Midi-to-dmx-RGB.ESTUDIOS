@@ -354,7 +354,7 @@ private:
     else if(projectName.empty() || projectName == "Untitled Show")
       projectName = "SIN TÍTULO";
     const std::string showContext =
-        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.7 PRETEST";
+        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.8 PRETEST";
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                showContext.c_str(),
                IRECT(header.L + 14.0F, header.T + 28.0F,

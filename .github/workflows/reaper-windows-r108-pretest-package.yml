@@ -1,0 +1,141 @@
+name: reaper-windows-r108-pretest-package
+
+on:
+  pull_request:
+    paths:
+      - product/**
+      - src/**
+      - tests/**
+      - docs/R10_8_PERFORMANCE_STABILITY_PRETEST.md
+      - tools/maintenance/windows/**
+      - tools/network/**
+      - .github/workflows/reaper-windows-r108-pretest-package.yml
+  workflow_dispatch:
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  package-windows-reaper-r108-pretest:
+    name: Windows / RGB Live Control R10.8 / performance PRETEST
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Validate maintenance tools
+        shell: pwsh
+        run: |
+          $script = (Resolve-Path "tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1").Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; throw "Maintenance PowerShell syntax validation failed" }
+          & $script -Action Audit
+
+      - name: Fetch pinned plugin dependencies
+        shell: pwsh
+        run: |
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = "external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Build RGB Live Control VST3
+        shell: pwsh
+        run: |
+          cmake -S product -B build-product -DIPLUG2_DIR="${{ github.workspace }}/external/iPlug2" -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3
+
+      - name: Verify bundle and PE image
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          if (-not $bundle) { throw "AeylaVisualDmx.vst3 bundle not found" }
+          $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $helper = Get-ChildItem $bundle.FullName -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
+          if (-not $binary -or -not $helper) { throw "Critical VST3/helper binary missing" }
+          if ($binary.Length -lt 1MB) { throw "RGB Live Control VST3 binary unexpectedly small" }
+          $stream = [System.IO.File]::OpenRead($binary.FullName)
+          try { $b0=$stream.ReadByte(); $b1=$stream.ReadByte() } finally { $stream.Dispose() }
+          if ($b0 -ne 0x4D -or $b1 -ne 0x5A) { throw "RGB Live Control VST3 lacks PE/MZ header" }
+          $helperStream = [System.IO.File]::OpenRead($helper.FullName)
+          try { $h0=$helperStream.ReadByte(); $h1=$helperStream.ReadByte() } finally { $helperStream.Dispose() }
+          if ($h0 -ne 0x4D -or $h1 -ne 0x5A) { throw "AeylaNetworkHelper.exe lacks PE/MZ header" }
+
+      - name: Package R10.8 performance PRETEST
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $root = Join-Path $PWD "reaper-pretest"
+          $vst3Root = Join-Path $root "VST3"
+          New-Item -ItemType Directory -Force $vst3Root | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName (Join-Path $vst3Root "AeylaVisualDmx.vst3")
+          Copy-Item tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1 $root
+          Copy-Item tools/maintenance/windows/AUDIT_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/CLEAN_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $root
+          Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $root
+          Copy-Item docs/R10_8_PERFORMANCE_STABILITY_PRETEST.md (Join-Path $root "R10_8_PERFORMANCE_STABILITY_PRETEST.md")
+
+          @'
+          RGB LIVE CONTROL — RGB ESTUDIOS
+          R10.8 WINDOWS / REAPER PERFORMANCE PRETEST
+
+          ESTADO
+          PRETEST_NOT_SHOW_CANDIDATE. Esta revisión existe para validar estabilidad del DAW durante captura simultánea de audio + DMX.
+
+          CAMBIOS R10.8
+          - Se elimina el fsync/_commit durable periódico de cada segundo durante REC DMX.
+          - Checkpoint liviano de frame-count cada 5 s; sync durable/checksum al finalizar la toma.
+          - Runtime general 4 ms -> 8 ms.
+          - REC hot path usa contador lock-free en vez de stats completos.
+          - File player polling 1 ms -> 4 ms.
+          - Take watchdog 2 ms -> 5 ms.
+          - No cambia ARM/APAGON/PANIC/GO ni las 8 memorias renombrables R10.7.
+
+          INSTALACION
+          1. Cierra REAPER/Ableton y cualquier host VST3.
+          2. Ejecuta CLEAN_INSTALL_AEYLA.cmd.
+          3. Abre REAPER y re-scan VST3 si es necesario.
+          4. Confirma visualmente R10.8 PRETEST y revisa BUILD_ID.txt.
+
+          GATE PRINCIPAL
+          - Usa la misma sesión/buffer/interfaz que presentó tirones en R10.7.
+          - Graba audio + DMX simultáneamente durante 3–5 min.
+          - No deben existir tirones periódicos ~1 s ni dropouts atribuibles al plugin.
+          - ARM/carrier ~44 Hz debe permanecer estable.
+          - STOP DMX debe finalizar una .aeylatake válida.
+
+          Lee R10_8_PERFORMANCE_STABILITY_PRETEST.md antes de declarar esta build apta para show.
+          '@ | Set-Content -Encoding UTF8 (Join-Path $root "LEEME_PRIMERO_R10_8.txt")
+
+          $binary = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaVisualDmx.vst3" | Select-Object -First 1
+          $helper = Get-ChildItem (Join-Path $vst3Root "AeylaVisualDmx.vst3") -Recurse -File -Filter "AeylaNetworkHelper.exe" | Select-Object -First 1
+          if (-not $binary -or -not $helper) { throw "Critical binary missing from package" }
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helperHash = (Get-FileHash $helper.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          "PRODUCT_NAME=RGB Live Control" | Set-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "PRODUCT_OWNER=RGB Estudios" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "VST3_BINARY_SHA256=$hash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "NETWORK_HELPER_SHA256=$helperHash" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "SOURCE_COMMIT=$sourceCommit" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "BUILD_KIND=RGB_LIVE_CONTROL_R10_8_PERFORMANCE_STABILITY_REAPER_WINDOWS_PRETEST" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "HOST_STATE_SCHEMA=1.4" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          "STATUS=PRETEST_NOT_SHOW_CANDIDATE" | Add-Content -Encoding ASCII (Join-Path $root "BUILD_ID.txt")
+          $binaryRel = [System.IO.Path]::GetRelativePath($root, $binary.FullName).Replace('\','/')
+          $helperRel = [System.IO.Path]::GetRelativePath($root, $helper.FullName).Replace('\','/')
+          @("$hash  $binaryRel", "$helperHash  $helperRel") | Set-Content -Encoding ASCII (Join-Path $root "SHA256SUMS.txt")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RGB-Live-Control-R10.8-Performance-Stability-REAPER-Windows-PRETEST
+          path: reaper-pretest/**
+          if-no-files-found: error
+          retention-days: 90

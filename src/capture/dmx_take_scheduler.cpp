@@ -447,7 +447,10 @@ void DmxTakeScheduler::update_position_locked(
 void DmxTakeScheduler::run() noexcept {
   running_.store(true, std::memory_order_release);
   using Clock = std::chrono::steady_clock;
-  constexpr auto kLoopPeriod = std::chrono::milliseconds(2);
+  // The file player owns sample-clock playback. This scheduler primarily
+  // supervises heartbeat/authority, so a 5 ms cadence is sufficient and
+  // avoids a 500 Hz watchdog loop competing with the host.
+  constexpr auto kLoopPeriod = std::chrono::milliseconds(5);
   constexpr auto kHeartbeatTimeout = std::chrono::milliseconds(750);
   std::uint64_t lastRevision = 0U;
   auto lastHeartbeat = Clock::now();
