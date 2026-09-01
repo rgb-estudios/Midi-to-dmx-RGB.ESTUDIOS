@@ -34,16 +34,10 @@ replace_once(
     "        const auto checkpoint_frames =\n            static_cast<std::uint64_t>(config_.frames_per_second) * 5U;\n        if(checkpoint_frames > 0U && written % checkpoint_frames == 0U &&\n           !patch_frame_count(written, false)) {\n          fail(\"Streamed Take buffered checkpoint failed\");",
 )
 
-# 2) Give the disk queue a full 1 MiB of bounded headroom. This is still tiny
-# for a plugin but absorbs tens of seconds of transient storage contention.
-replace_once(
-    "src/capture/dmx_take_stream_writer.h",
-    "  static constexpr std::size_t kBufferedFrames = 1024U;",
-    "  static constexpr std::size_t kBufferedFrames = 2048U;",
-)
-
-# 3) File-backed Takes already own a dedicated clip worker. Do not also start
-# the legacy in-memory scheduler thread at 500 Hz.
+# 2) File-backed Takes already own a dedicated clip worker. Do not also start
+# the legacy in-memory scheduler thread at 500 Hz. The clip engine's original
+# 1 ms timing is intentionally preserved because heartbeat/fail-closed tests
+# depend on that deterministic safety margin.
 replace_once(
     "src/capture/dmx_take_scheduler.cpp",
     "  file_mode_.store(true, std::memory_order_release);\n  ensure_thread();\n  return true;",
@@ -60,15 +54,7 @@ replace_once(
     "    return true;\n  }\n\n  // Legacy in-memory Takes still need the scheduler worker; file-backed Takes\n  // above are driven exclusively by DmxClipPlaybackEngine.\n  ensure_thread();\n  const std::scoped_lock lock(mutex_);\n  if(take_ == nullptr || !hold_valid_) {",
 )
 
-# 4) The clip engine does not need 1000 wakeups/s to feed a 44 Hz Art-Net
-# carrier. 2 ms preserves sub-frame responsiveness while halving wakeups.
-replace_once(
-    "src/capture/dmx_clip_playback_engine.cpp",
-    "constexpr auto kWorkerSleep = std::chrono::milliseconds(1);",
-    "constexpr auto kWorkerSleep = std::chrono::milliseconds(2);",
-)
-
-# 5) Bind EN VIVO runtime once per plugin instance. Pure UI reads must not
+# 3) Bind EN VIVO runtime once per plugin instance. Pure UI reads must not
 # repeatedly acquire the global session mutex just to re-register identical
 # worker pointers, and the 250 Hz runtime loop must not do it either.
 replace_once(
