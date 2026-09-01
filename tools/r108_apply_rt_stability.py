@@ -34,24 +34,24 @@ replace_once(
     "        const auto checkpoint_frames =\n            static_cast<std::uint64_t>(config_.frames_per_second) * 5U;\n        if(checkpoint_frames > 0U && written % checkpoint_frames == 0U &&\n           !patch_frame_count(written, false)) {\n          fail(\"Streamed Take buffered checkpoint failed\");",
 )
 
-# 2) File-backed Takes already own a dedicated clip worker. Do not also start
-# the legacy in-memory scheduler thread at 500 Hz. The clip engine's original
-# 1 ms timing is intentionally preserved because heartbeat/fail-closed tests
-# depend on that deterministic safety margin.
+# 2) A file-backed Take still needs the scheduler as host-heartbeat watchdog,
+# but it does not need the legacy 500 Hz polling cadence. Preserve the 2 ms
+# legacy timing and the clip engine's 1 ms safety timing; use 10 ms only for
+# the file-mode watchdog, which remains far inside the 750 ms fail-closed gate.
 replace_once(
     "src/capture/dmx_take_scheduler.cpp",
-    "  file_mode_.store(true, std::memory_order_release);\n  ensure_thread();\n  return true;",
-    "  file_mode_.store(true, std::memory_order_release);\n  return true;",
+    "  constexpr auto kLoopPeriod = std::chrono::milliseconds(2);\n  constexpr auto kHeartbeatTimeout = std::chrono::milliseconds(750);",
+    "  constexpr auto kLegacyLoopPeriod = std::chrono::milliseconds(2);\n  constexpr auto kFileWatchdogPeriod = std::chrono::milliseconds(10);\n  constexpr auto kHeartbeatTimeout = std::chrono::milliseconds(750);",
 )
 replace_once(
     "src/capture/dmx_take_scheduler.cpp",
-    "  error_message.clear();\n  ensure_thread();\n\n  output::ArtNetOutputWorker* output = nullptr;",
-    "  error_message.clear();\n\n  output::ArtNetOutputWorker* output = nullptr;",
+    "      std::this_thread::sleep_for(kLoopPeriod);\n      continue;",
+    "      std::this_thread::sleep_for(kFileWatchdogPeriod);\n      continue;",
 )
 replace_once(
     "src/capture/dmx_take_scheduler.cpp",
-    "    return true;\n  }\n\n  const std::scoped_lock lock(mutex_);\n  if(take_ == nullptr || !hold_valid_) {",
-    "    return true;\n  }\n\n  // Legacy in-memory Takes still need the scheduler worker; file-backed Takes\n  // above are driven exclusively by DmxClipPlaybackEngine.\n  ensure_thread();\n  const std::scoped_lock lock(mutex_);\n  if(take_ == nullptr || !hold_valid_) {",
+    "    std::this_thread::sleep_for(kLoopPeriod);\n  }",
+    "    std::this_thread::sleep_for(kLegacyLoopPeriod);\n  }",
 )
 
 # 3) Bind EN VIVO runtime once per plugin instance. Pure UI reads must not
