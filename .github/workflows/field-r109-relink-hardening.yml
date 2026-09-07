@@ -1,0 +1,44 @@
+name: field-r109-relink-hardening
+
+on:
+  push:
+    branches:
+      - field/r10.9-macos-portability-live-memory-20260907
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply deterministic hardening patch
+        run: python3 tools/field_r109_relink_hardening.py
+
+      - name: Patch hygiene
+        run: |
+          git diff --check
+          grep -q 'Validate the complete destination before changing the active library' product/AeylaVisualDmx/AeylaVisualDmx.h
+          test "$(grep -c 'restore_persisted_state(this)' product/AeylaVisualDmx/AeylaVisualDmx.h || true)" -eq 0
+
+      - name: Configure core
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build and run Take plus live-memory regressions
+        run: |
+          cmake --build build --target aeyla_take_file_tests aeyla_live_memory_session_tests --config Release -j 2
+          ctest --test-dir build -R '^(aeyla_take_file_tests|aeyla_live_memory_session_tests)$' --output-on-failure
+
+      - name: Commit verified product hardening and remove scaffolding
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/field-r109-relink-hardening.yml tools/field_r109_relink_hardening.py
+          git add product/AeylaVisualDmx/AeylaVisualDmx.h
+          git commit -m 'fix: validate take library before cross-platform relink'
+          git push origin HEAD:${GITHUB_REF_NAME}
