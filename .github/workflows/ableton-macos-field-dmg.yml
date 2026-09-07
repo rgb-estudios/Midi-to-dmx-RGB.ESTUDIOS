@@ -5,6 +5,13 @@ on:
     paths:
       - "product/**"
       - "src/**"
+      - ".github/scripts/patch_macos_portable_restore.py"
+      - ".github/workflows/ableton-macos-field-dmg.yml"
+  push:
+    branches:
+      - "field/r10.8-macos-dmg-installer-20260907"
+    paths:
+      - ".github/scripts/patch_macos_portable_restore.py"
       - ".github/workflows/ableton-macos-field-dmg.yml"
   workflow_dispatch:
 
@@ -12,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  AEYLA_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  AEYLA_SOURCE_SHA: ${{ github.sha }}
   IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
   VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
 
@@ -27,216 +34,14 @@ jobs:
         with:
           ref: ${{ env.AEYLA_SOURCE_SHA }}
 
-      - name: Patch macOS portable show restore
+      - name: Apply macOS portable restore patch
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          ui = Path('product/AeylaVisualDmx/AeylaRuntimeStatusControl.h')
-          s = ui.read_text(encoding='utf-8')
-          old_open = 'EFileAction::Open, ".aeylashow",'
-          old_save = 'EFileAction::Save, ".aeylashow",'
-          assert old_open in s, 'Open filter pattern not found'
-          assert old_save in s, 'Save filter pattern not found'
-          s = s.replace(old_open, 'EFileAction::Open, "",', 1)
-          s = s.replace(old_save, 'EFileAction::Save, "aeylashow",', 1)
-          ui.write_text(s, encoding='utf-8')
-
-          hdr = Path('product/AeylaVisualDmx/AeylaVisualDmx.h')
-          h = hdr.read_text(encoding='utf-8')
-          needle = '''    if(status.succeeded)
-    {
-      const auto restored = aeyla::live_memory_session::restore_persistent_state(
-          this, liveState);
-      if(!restored.succeeded)
-      {
-        status.succeeded = false;
-        status.message = "Proyecto abierto en modo seguro, pero live.bin no pudo publicarse";
-        status.diagnostics.push_back(restored.message);
-      }
-    }
-    return status;
-  }
-
-  aeyla::product::ProjectFileStatus SaveProjectFromUI()
-'''
-          replacement = '''    if(status.succeeded)
-    {
-      const auto restored = aeyla::live_memory_session::restore_persistent_state(
-          this, liveState);
-      if(!restored.succeeded)
-      {
-        status.succeeded = false;
-        status.message = "Proyecto abierto en modo seguro, pero live.bin no pudo publicarse";
-        status.diagnostics.push_back(restored.message);
-      }
-    }
-
-    // R10.8.3 macOS portability: SHOW.aeylashow + TOMAS_DMX/
-    // becomes operational without manual re-link on every open.
-    if(status.succeeded && !path.empty())
-    {
-      std::error_code libraryError;
-      const auto portableLibrary = path.parent_path() / "TOMAS_DMX";
-      if(std::filesystem::is_directory(portableLibrary, libraryError) &&
-         !libraryError)
-      {
-        std::string projectId;
-        {
-          const std::scoped_lock lock(mModelMutex);
-          projectId = mModel.project_document().project_id;
-        }
-        aeyla::take_library_session::ensure_scope(this, projectId);
-        aeyla::take_library_session::set_directory(this, portableLibrary);
-        aeyla::take_library_session::set_storage_message(
-            this, "TOMAS_DMX AUTO-VINCULADA · biblioteca portable lista");
-        if(ShowMidiMapping().enabled)
-          mMidiPreflightCursor.store(0, std::memory_order_release);
-      }
-    }
-    return status;
-  }
-
-  aeyla::product::ProjectFileStatus SaveProjectFromUI()
-'''
-          assert needle in h, 'OpenProjectFromUI success block not found'
-          h = h.replace(needle, replacement, 1)
-          hdr.write_text(h, encoding='utf-8')
-
-          cpp = Path('product/AeylaVisualDmx/AeylaVisualDmx.cpp')
-          c = cpp.read_text(encoding='utf-8')
-
-          refresh_needle = '''  mHostStateCache.project_schema_minor =
-      mModel.project_document().schema_version.minor;
-  mHostStateCache.grand_master = snapshot.grand_master;
-'''
-          refresh_replacement = '''  mHostStateCache.project_schema_minor =
-      mModel.project_document().schema_version.minor;
-
-  const auto currentProjectPath = mProjectFiles.current_path();
-  if(!currentProjectPath.empty())
-  {
-    const auto utf8 = currentProjectPath.lexically_normal().generic_u8string();
-    if(utf8.size() <= aeyla::runtime::kMaxProjectLocatorBytes)
-    {
-      mHostStateCache.locator_mode =
-          aeyla::runtime::ProjectLocatorMode::absolute_development;
-      mHostStateCache.project_locator.assign(
-          reinterpret_cast<const char*>(utf8.data()), utf8.size());
-    }
-    else
-    {
-      mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
-      mHostStateCache.project_locator.clear();
-    }
-  }
-  else
-  {
-    mHostStateCache.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
-    mHostStateCache.project_locator.clear();
-  }
-
-  mHostStateCache.grand_master = snapshot.grand_master;
-'''
-          assert refresh_needle in c, 'RefreshHostStateCache insertion point not found'
-          c = c.replace(refresh_needle, refresh_replacement, 1)
-
-          pending_needle = '''  ClearShowMidiCommandsLocked();
-  mTakeScheduler.disarm();
-  mModel.release_transients();
-  mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
-
-  std::array<std::uint8_t, 16> currentUuid{};
-'''
-          pending_replacement = '''  ClearShowMidiCommandsLocked();
-  mTakeScheduler.disarm();
-  mModel.release_transients();
-  mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
-
-  if(pending->locator_mode ==
-         aeyla::runtime::ProjectLocatorMode::absolute_development &&
-     !pending->project_locator.empty())
-  {
-    try
-    {
-      std::u8string locatorUtf8;
-      locatorUtf8.reserve(pending->project_locator.size());
-      for(const unsigned char byte : pending->project_locator)
-        locatorUtf8.push_back(static_cast<char8_t>(byte));
-      const auto locator =
-          std::filesystem::path(locatorUtf8).lexically_normal();
-      std::error_code locatorError;
-      if(std::filesystem::is_regular_file(locator, locatorError) &&
-         !locatorError)
-      {
-        const auto reopened = mProjectFiles.open(locator);
-        if(reopened.succeeded)
-        {
-          mLoadedTakeSongIndex.store(-1, std::memory_order_release);
-          mActiveTakeSongIndex.store(-1, std::memory_order_release);
-          SyncParametersFromProject();
-          RefreshOutputBackendFromProjectLocked();
-          (void)aeyla::live_memory_session::restore_persistent_state(
-              this, mProjectFiles.live_memory_state());
-        }
-      }
-    }
-    catch(...)
-    {
-    }
-  }
-
-  std::array<std::uint8_t, 16> currentUuid{};
-'''
-          assert pending_needle in c, 'ApplyPendingHostState insertion point not found'
-          c = c.replace(pending_needle, pending_replacement, 1)
-
-          stage_needle = '''  else
-  {
-    aeyla::take_library_session::stage_persisted_state(
-        this, mModel.project_document().project_id,
-        pending->take_library_locator, pending->take_bindings);
-  }
-
-  mParameterUpdatePending.store(true, std::memory_order_release);
-'''
-          stage_replacement = '''  else
-  {
-    aeyla::take_library_session::stage_persisted_state(
-        this, mModel.project_document().project_id,
-        pending->take_library_locator, pending->take_bindings);
-
-    if(aeyla::take_library_session::directory(this).empty())
-    {
-      const auto projectPath = mProjectFiles.current_path();
-      if(!projectPath.empty())
-      {
-        std::error_code libraryError;
-        const auto portableLibrary = projectPath.parent_path() / "TOMAS_DMX";
-        if(std::filesystem::is_directory(portableLibrary, libraryError) &&
-           !libraryError)
-        {
-          aeyla::take_library_session::set_directory(this, portableLibrary);
-          aeyla::take_library_session::set_storage_message(
-              this, "TOMAS_DMX AUTO-RESTAURADA · sesión portable lista");
-        }
-      }
-    }
-  }
-
-  mParameterUpdatePending.store(true, std::memory_order_release);
-'''
-          assert stage_needle in c, 'Take library restore block not found'
-          c = c.replace(stage_needle, stage_replacement, 1)
-          cpp.write_text(c, encoding='utf-8')
-          PY
-
-          grep -n 'EFileAction::Open, ""\|TOMAS_DMX AUTO\|absolute_development\|AUTO-RESTAURADA' \
-            product/AeylaVisualDmx/AeylaRuntimeStatusControl.h \
-            product/AeylaVisualDmx/AeylaVisualDmx.h \
-            product/AeylaVisualDmx/AeylaVisualDmx.cpp
+          python3 .github/scripts/patch_macos_portable_restore.py
+          grep -n 'EFileAction::Open, ""' product/AeylaVisualDmx/AeylaRuntimeStatusControl.h
+          grep -n 'TOMAS_DMX AUTO-VINCULADA' product/AeylaVisualDmx/AeylaVisualDmx.h
+          grep -n 'absolute_development\|AUTO-RESTAURADA' product/AeylaVisualDmx/AeylaVisualDmx.cpp
 
       - name: Fetch pinned iPlug2 and Steinberg SDK
         shell: bash
@@ -306,8 +111,7 @@ jobs:
           set -e
           rm -rf "/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
           for home in /Users/*; do
-            [ -d "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" ] && \
-              rm -rf "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" || true
+            [ -d "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" ] && rm -rf "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" || true
           done
           exit 0
           EOF
@@ -335,33 +139,22 @@ jobs:
           cat > "$dmgroot/LEEME PRIMERO.txt" <<'EOF'
           RGB Live Control / AEYLA R10.8.3 — PORTABLE RESTORE macOS
 
-          FIXES:
-          - ABRIR no bloquea .aeylashow por el selector nativo de macOS.
-          - SHOW.aeylashow + TOMAS_DMX/ se vinculan automáticamente.
-          - Ableton recuerda el .aeylashow y la biblioteca al reabrir la sesión.
-          - La salida física siempre restaura DESARMADA / APAGÓN seguro.
-
-          INSTALACIÓN:
           1) Cierra Ableton Live.
           2) Instala "Install RGB Live Control AEYLA VST3.pkg".
-          3) Si macOS bloquea el paquete:
-             sudo installer -pkg "/Volumes/RGB Live Control AEYLA/Install RGB Live Control AEYLA VST3.pkg" -target /
-          4) Abre Ableton > Settings > Plug-Ins.
-          5) VST3 System Folders OFF -> ON y Option + Rescan.
-          6) Copia al disco local una carpeta con:
+          3) Copia la carpeta AEYLA_SHOW_MAC_PORTABLE completa al disco local del Mac.
+          4) Deben quedar juntos:
              SHOW_FINAL_02_MAC.aeylashow
              TOMAS_DMX/
-          7) Primera vez: ARCHIVO > ABRIR > SHOW_FINAL_02_MAC.aeylashow.
-          8) Guarda la sesión de Ableton. Las aperturas siguientes restauran
-             show y biblioteca sin volver a importar.
+          5) Abre Ableton y fuerza Option + Rescan si es necesario.
+          6) Primera vez: RGB Live Control > ARCHIVO > ABRIR > SHOW_FINAL_02_MAC.aeylashow.
+          7) Guarda la sesión de Ableton. En las aperturas siguientes el plugin restaura el show y TOMAS_DMX automáticamente.
 
+          La salida física siempre restaura DESARMADA y en estado seguro.
           FIELD/PRETEST: firma ad-hoc, no notarizada con Apple Developer ID.
           EOF
 
-          printf 'SOURCE_COMMIT=%s\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\nSTATUS=FIELD_PRETEST\nSIGNING=AD_HOC\nMAC_SHOW_PICKER=UNFILTERED_VALIDATE_AFTER_SELECTION\nPORTABLE_TAKE_FOLDER=TOMAS_DMX\nHOST_AUTO_REOPEN=ON\n' \
-            "$AEYLA_SOURCE_SHA" > "$dmgroot/BUILD_ID.txt"
-          shasum -a 256 "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx" \
-            > "$dmgroot/VST3_SHA256.txt"
+          printf 'SOURCE_COMMIT=%s\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\nSTATUS=FIELD_PRETEST\nSIGNING=AD_HOC\nPORTABLE_TAKE_FOLDER=TOMAS_DMX\nHOST_AUTO_REOPEN=ON\n' "$AEYLA_SOURCE_SHA" > "$dmgroot/BUILD_ID.txt"
+          shasum -a 256 "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx" > "$dmgroot/VST3_SHA256.txt"
 
           hdiutil create \
             -volname "RGB Live Control AEYLA" \
@@ -370,8 +163,7 @@ jobs:
             "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg"
 
           hdiutil verify "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg"
-          shasum -a 256 "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg" \
-            > "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg.sha256"
+          shasum -a 256 "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg" > "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
