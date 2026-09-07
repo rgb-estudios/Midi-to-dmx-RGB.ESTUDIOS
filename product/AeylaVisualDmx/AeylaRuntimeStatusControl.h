@@ -245,7 +245,7 @@ private:
   [[nodiscard]] IRECT FileMenuPanel() const noexcept
   {
     const auto archive = ArchiveButton();
-    return IRECT(archive.R - 310.0F, archive.T - 92.0F,
+    return IRECT(archive.R - 310.0F, archive.T - 132.0F,
                  archive.R, archive.T - 8.0F);
   }
 
@@ -354,7 +354,7 @@ private:
     else if(projectName.empty() || projectName == "Untitled Show")
       projectName = "SIN TÍTULO";
     const std::string showContext =
-        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.8 PRETEST";
+        "RGB ESTUDIOS · SHOW / " + projectName + " · R10.9 PRETEST";
     g.DrawText(IText(9.0F, kMuted, "AeylaUI", EAlign::Near, EVAlign::Middle),
                showContext.c_str(),
                IRECT(header.L + 14.0F, header.T + 28.0F,
@@ -526,13 +526,14 @@ private:
     const float innerT = panel.T + 8.0F;
     const float innerB = panel.B - 8.0F;
     const float w = (innerR - innerL - gap) * 0.5F;
-    const float h = (innerB - innerT - gap) * 0.5F;
+    const float h = (innerB - innerT - gap * 2.0F) / 3.0F;
     mFileButtons[0] = IRECT(innerL, innerT, innerL + w, innerT + h);
     mFileButtons[1] = IRECT(innerL + w + gap, innerT, innerR, innerT + h);
-    mFileButtons[2] = IRECT(innerL, innerT + h + gap,
-                            innerL + w, innerB);
-    mFileButtons[3] = IRECT(innerL + w + gap, innerT + h + gap,
-                            innerR, innerB);
+    const float row2 = innerT + h + gap;
+    mFileButtons[2] = IRECT(innerL, row2, innerL + w, row2 + h);
+    mFileButtons[3] = IRECT(innerL + w + gap, row2, innerR, row2 + h);
+    const float row3 = row2 + h + gap;
+    mFileButtons[4] = IRECT(innerL, row3, innerR, innerB);
   }
 
   void DrawFileMenu(IGraphics& g)
@@ -541,11 +542,13 @@ private:
     const auto panel = FileMenuPanel();
     g.FillRoundRect(IColor(255, 10, 12, 16), panel, 7.0F);
     g.DrawRoundRect(kBrand, panel, 7.0F, nullptr, 1.0F);
-    static constexpr std::array<const char*, 4U> labels{
-        "NUEVO", "ABRIR", "GUARDAR", "GUARDAR COMO"};
+    static constexpr std::array<const char*, 5U> labels{
+        "NUEVO", "ABRIR", "GUARDAR", "GUARDAR COMO", "VINCULAR TOMAS DMX"};
     for(std::size_t index = 0U; index < mFileButtons.size(); ++index)
     {
-      const bool blocked = mPlug.TakeRecording() && index < 2U;
+      const bool blocked = (mPlug.TakeRecording() && index < 2U) ||
+          (index == 4U && (mPlug.TakeRecording() || mPlug.TakePlaying() ||
+                          mPlug.TakeOutputArmed() || mPlug.OutputArmed()));
       Button(g, mFileButtons[index], labels[index],
              blocked ? IColor(255, 35, 31, 25) : kRaised,
              blocked ? kWarn : kLine,
@@ -586,7 +589,12 @@ private:
       return;
     }
     if(index == 3U)
+    {
       PromptSaveAs();
+      return;
+    }
+    if(index == 4U)
+      PromptTakeLibraryRelink();
   }
 
   void OpenLiveWorkspace()
@@ -1412,13 +1420,24 @@ private:
                         ? ""
                         : mPlug.CurrentProjectPath().parent_path().string().c_str());
     GetUI()->PromptForFile(
-        mDialogFileName, mDialogPath, EFileAction::Open, ".aeylashow",
+        mDialogFileName, mDialogPath, EFileAction::Open, "aeylashow",
         [this](const WDL_String& fileName, const WDL_String& path) {
           if(Empty(fileName)) return;
           ReportFileStatus(mPlug.OpenProjectFromUI(DialogPath(fileName, path)));
           (void)mPlug.RefreshNetworkInterfacesFromUI();
           SetDirty(false);
         });
+  }
+
+  void PromptTakeLibraryRelink()
+  {
+    auto* ui = GetUI();
+    if(ui == nullptr) return;
+    WDL_String selected;
+    ui->PromptForDirectory(selected);
+    if(Empty(selected)) return;
+    ReportLive(mPlug.RelinkTakeLibraryFromUI(PathFromUtf8(selected.Get())));
+    SetDirty(false);
   }
 
   void PromptSaveAs()
@@ -1430,7 +1449,7 @@ private:
                         ? ""
                         : mPlug.CurrentProjectPath().parent_path().string().c_str());
     GetUI()->PromptForFile(
-        mDialogFileName, mDialogPath, EFileAction::Save, ".aeylashow",
+        mDialogFileName, mDialogPath, EFileAction::Save, "aeylashow",
         [this](const WDL_String& fileName, const WDL_String& path) {
           if(Empty(fileName)) return;
           auto target = DialogPath(fileName, path);
@@ -1443,7 +1462,7 @@ private:
   AeylaVisualDmx& mPlug;
 
   bool mFileMenuOpen{false};
-  std::array<IRECT, 4U> mFileButtons{};
+  std::array<IRECT, 5U> mFileButtons{};
 
   bool mLiveOpen{false};
   bool mLiveMessageError{false};

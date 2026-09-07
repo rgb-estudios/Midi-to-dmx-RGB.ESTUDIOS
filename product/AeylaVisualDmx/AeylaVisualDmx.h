@@ -250,11 +250,107 @@ public:
   [[nodiscard]] aeyla::product::AuthoringResult LearnLiveMemoryFromAvolitesFromUI(
       std::size_t index)
   {
+    // DMX Learn must observe Avolites only. If AEYLA owns physical Art-Net
+    // authority on the same show LAN, directed-broadcast TX can be received by
+    // our RX socket and contaminate OFF/ON snapshots. Authoring therefore
+    // requires an explicit disarmed state; this never changes ARM automatically.
+    const auto output = mArtNetOutput.stats();
+    if(TakeOutputArmed() || OutputArmed() || output.enabled ||
+       output.override_enabled)
+      return {false, {},
+              "APRENDER DMX · DESARMA la salida AEYLA primero para evitar capturar su propio Art-Net"};
+    if(TakeRecording())
+      return {false, {}, "APRENDER DMX · detén GRABAR antes de capturar una memoria"};
+
+    // Take REC already recovers its RX listener before capture. EN VIVO used
+    // to skip that preflight, so a fresh plug-in instance could attempt Learn
+    // with Art-Net RX stopped. Recover only on this non-realtime UI action.
+    auto capture = mArtNetCapture.stats();
+    if(!capture.running)
+    {
+      if(NetworkInterfaceCount() == 0U)
+        (void)RefreshNetworkInterfacesFromUI();
+      else
+        RestartCaptureInputFromRouting();
+
+      // Avolites normally publishes at show cadence. Give the newly opened UDP
+      // socket a short bounded window to receive its first packet; never wait
+      // on the audio/runtime thread and never arm TX as a side effect.
+      for(int attempt = 0; attempt < 30; ++attempt)
+      {
+        capture = mArtNetCapture.stats();
+        if(capture.running && capture.signal_present &&
+           capture.last_packet_age_ms <= 150.0)
+          break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    else
+      capture = mArtNetCapture.stats();
+
+    if(!capture.running)
+      return {false, {},
+              "APRENDER DMX · Art-Net RX no pudo iniciar; revisa SISTEMA / adaptador RX"};
+    if(!capture.signal_present || capture.last_packet_age_ms > 150.0)
+      return {false, {},
+              "APRENDER DMX · no hay un frame Art-Net fresco de Avolites en el RX seleccionado"};
+
     aeyla::live_memory_session::register_runtime(
         this, &mArtNetOutput, &mArtNetCapture);
     const auto result = aeyla::live_memory_session::learn_from_avolites(this, index);
     if(result.succeeded) CommitLiveMemoryPersistenceIfDirtyFromUI();
     return {result.succeeded, {}, result.message};
+  }
+
+  // Explicit cross-platform relink. This changes only the external library
+  // locator; .aeylashow and every .aeylatake byte remain untouched. Pending
+  // host bindings are resolved by basename + trim against the exact directory
+  // selected by the operator, never by guessing a Windows/macOS path mapping.
+  [[nodiscard]] aeyla::product::AuthoringResult RelinkTakeLibraryFromUI(
+      const std::filesystem::path& directory)
+  {
+    if(TakeRecording())
+      return {false, {}, "VINCULAR TOMAS · detén GRABAR primero"};
+    if(TakePlaying())
+      return {false, {}, "VINCULAR TOMAS · detén PLAY primero"};
+    if(TakeOutputArmed() || OutputArmed())
+      return {false, {}, "VINCULAR TOMAS · desarma la salida física primero"};
+    if(directory.empty())
+      return {false, {}, "VINCULAR TOMAS · no se seleccionó una carpeta"};
+
+    std::error_code fsError;
+    if(!std::filesystem::is_directory(directory, fsError) || fsError)
+      return {false, {}, "VINCULAR TOMAS · la carpeta seleccionada no está disponible"};
+
+    {
+      const std::scoped_lock lock(mModelMutex);
+      aeyla::take_library_session::ensure_scope(
+          this, mModel.project_document().project_id);
+    }
+    aeyla::take_library_session::set_directory(this, directory);
+    const auto restored =
+        aeyla::take_library_session::restore_persisted_state(this);
+    {
+      const std::scoped_lock lock(mModelMutex);
+      RefreshHostStateCacheLocked();
+    }
+
+    const auto scan = aeyla::capture::scan_take_directory(directory, {});
+    if(!scan.ok())
+      return {false, {}, "VINCULAR TOMAS · " + scan.error};
+    if(scan.entries.empty())
+      return {false, {}, "VINCULAR TOMAS · la carpeta no contiene archivos .aeylatake válidos"};
+
+    std::string message = "BIBLIOTECA DMX VINCULADA · " +
+        std::to_string(scan.entries.size()) + " TOMAS";
+    if(restored.restored_bindings > 0U || restored.missing_bindings > 0U)
+      message += " · " + std::to_string(restored.restored_bindings) +
+          " ASOCIACIONES RESTAURADAS" +
+          (restored.missing_bindings == 0U
+               ? std::string{}
+               : " · " + std::to_string(restored.missing_bindings) +
+                     " PENDIENTES");
+    return {true, {}, std::move(message)};
   }
 
   [[nodiscard]] aeyla::product::AuthoringResult CancelLiveMemoryLearnFromUI(
