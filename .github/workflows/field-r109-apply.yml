@@ -1,0 +1,49 @@
+name: field-r109-apply
+
+on:
+  push:
+    branches:
+      - field/r10.9-macos-portability-live-memory-20260907
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply deterministic field patch
+        run: python3 tools/field_r109_patch.py
+
+      - name: Patch hygiene
+        run: |
+          git diff --check
+          grep -q 'VINCULAR TOMAS DMX' product/AeylaVisualDmx/AeylaRuntimeStatusControl.h
+          grep -q 'DESARMA la salida AEYLA primero' product/AeylaVisualDmx/AeylaVisualDmx.h
+          grep -q 'learn_source_ipv4' product/AeylaVisualDmx/AeylaLiveMemorySession.cpp
+          grep -q 'item.name.rfind("en", 0U)' product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp
+
+      - name: Configure core test build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build live-memory regression target
+        run: cmake --build build --target aeyla_live_memory_session_tests --config Release -j 2
+
+      - name: Run live-memory regression target
+        run: ctest --test-dir build -R '^aeyla_live_memory_session_tests$' --output-on-failure
+
+      - name: Commit verified patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add product/AeylaVisualDmx/AeylaVisualDmx.h \
+                  product/AeylaVisualDmx/AeylaRuntimeStatusControl.h \
+                  product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp \
+                  product/AeylaVisualDmx/AeylaLiveMemorySession.cpp
+          git commit -m 'fix: harden macOS transfer and EN VIVO DMX learn'
+          git push origin HEAD:${GITHUB_REF_NAME}
