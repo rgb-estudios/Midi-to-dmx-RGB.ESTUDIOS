@@ -1,0 +1,166 @@
+name: ableton-macos-field-dmg
+
+on:
+  pull_request:
+    paths:
+      - "product/**"
+      - "src/**"
+      - ".github/workflows/ableton-macos-field-dmg.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AEYLA_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  field-dmg:
+    name: Build Universal VST3 + PKG + DMG
+    runs-on: macos-15
+    timeout-minutes: 55
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Build Universal VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode \
+            -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" \
+            -DIPLUG2_UNIVERSAL=ON \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release \
+            --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Verify and ad-hoc sign VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          test -n "$vst3"
+          bin="$vst3/Contents/MacOS/AeylaVisualDmx"
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --force --deep --sign - "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          file "$bin"
+
+      - name: Validate VST3 with Steinberg validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK \
+            -B build-validator -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          "$validator" "$vst3"
+
+      - name: Build field installer PKG and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          root="$GITHUB_WORKSPACE/pkgroot"
+          scripts="$GITHUB_WORKSPACE/pkgscripts"
+          dmgroot="$GITHUB_WORKSPACE/dmgroot"
+          mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$scripts" "$dmgroot"
+          ditto "$vst3" "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+
+          cat > "$scripts/preinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          rm -rf "/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          for home in /Users/*; do
+            [ -d "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" ] && \
+              rm -rf "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" || true
+          done
+          exit 0
+          EOF
+
+          cat > "$scripts/postinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          target="/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+          /usr/bin/codesign --verify --deep --strict "$target"
+          /usr/bin/touch "$target"
+          /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+          exit 0
+          EOF
+          chmod +x "$scripts/preinstall" "$scripts/postinstall"
+
+          pkgbuild \
+            --root "$root" \
+            --scripts "$scripts" \
+            --identifier "com.rgbestudios.aeyla.vst3" \
+            --version "10.8.0" \
+            --install-location "/" \
+            "$dmgroot/Install RGB Live Control AEYLA VST3.pkg"
+
+          cat > "$dmgroot/LEEME PRIMERO.txt" <<'EOF'
+          RGB Live Control / AEYLA R10.8 — INSTALACION DE CAMPO macOS
+
+          1) Cierra Ableton Live.
+          2) Intenta abrir "Install RGB Live Control AEYLA VST3.pkg".
+          3) Si macOS bloquea el paquete por desarrollador no identificado, abre Terminal y pega:
+
+          sudo installer -pkg "/Volumes/RGB Live Control AEYLA/Install RGB Live Control AEYLA VST3.pkg" -target /
+
+          4) Introduce la contraseña del Mac cuando la solicite.
+          5) Abre Ableton Live 12 > Settings > Plug-Ins.
+          6) VST3 System Folders OFF -> ON y luego Option + Rescan.
+          7) Busca AEYLA / AEYLA Visual DMX / AeylaVisualDmx.
+
+          El VST3 se instala en:
+          /Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3
+
+          Este instalador es FIELD/PRETEST y usa firma ad-hoc. No sustituye una release notarizada con Apple Developer ID.
+          EOF
+
+          printf 'SOURCE_COMMIT=%s\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\nSTATUS=FIELD_PRETEST\nSIGNING=AD_HOC\n' \
+            "$AEYLA_SOURCE_SHA" > "$dmgroot/BUILD_ID.txt"
+          shasum -a 256 "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx" \
+            > "$dmgroot/VST3_SHA256.txt"
+
+          hdiutil create \
+            -volname "RGB Live Control AEYLA" \
+            -srcfolder "$dmgroot" \
+            -ov -format UDZO \
+            "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8-macOS-Field.dmg"
+
+          hdiutil verify "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8-macOS-Field.dmg"
+          shasum -a 256 "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8-macOS-Field.dmg" \
+            > "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8-macOS-Field.dmg.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RGB-Live-Control-AEYLA-R10.8-macOS-Field-DMG
+          path: |
+            RGB-Live-Control-AEYLA-R10.8-macOS-Field.dmg
+            RGB-Live-Control-AEYLA-R10.8-macOS-Field.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30
