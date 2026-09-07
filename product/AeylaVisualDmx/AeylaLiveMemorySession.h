@@ -4,11 +4,13 @@
 #include "output/artnet_output_worker.h"
 #include "project/live_memory_state.h"
 #include "runtime/host_event.h"
+#include "AeylaTakeLibrarySession.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace aeyla::live_memory_session {
 
