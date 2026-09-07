@@ -1,0 +1,175 @@
+name: ableton-macos-field-dmg
+
+on:
+  pull_request:
+    paths:
+      - "product/**"
+      - "src/**"
+      - ".github/scripts/patch_macos_portable_restore.py"
+      - ".github/workflows/ableton-macos-field-dmg.yml"
+  push:
+    branches:
+      - "field/r10.8-macos-dmg-installer-20260907"
+    paths:
+      - ".github/scripts/patch_macos_portable_restore.py"
+      - ".github/workflows/ableton-macos-field-dmg.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AEYLA_SOURCE_SHA: ${{ github.sha }}
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  field-dmg:
+    name: Build Universal VST3 + PKG + DMG
+    runs-on: macos-15
+    timeout-minutes: 55
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
+
+      - name: Apply macOS portable restore patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/patch_macos_portable_restore.py
+          grep -n 'EFileAction::Open, ""' product/AeylaVisualDmx/AeylaRuntimeStatusControl.h
+          grep -n 'TOMAS_DMX AUTO-VINCULADA' product/AeylaVisualDmx/AeylaVisualDmx.h
+          grep -n 'absolute_development\|AUTO-RESTAURADA' product/AeylaVisualDmx/AeylaVisualDmx.cpp
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Build Universal VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode \
+            -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" \
+            -DIPLUG2_UNIVERSAL=ON \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release \
+            --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Verify and ad-hoc sign VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          test -n "$vst3"
+          bin="$vst3/Contents/MacOS/AeylaVisualDmx"
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --force --deep --sign - "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          file "$bin"
+
+      - name: Validate VST3 with Steinberg validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK \
+            -B build-validator -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          "$validator" "$vst3"
+
+      - name: Build field installer PKG and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          root="$GITHUB_WORKSPACE/pkgroot"
+          scripts="$GITHUB_WORKSPACE/pkgscripts"
+          dmgroot="$GITHUB_WORKSPACE/dmgroot"
+          mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$scripts" "$dmgroot"
+          ditto "$vst3" "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+
+          cat > "$scripts/preinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          rm -rf "/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          for home in /Users/*; do
+            [ -d "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" ] && rm -rf "$home/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3" || true
+          done
+          exit 0
+          EOF
+
+          cat > "$scripts/postinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          target="/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+          /usr/bin/codesign --verify --deep --strict "$target"
+          /usr/bin/touch "$target"
+          /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+          exit 0
+          EOF
+          chmod +x "$scripts/preinstall" "$scripts/postinstall"
+
+          pkgbuild \
+            --root "$root" \
+            --scripts "$scripts" \
+            --identifier "com.rgbestudios.aeyla.vst3" \
+            --version "10.8.3" \
+            --install-location "/" \
+            "$dmgroot/Install RGB Live Control AEYLA VST3.pkg"
+
+          cat > "$dmgroot/LEEME PRIMERO.txt" <<'EOF'
+          RGB Live Control / AEYLA R10.8.3 — PORTABLE RESTORE macOS
+
+          1) Cierra Ableton Live.
+          2) Instala "Install RGB Live Control AEYLA VST3.pkg".
+          3) Copia la carpeta AEYLA_SHOW_MAC_PORTABLE completa al disco local del Mac.
+          4) Deben quedar juntos:
+             SHOW_FINAL_02_MAC.aeylashow
+             TOMAS_DMX/
+          5) Abre Ableton y fuerza Option + Rescan si es necesario.
+          6) Primera vez: RGB Live Control > ARCHIVO > ABRIR > SHOW_FINAL_02_MAC.aeylashow.
+          7) Guarda la sesión de Ableton. En las aperturas siguientes el plugin restaura el show y TOMAS_DMX automáticamente.
+
+          La salida física siempre restaura DESARMADA y en estado seguro.
+          FIELD/PRETEST: firma ad-hoc, no notarizada con Apple Developer ID.
+          EOF
+
+          printf 'SOURCE_COMMIT=%s\nARCHITECTURES=arm64+x86_64\nTARGET_HOST=Ableton Live 12 macOS\nSTATUS=FIELD_PRETEST\nSIGNING=AD_HOC\nPORTABLE_TAKE_FOLDER=TOMAS_DMX\nHOST_AUTO_REOPEN=ON\n' "$AEYLA_SOURCE_SHA" > "$dmgroot/BUILD_ID.txt"
+          shasum -a 256 "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3/Contents/MacOS/AeylaVisualDmx" > "$dmgroot/VST3_SHA256.txt"
+
+          hdiutil create \
+            -volname "RGB Live Control AEYLA" \
+            -srcfolder "$dmgroot" \
+            -ov -format UDZO \
+            "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg"
+
+          hdiutil verify "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg"
+          shasum -a 256 "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg" > "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore-DMG
+          path: |
+            RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg
+            RGB-Live-Control-AEYLA-R10.8.3-macOS-Portable-Restore.dmg.sha256
+          if-no-files-found: error
+          retention-days: 30
