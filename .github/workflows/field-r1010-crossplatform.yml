@@ -1,0 +1,243 @@
+name: field-r1010-crossplatform
+
+on:
+  push:
+    branches:
+      - field/r10.10-crossplatform-package-20260908
+
+permissions:
+  contents: read
+
+env:
+  AEYLA_SOURCE_SHA: 0a24610c4ad970bc71f6be3c0e37878f5c7f7970
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+  INNO_SETUP_VERSION: 6.7.1
+
+jobs:
+  windows:
+    name: R10.10 Windows x64 / validator / install smoke
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
+
+      - name: Assert exact R10.10 portable-session source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          if ((git rev-parse HEAD).Trim() -ne $env:AEYLA_SOURCE_SHA) { throw 'Wrong product SHA' }
+          Select-String src/project/project_package.cpp -Pattern 'session.bin' -Quiet | Out-Null
+          Select-String product/AeylaVisualDmx/AeylaVisualDmx.h -Pattern 'portableSession' -Quiet | Out-Null
+          Select-String product/AeylaVisualDmx/AeylaRuntimeStatusControl.h -Pattern 'R10.10 PORTABLE PRETEST' -Quiet | Out-Null
+
+      - name: Run portability regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-core --config Release --parallel 2 --target aeyla_project_package_tests aeyla_project_file_controller_tests aeyla_plugin_state_tests aeyla_take_library_session_tests aeyla_live_memory_session_tests aeyla_show_midi_control_tests aeyla_host_song_binding_tests
+          ctest --test-dir build-core -C Release --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests)$'
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk='external/iPlug2/Dependencies/IPlug/VST3_SDK'
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Build Windows x64 VST3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          cmake -S product -B build-product `
+            -DIPLUG2_DIR="$env:GITHUB_WORKSPACE/external/iPlug2" `
+            -DIPLUG_DEPLOY_PLUGINS=OFF `
+            -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Steinberg Validator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK -B build-validator -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          $bundle=Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $validator=Get-ChildItem build-validator -Recurse -File -Filter 'validator.exe' | Select-Object -First 1
+          if (-not $bundle -or -not $validator) { throw 'Missing VST3 or validator' }
+          & $validator.FullName $bundle.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Validator failed: $LASTEXITCODE" }
+
+      - name: Stage and build Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $bundle=Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $binary=Get-ChildItem $bundle.FullName -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Where-Object { $_.FullName -match 'x86_64-win' } | Select-Object -First 1
+          if (-not $bundle -or -not $binary -or $binary.Length -lt 1MB) { throw 'Invalid Windows VST3' }
+          $stage=Join-Path $env:GITHUB_WORKSPACE 'stage-windows'
+          New-Item -ItemType Directory -Force "$stage/VST3" | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName "$stage/VST3/AeylaVisualDmx.vst3"
+          Copy-Item tools/packaging/README_INSTALLERS_ES.txt $stage
+          $manifest=[ordered]@{ product='AEYLA Visual DMX'; version='R10.10.0'; channel='field-pretest-unsigned'; commit=$env:AEYLA_SOURCE_SHA; platform='windows-x64'; format='VST3'; plugin_sha256=(Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+          $manifest | ConvertTo-Json | Set-Content -Encoding utf8 "$stage/BUILD_MANIFEST.json"
+          choco install innosetup --version=$env:INNO_SETUP_VERSION --allow-downgrade -y --no-progress
+          $iscc=Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          $output=Join-Path $env:GITHUB_WORKSPACE 'dist-windows'
+          New-Item -ItemType Directory -Force $output | Out-Null
+          & $iscc @("/DSourceVST3=$stage/VST3/AeylaVisualDmx.vst3","/DReadmePath=$stage/README_INSTALLERS_ES.txt","/DManifestPath=$stage/BUILD_MANIFEST.json","/DOutputDir=$output","/DAppVersion=R10.10.0","/DAppVersionNumeric=10.10.0.0","/DBuildSha=$env:AEYLA_SOURCE_SHA",'tools/packaging/windows/AEYLA_VST3_SETUP.iss')
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          $installer=Get-ChildItem $output -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer -or $installer.Length -lt 1MB) { throw 'Installer missing' }
+          Rename-Item $installer.FullName 'RGB-Live-Control-AEYLA-R10.10.0-Windows-x64-Portable-Pretest.exe'
+          $installer=Get-Item "$output/RGB-Live-Control-AEYLA-R10.10.0-Windows-x64-Portable-Pretest.exe"
+          (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content -Encoding ascii "$($installer.FullName).sha256"
+
+      - name: Smoke clean install and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $installer=Get-Item 'dist-windows/RGB-Live-Control-AEYLA-R10.10.0-Windows-x64-Portable-Pretest.exe'
+          $p=Start-Process $installer.FullName -Wait -PassThru -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/SP-','/NORESTART')
+          if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
+          $installed=Join-Path $env:ProgramFiles 'Common Files/VST3/AeylaVisualDmx.vst3'
+          if (-not (Test-Path $installed)) { throw 'Installed VST3 missing' }
+          $installedBinary=Get-ChildItem $installed -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $sourceBinary=Get-ChildItem stage-windows/VST3 -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          if ((Get-FileHash $installedBinary.FullName -Algorithm SHA256).Hash -ne (Get-FileHash $sourceBinary.FullName -Algorithm SHA256).Hash) { throw 'Installed VST3 hash mismatch' }
+          $uninstaller=Join-Path $env:ProgramFiles 'RGB Estudios/AEYLA Visual DMX/unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Uninstaller missing' }
+          $u=Start-Process $uninstaller -Wait -PassThru -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
+          if ($u.ExitCode -ne 0) { throw "Uninstall failed: $($u.ExitCode)" }
+          if (Test-Path $installed) { throw 'VST3 remains after uninstall' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-R10.10.0-Windows-x64-Portable-Pretest
+          path: |
+            dist-windows/RGB-Live-Control-AEYLA-R10.10.0-Windows-x64-Portable-Pretest.exe
+            dist-windows/RGB-Live-Control-AEYLA-R10.10.0-Windows-x64-Portable-Pretest.exe.sha256
+          retention-days: 30
+          if-no-files-found: error
+
+  macos:
+    name: R10.10 macOS Universal / validator / DMG
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
+
+      - name: Assert exact R10.10 portable-session source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AEYLA_SOURCE_SHA"
+          grep -q 'session.bin' src/project/project_package.cpp
+          grep -q 'portableSession' product/AeylaVisualDmx/AeylaVisualDmx.h
+          grep -q 'R10.10 PORTABLE PRETEST' product/AeylaVisualDmx/AeylaRuntimeStatusControl.h
+
+      - name: Run portability regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-core --config Release --parallel 2 --target aeyla_project_package_tests aeyla_project_file_controller_tests aeyla_plugin_state_tests aeyla_take_library_session_tests aeyla_live_memory_session_tests aeyla_show_midi_control_tests aeyla_host_song_binding_tests
+          ctest --test-dir build-core --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests)$'
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Build Universal VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" -DIPLUG2_UNIVERSAL=ON -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Verify architectures sign and Steinberg Validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          bin="$vst3/Contents/MacOS/AeylaVisualDmx"
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --force --deep --sign - "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK -B build-validator -G Xcode -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          "$validator" "$vst3"
+
+      - name: Build PKG and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          root="$GITHUB_WORKSPACE/pkgroot"
+          scripts="$GITHUB_WORKSPACE/pkgscripts"
+          dmgroot="$GITHUB_WORKSPACE/dmgroot"
+          mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$scripts" "$dmgroot"
+          ditto "$vst3" "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          cat > "$scripts/preinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          rm -rf "/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          exit 0
+          EOF
+          cat > "$scripts/postinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          target="/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+          /usr/bin/codesign --verify --deep --strict "$target"
+          /usr/bin/touch "$target"
+          /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+          exit 0
+          EOF
+          chmod +x "$scripts/preinstall" "$scripts/postinstall"
+          pkgbuild --root "$root" --scripts "$scripts" --identifier 'com.rgbestudios.aeyla.vst3' --version '10.10.0' --install-location '/' "$dmgroot/Install RGB Live Control AEYLA R10.10.pkg"
+          cat > "$dmgroot/LEEME PRIMERO.txt" <<'EOF'
+          RGB Live Control / AEYLA R10.10.0 — PORTABLE SESSION PRETEST
+
+          Esta versión corrige el traspaso Windows -> Mac de las asociaciones DMX.
+          El archivo .aeylashow R10.10 guarda session.bin con toma activa por canción,
+          trims IN/OUT, anchors del DAW y mapa MIDI. Los .aeylatake siguen externos.
+
+          Flujo:
+          1. En Windows/REAPER instala R10.10, abre la sesión existente y verifica una canción.
+          2. Guarda / Guardar Como el .aeylashow con R10.10.
+          3. Mantén junto al show la carpeta TOMAS_DMX con los .aeylatake originales.
+          4. En Mac instala R10.10 y abre ese .aeylashow desde Ableton.
+          5. AEYLA intenta restaurar TOMAS_DMX automáticamente; salida física queda DESARMADA.
+          EOF
+          printf 'R10.10.0\nSOURCE_COMMIT=%s\nARCHITECTURES=arm64+x86_64\nSTATUS=PORTABLE_PRETEST\nSIGNING=AD_HOC\n' "$AEYLA_SOURCE_SHA" > "$dmgroot/BUILD_ID.txt"
+          hdiutil create -volname 'RGB Live Control AEYLA R10.10' -srcfolder "$dmgroot" -ov -format UDZO "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.10.0-macOS-Portable-Pretest.dmg"
+          hdiutil verify "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.10.0-macOS-Portable-Pretest.dmg"
+          shasum -a 256 "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.10.0-macOS-Portable-Pretest.dmg" > "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.10.0-macOS-Portable-Pretest.dmg.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-R10.10.0-macOS-Portable-Pretest
+          path: |
+            RGB-Live-Control-AEYLA-R10.10.0-macOS-Portable-Pretest.dmg
+            RGB-Live-Control-AEYLA-R10.10.0-macOS-Portable-Pretest.dmg.sha256
+          retention-days: 30
+          if-no-files-found: error
