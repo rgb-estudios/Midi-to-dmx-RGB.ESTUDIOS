@@ -1420,7 +1420,7 @@ private:
                         ? ""
                         : mPlug.CurrentProjectPath().parent_path().string().c_str());
     GetUI()->PromptForFile(
-        mDialogFileName, mDialogPath, EFileAction::Open, "aeylashow",
+        mDialogFileName, mDialogPath, EFileAction::Open, "",
         [this](const WDL_String& fileName, const WDL_String& path) {
           if(Empty(fileName)) return;
           ReportFileStatus(mPlug.OpenProjectFromUI(DialogPath(fileName, path)));
@@ -1449,7 +1449,7 @@ private:
                         ? ""
                         : mPlug.CurrentProjectPath().parent_path().string().c_str());
     GetUI()->PromptForFile(
-        mDialogFileName, mDialogPath, EFileAction::Save, "aeylashow",
+        mDialogFileName, mDialogPath, EFileAction::Save, "",
         [this](const WDL_String& fileName, const WDL_String& path) {
           if(Empty(fileName)) return;
           auto target = DialogPath(fileName, path);

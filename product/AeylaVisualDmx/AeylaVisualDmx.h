@@ -322,35 +322,29 @@ public:
     if(!std::filesystem::is_directory(directory, fsError) || fsError)
       return {false, {}, "VINCULAR TOMAS · la carpeta seleccionada no está disponible"};
 
-    {
-      const std::scoped_lock lock(mModelMutex);
-      aeyla::take_library_session::ensure_scope(
-          this, mModel.project_document().project_id);
-    }
-    aeyla::take_library_session::set_directory(this, directory);
-    const auto restored =
-        aeyla::take_library_session::restore_persisted_state(this);
-    {
-      const std::scoped_lock lock(mModelMutex);
-      RefreshHostStateCacheLocked();
-    }
-
+    // Validate the complete destination before changing the active library.
+    // A wrong/empty folder must never discard a working association.
     const auto scan = aeyla::capture::scan_take_directory(directory, {});
     if(!scan.ok())
       return {false, {}, "VINCULAR TOMAS · " + scan.error};
     if(scan.entries.empty())
       return {false, {}, "VINCULAR TOMAS · la carpeta no contiene archivos .aeylatake válidos"};
 
-    std::string message = "BIBLIOTECA DMX VINCULADA · " +
-        std::to_string(scan.entries.size()) + " TOMAS";
-    if(restored.restored_bindings > 0U || restored.missing_bindings > 0U)
-      message += " · " + std::to_string(restored.restored_bindings) +
-          " ASOCIACIONES RESTAURADAS" +
-          (restored.missing_bindings == 0U
-               ? std::string{}
-               : " · " + std::to_string(restored.missing_bindings) +
-                     " PENDIENTES");
-    return {true, {}, std::move(message)};
+    {
+      const std::scoped_lock lock(mModelMutex);
+      aeyla::take_library_session::ensure_scope(
+          this, mModel.project_document().project_id);
+    }
+    // set_directory() restores persisted basename + trim bindings against this
+    // exact directory; it never guesses a Windows/macOS path translation.
+    aeyla::take_library_session::set_directory(this, directory);
+    {
+      const std::scoped_lock lock(mModelMutex);
+      RefreshHostStateCacheLocked();
+    }
+
+    return {true, {}, "BIBLIOTECA DMX VINCULADA · " +
+                        std::to_string(scan.entries.size()) + " TOMAS"};
   }
 
   [[nodiscard]] aeyla::product::AuthoringResult CancelLiveMemoryLearnFromUI(
