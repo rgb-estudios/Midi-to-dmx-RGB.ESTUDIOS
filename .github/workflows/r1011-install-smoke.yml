@@ -120,4 +120,26 @@ jobs:
           name: R10.11.1-installed-host-evidence
           path: evidence/
           if-no-files-found: error
+  export_dmg:
+    runs-on: macos-15
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AEYLA-R10.11.1-macOS-Direct-Song-MIDI-Pretest
+          run-id: 34291429955
+          github-token: ${{ github.token }}
+          path: package
+      - name: Export verified delivery bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$(find package -name '*.dmg' | head -n 1)"
+          expected="$(awk '{print $1}' "$dmg.sha256")"
+          actual="$(shasum -a 256 "$dmg" | awk '{print $1}')"
+          test "$actual" = "$expected"
+          echo "DELIVERY_SHA256=$actual"
+          echo DMG_BASE64_BEGIN
+          base64 -b 120 -i "$dmg"
+          echo DMG_BASE64_END
 
