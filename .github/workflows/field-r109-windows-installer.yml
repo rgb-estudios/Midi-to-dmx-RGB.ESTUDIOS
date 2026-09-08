@@ -1,0 +1,191 @@
+name: field-r109-windows-installer
+
+on:
+  push:
+    branches:
+      - field/r10.9-windows-package-20260907
+
+permissions:
+  contents: read
+
+env:
+  AEYLA_SOURCE_SHA: 70478c4e15cf0a6958dc98225c46a1153545e127
+  AEYLA_VERSION: R10.9.0
+  AEYLA_VERSION_NUMERIC: 10.9.0.0
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+  INNO_SETUP_VERSION: 6.7.1
+
+jobs:
+  windows-field-installer:
+    name: R10.9 Windows x64 VST3 installer / validator / install smoke
+    runs-on: windows-2025
+    timeout-minutes: 55
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AEYLA_SOURCE_SHA }}
+
+      - name: Assert exact R10.9 field behavior
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (git rev-parse HEAD).Trim()
+          if ($sha -ne $env:AEYLA_SOURCE_SHA) { throw "Wrong source SHA: $sha" }
+          Select-String -Path product/AeylaVisualDmx/AeylaRuntimeStatusControl.h -Pattern 'VINCULAR TOMAS DMX' -Quiet | Out-Null
+          Select-String -Path product/AeylaVisualDmx/AeylaVisualDmx.h -Pattern 'DESARMA la salida AEYLA primero' -Quiet | Out-Null
+          Select-String -Path product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp -Pattern 'item.name.rfind\("en", 0U\)' -Quiet | Out-Null
+          Select-String -Path product/AeylaVisualDmx/AeylaLiveMemorySession.cpp -Pattern 'learn_source_ipv4' -Quiet | Out-Null
+
+      - name: Run focused R10.9 regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-core --config Release --target aeyla_take_library_session_tests aeyla_live_memory_session_tests --parallel 2
+          ctest --test-dir build-core -C Release -R '^(aeyla_take_library_session_tests|aeyla_live_memory_session_tests)$' --output-on-failure
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = 'external/iPlug2/Dependencies/IPlug/VST3_SDK'
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Configure and build Windows x64 VST3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S product -B build-product `
+            -DIPLUG2_DIR="$env:GITHUB_WORKSPACE/external/iPlug2" `
+            -DIPLUG_DEPLOY_PLUGINS=OFF `
+            -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Build and run Steinberg Validator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK `
+            -B build-validator `
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF `
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF `
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $validator = Get-ChildItem build-validator -Recurse -File -Filter 'validator.exe' | Select-Object -First 1
+          if (-not $bundle -or -not $validator) { throw 'Missing VST3 bundle or validator' }
+          & $validator.FullName $bundle.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Steinberg Validator failed: $LASTEXITCODE" }
+
+      - name: Stage Windows bundle and manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter 'AeylaVisualDmx.vst3' |
+            Where-Object { $_.FullName -match 'x86_64-win' } | Select-Object -First 1
+          if (-not $bundle -or -not $binary) { throw 'Integrated Windows VST3 was not produced' }
+          if ($binary.Length -lt 1MB) { throw 'Windows VST3 binary is unexpectedly small' }
+          $bytes = [System.IO.File]::ReadAllBytes($binary.FullName)
+          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Windows VST3 lacks PE/MZ header' }
+
+          $stage = Join-Path $env:GITHUB_WORKSPACE 'stage-windows'
+          New-Item -ItemType Directory -Force "$stage/VST3" | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName "$stage/VST3/AeylaVisualDmx.vst3"
+          Copy-Item tools/maintenance/windows/AEYLA_VST3_MAINTENANCE.ps1 $stage
+          Copy-Item tools/maintenance/windows/AUDIT_AEYLA.cmd $stage
+          Copy-Item tools/maintenance/windows/CLEAN_AEYLA.cmd $stage
+          Copy-Item tools/maintenance/windows/CLEAN_INSTALL_AEYLA.cmd $stage
+          Copy-Item tools/maintenance/windows/INSTALL_AEYLA.cmd $stage
+          Copy-Item tools/packaging/README_INSTALLERS_ES.txt $stage
+
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            product = 'AEYLA Visual DMX'
+            version = $env:AEYLA_VERSION
+            channel = 'field-pretest-unsigned'
+            commit = $env:AEYLA_SOURCE_SHA
+            platform = 'windows-x64'
+            format = 'VST3'
+            plugin_sha256 = $hash
+            standalone_included = $false
+          }
+          $manifest | ConvertTo-Json | Set-Content -Encoding utf8 "$stage/BUILD_MANIFEST.json"
+
+      - name: Install pinned Inno Setup compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=$env:INNO_SETUP_VERSION --allow-downgrade -y --no-progress
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw 'Pinned Inno Setup compiler was not installed' }
+
+      - name: Build R10.9 Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = (Resolve-Path stage-windows).Path
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist-windows'
+          New-Item -ItemType Directory -Force $output | Out-Null
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          $args = @(
+            "/DSourceVST3=$stage/VST3/AeylaVisualDmx.vst3",
+            "/DReadmePath=$stage/README_INSTALLERS_ES.txt",
+            "/DManifestPath=$stage/BUILD_MANIFEST.json",
+            "/DOutputDir=$output",
+            "/DAppVersion=$env:AEYLA_VERSION",
+            "/DAppVersionNumeric=$env:AEYLA_VERSION_NUMERIC",
+            "/DBuildSha=$env:AEYLA_SOURCE_SHA",
+            'tools/packaging/windows/AEYLA_VST3_SETUP.iss'
+          )
+          & $iscc $args
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          $installer = Get-ChildItem $output -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer -or $installer.Length -lt 1MB) { throw 'Windows installer missing or unexpectedly small' }
+          Rename-Item $installer.FullName 'RGB-Live-Control-AEYLA-R10.9.0-Windows-x64-Field-Pretest.exe'
+          $installer = Get-Item "$output/RGB-Live-Control-AEYLA-R10.9.0-Windows-x64-Field-Pretest.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($installer.FullName)
+          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Windows installer lacks PE/MZ header' }
+          (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant() |
+            Set-Content -Encoding ascii "$($installer.FullName).sha256"
+
+      - name: Smoke clean install and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-Item 'dist-windows/RGB-Live-Control-AEYLA-R10.9.0-Windows-x64-Field-Pretest.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'aeyla-r109-install.log'
+          $process = Start-Process $installer.FullName -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/SP-', '/NORESTART', "/LOG=$log"
+          )
+          if ($process.ExitCode -ne 0) { Get-Content $log; throw "Installer failed: $($process.ExitCode)" }
+
+          $installedBundle = Join-Path $env:ProgramFiles 'Common Files/VST3/AeylaVisualDmx.vst3'
+          $installedBinary = Get-ChildItem $installedBundle -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $sourceBinary = Get-ChildItem stage-windows/VST3 -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          if (-not $installedBinary -or -not $sourceBinary) { throw 'Installed or source VST3 binary missing' }
+          if ((Get-FileHash $installedBinary.FullName -Algorithm SHA256).Hash -ne (Get-FileHash $sourceBinary.FullName -Algorithm SHA256).Hash) {
+            throw 'Installed Windows VST3 hash differs from staged source'
+          }
+
+          $uninstaller = Join-Path $env:ProgramFiles 'RGB Estudios/AEYLA Visual DMX/unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Inno uninstaller missing' }
+          $uninstall = Start-Process $uninstaller -Wait -PassThru -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed: $($uninstall.ExitCode)" }
+          if (Test-Path $installedBundle) { throw 'Windows VST3 remains after uninstall' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RGB-Live-Control-AEYLA-R10.9.0-Windows-x64-Field-Pretest
+          path: |
+            dist-windows/RGB-Live-Control-AEYLA-R10.9.0-Windows-x64-Field-Pretest.exe
+            dist-windows/RGB-Live-Control-AEYLA-R10.9.0-Windows-x64-Field-Pretest.exe.sha256
+          if-no-files-found: error
+          retention-days: 30
