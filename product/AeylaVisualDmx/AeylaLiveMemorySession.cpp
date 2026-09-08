@@ -18,6 +18,7 @@ struct SlotState {
   bool configured{false};
   bool learn_pending{false};
   DmxUniverse learn_baseline{};
+  std::string learn_source_ipv4;
 
   bool midi_learn_pending{false};
   MidiBindingKind midi_kind{MidiBindingKind::none};
@@ -457,10 +458,19 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
 
   if(!slot.learn_pending) {
     slot.learn_baseline = rx;
+    slot.learn_source_ipv4 = stats.source_ipv4;
     slot.learn_pending = true;
     return {true,
             slot.definition.name +
                 " · PASO 1/2 CAPTURADO (OFF). Activa sólo esta memoria en Avolites y ejecuta PASO 2/2 CAPTURAR ON"};
+  }
+
+  if(!slot.learn_source_ipv4.empty() &&
+     !stats.source_ipv4.empty() &&
+     slot.learn_source_ipv4 != stats.source_ipv4) {
+    return {false,
+            slot.definition.name +
+                " · la fuente Art-Net cambió entre OFF y ON. Mantengo el OFF; selecciona una sola fuente y repite CAPTURAR ON"};
   }
 
   output::LiveMemoryMask mask;
@@ -484,6 +494,7 @@ ActionResult learn_from_avolites(const void* owner, std::size_t index) {
   slot.definition = learned;
   slot.configured = true;
   slot.learn_pending = false;
+  slot.learn_source_ipv4.clear();
   session.persistence_dirty = true;
   const auto changed = mask.count();
   return {true,
@@ -501,6 +512,7 @@ ActionResult cancel_learn(const void* owner, std::size_t index) {
   if(index >= session.memory_count) return invalid_index();
   auto& slot = session.slots[index];
   slot.learn_pending = false;
+  slot.learn_source_ipv4.clear();
   return {true, slot.definition.name + " · aprendizaje DMX cancelado"};
 }
 

@@ -220,11 +220,21 @@ bool AeylaVisualDmx::RefreshNetworkInterfacesFromUI()
     }
 
     mNetworkInterfaces = discovered;
-    const auto preferred = std::find_if(
+    // On macOS, virtual bridge/utun interfaces can sort before a USB-C
+    // Ethernet adapter. Prefer a cabled BSD en* interface first, then retain
+    // the generic non-wireless fallback used on Windows/other platforms.
+    auto preferred = std::find_if(
         mNetworkInterfaces.begin(), mNetworkInterfaces.end(),
         [](const aeyla::network::NetworkInterface& item) {
-          return !item.wireless && !item.ipv4.empty();
+          return !item.wireless && !item.ipv4.empty() &&
+                 item.name.rfind("en", 0U) == 0U;
         });
+    if(preferred == mNetworkInterfaces.end())
+      preferred = std::find_if(
+          mNetworkInterfaces.begin(), mNetworkInterfaces.end(),
+          [](const aeyla::network::NetworkInterface& item) {
+            return !item.wireless && !item.ipv4.empty();
+          });
     const std::size_t preferredIndex = preferred == mNetworkInterfaces.end()
         ? 0U
         : static_cast<std::size_t>(
