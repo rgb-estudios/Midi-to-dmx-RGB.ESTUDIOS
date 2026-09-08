@@ -470,18 +470,23 @@ public:
 
     aeyla::product::ProjectFileStatus status;
     aeyla::project::LiveMemoryPersistentState liveState;
+    std::vector<std::uint8_t> portableSession;
+    std::string projectId;
     {
       const std::scoped_lock lock(mModelMutex);
       status = mProjectFiles.open(path);
       if(status.succeeded)
       {
         liveState = mProjectFiles.live_memory_state();
+        portableSession = mProjectFiles.portable_session_state();
+        projectId = mModel.project_document().project_id;
         mLoadedTakeSongIndex.store(-1, std::memory_order_release);
         mActiveTakeSongIndex.store(-1, std::memory_order_release);
         SyncParametersFromProject();
         RefreshOutputBackendFromProjectLocked();
-        if(ShowMidiMapping().enabled)
-          mMidiPreflightCursor.store(0, std::memory_order_release);
+        // Establish the new project identity before applying any embedded host
+        // bindings. This clears stale bindings from the previous project.
+        RefreshHostStateCacheLocked();
       }
       SyncSnapshotToAtomicsLocked();
     }
@@ -497,6 +502,111 @@ public:
         status.diagnostics.push_back(restored.message);
       }
     }
+
+    if(status.succeeded && !portableSession.empty())
+    {
+      const auto decoded = aeyla::runtime::decode_plugin_component_state(
+          portableSession);
+      if(!decoded.ok())
+      {
+        status.succeeded = false;
+        status.message = "Proyecto abierto en modo seguro, pero session.bin está dañado";
+        status.diagnostics.push_back(
+            std::string("session.bin: ") +
+            aeyla::runtime::plugin_state_error_name(decoded.error));
+        return status;
+      }
+
+      std::array<std::uint8_t, 16> currentUuid{};
+      {
+        const std::scoped_lock stateLock(mHostStateMutex);
+        currentUuid = mHostStateCache.project_uuid;
+      }
+      if(decoded.state.project_uuid != currentUuid)
+      {
+        status.succeeded = false;
+        status.message = "Proyecto abierto en modo seguro, pero session.bin pertenece a otro show";
+        status.diagnostics.push_back("session.bin: project UUID mismatch");
+        return status;
+      }
+
+      // Apply only portable authoring/session fields. Never restore locator
+      // paths, blackout state, grand master or physical output authority.
+      {
+        const std::scoped_lock stateLock(mHostStateMutex);
+        mHostStateCache.song_bindings = decoded.state.song_bindings;
+        mHostStateCache.show_midi = decoded.state.show_midi;
+        mHostStateCache.take_library_locator.clear();
+        mHostStateCache.take_bindings = decoded.state.take_bindings;
+      }
+      mShowMidiMappingPacked.store(
+          aeyla::runtime::pack_show_midi_mapping(decoded.state.show_midi),
+          std::memory_order_release);
+      mShowMidiCaptureStartNote.store(decoded.state.show_midi.capture_start_note,
+                                      std::memory_order_release);
+      mShowMidiCaptureStopNote.store(decoded.state.show_midi.capture_stop_note,
+                                     std::memory_order_release);
+      mMidiPreflightCursor.store(decoded.state.show_midi.enabled ? 0 : -1,
+                                 std::memory_order_release);
+
+      aeyla::take_library_session::stage_persisted_state(
+          this, projectId, {}, decoded.state.take_bindings);
+
+      std::filesystem::path resolvedDirectory;
+      const std::array<std::filesystem::path, 2U> candidates{
+          path.parent_path() / "TOMAS_DMX", path.parent_path()};
+      for(const auto& candidate : candidates)
+      {
+        std::error_code fsError;
+        if(candidate.empty() ||
+           !std::filesystem::is_directory(candidate, fsError) || fsError)
+          continue;
+        const auto scan = aeyla::capture::scan_take_directory(candidate, {});
+        if(scan.ok() && !scan.entries.empty())
+        {
+          resolvedDirectory = candidate;
+          break;
+        }
+      }
+
+      aeyla::take_library_session::PersistedRestoreStatus takeRestore;
+      if(!resolvedDirectory.empty())
+      {
+        aeyla::take_library_session::set_directory(this, resolvedDirectory);
+        takeRestore = aeyla::take_library_session::restore_persisted_state(this);
+      }
+
+      if(!decoded.state.take_bindings.empty())
+      {
+        if(resolvedDirectory.empty())
+        {
+          status.message += " · SESIÓN PORTABLE CARGADA; VINCULA LA CARPETA DE TOMAS UNA VEZ";
+        }
+        else if(takeRestore.missing_bindings != 0U ||
+                takeRestore.restored_bindings != decoded.state.take_bindings.size())
+        {
+          status.succeeded = false;
+          status.message = "Show abierto, pero la restauración DMX portable quedó incompleta";
+          status.diagnostics.push_back(
+              "Tomas restauradas: " + std::to_string(takeRestore.restored_bindings) +
+              " / " + std::to_string(decoded.state.take_bindings.size()) +
+              " · faltantes: " + std::to_string(takeRestore.missing_bindings));
+          return status;
+        }
+        else
+        {
+          status.message += " · SESIÓN PORTABLE / " +
+              std::to_string(takeRestore.restored_bindings) +
+              " TOMAS DMX RESTAURADAS";
+        }
+      }
+
+      {
+        const std::scoped_lock lock(mModelMutex);
+        RefreshHostStateCacheLocked();
+        SyncSnapshotToAtomicsLocked();
+      }
+    }
     return status;
   }
 
@@ -509,6 +619,26 @@ public:
     mProjectFiles.set_live_memory_state(
         aeyla::live_memory_session::persistent_state(this));
     PrepareProjectForSave();
+    RefreshHostStateCacheLocked();
+    aeyla::runtime::PluginComponentState portableState;
+    {
+      const std::scoped_lock stateLock(mHostStateMutex);
+      portableState = mHostStateCache;
+    }
+    portableState.project_checksum.fill(0U);
+    portableState.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
+    portableState.project_locator.clear();
+    portableState.take_library_locator.clear();
+    portableState.blackout = true;
+    const auto encodedPortable =
+        aeyla::runtime::encode_plugin_component_state(portableState);
+    if(!encodedPortable.ok())
+      return {aeyla::product::ProjectFileOperation::save,
+              false,
+              mProjectFiles.current_path(),
+              "No se pudo construir el estado portable del show",
+              {aeyla::runtime::plugin_state_error_name(encodedPortable.error)}};
+    mProjectFiles.set_portable_session_state(encodedPortable.bytes);
     const auto status = mProjectFiles.save(
         aeyla::product::current_utc_timestamp());
     if(status.succeeded)
@@ -527,6 +657,26 @@ public:
     mProjectFiles.set_live_memory_state(
         aeyla::live_memory_session::persistent_state(this));
     PrepareProjectForSave();
+    RefreshHostStateCacheLocked();
+    aeyla::runtime::PluginComponentState portableState;
+    {
+      const std::scoped_lock stateLock(mHostStateMutex);
+      portableState = mHostStateCache;
+    }
+    portableState.project_checksum.fill(0U);
+    portableState.locator_mode = aeyla::runtime::ProjectLocatorMode::none;
+    portableState.project_locator.clear();
+    portableState.take_library_locator.clear();
+    portableState.blackout = true;
+    const auto encodedPortable =
+        aeyla::runtime::encode_plugin_component_state(portableState);
+    if(!encodedPortable.ok())
+      return {aeyla::product::ProjectFileOperation::save_as,
+              false,
+              mProjectFiles.current_path(),
+              "No se pudo construir el estado portable del show",
+              {aeyla::runtime::plugin_state_error_name(encodedPortable.error)}};
+    mProjectFiles.set_portable_session_state(encodedPortable.bytes);
     const auto status = mProjectFiles.save_as(
         path, aeyla::product::current_utc_timestamp());
     if(status.succeeded)

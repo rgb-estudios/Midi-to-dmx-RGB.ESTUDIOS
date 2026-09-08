@@ -136,19 +136,23 @@ int main() {
   document.name = "AEYLA Package Round Trip";
   const auto show_program = make_show(document);
   const auto live_state = make_live_state();
+  const std::vector<std::uint8_t> portable_session{
+      0x41U, 0x45U, 0x59U, 0x4cU, 0x41U, 0x10U, 0x20U, 0x30U};
 
   const auto target = directory / "show.aeylashow";
   const ProjectPackageSaveResult first =
-      save_project_package_atomic(target, document, show_program, live_state);
-  check(first.ok(), "first project+show+live .aeylashow package save must succeed");
+      save_project_package_atomic(target, document, show_program, live_state,
+                                  portable_session);
+  check(first.ok(), "first project+show+live+session .aeylashow package save must succeed");
   check(std::filesystem::exists(target), "package target must exist after save");
   check(!std::filesystem::exists(target.string() + ".tmp"),
         "successful package save must not leave a temporary file");
 
   const ProjectPackageLoadResult loaded = load_project_package(target);
   check(loaded.ok(), "saved project+show+live .aeylashow package must load");
-  check(!loaded.legacy_project_only && !loaded.legacy_without_live_memory,
-        "current three-entry package must not be marked as legacy");
+  check(!loaded.legacy_project_only && !loaded.legacy_without_live_memory &&
+            !loaded.legacy_without_portable_session,
+        "current four-entry package must not be marked as legacy");
   if (loaded.document.has_value())
     check(*loaded.document == document,
           "package round-trip must preserve the authored project document");
@@ -157,10 +161,13 @@ int main() {
           "package round-trip must preserve songs, scenes, clips and MIDI mappings");
   check(loaded.live_memory_state == live_state,
         "package round-trip must preserve sparse live-memory configuration");
+  check(loaded.portable_session_state == portable_session,
+        "package round-trip must preserve bounded portable session bytes exactly");
 
   const auto second_target = directory / "show-copy.aeylashow";
   const ProjectPackageSaveResult deterministic =
-      save_project_package_atomic(second_target, document, show_program, live_state);
+      save_project_package_atomic(second_target, document, show_program, live_state,
+                                  portable_session);
   check(deterministic.ok(), "second independent package save must succeed");
   check(read_all(target) == read_all(second_target),
         "identical project+show+live state must produce byte-identical packages");
@@ -174,7 +181,7 @@ int main() {
   replacement_live.memories[0].channels[0].value = 220U;
   const ProjectPackageSaveResult replaced =
       save_project_package_atomic(target, replacement, replacement_show,
-                                  replacement_live);
+                                  replacement_live, portable_session);
   check(replaced.ok(), "atomic project+show+live package replacement must succeed");
   check(std::filesystem::exists(replaced.backup),
         "replacement must preserve the previous package as backup");
@@ -184,8 +191,9 @@ int main() {
             current.show_program.has_value() &&
             current.document->name == replacement.name &&
             current.show_program->songs.front().name == "Replacement Song" &&
-            current.live_memory_state == replacement_live,
-        "target must contain replacement project, show and live state together");
+            current.live_memory_state == replacement_live &&
+            current.portable_session_state == portable_session,
+        "target must contain replacement project, show, live and session state together");
   // Backup has .bak appended, so public loader intentionally rejects it by
   // extension. Rename a copy to prove the backup bytes remain a valid package.
   const auto backup_copy = directory / "backup-copy.aeylashow";
@@ -196,8 +204,9 @@ int main() {
             backup_loaded.show_program.has_value() &&
             backup_loaded.document->name == document.name &&
             *backup_loaded.show_program == show_program &&
-            backup_loaded.live_memory_state == live_state,
-        "backup bytes must preserve the previous project+show+live transaction");
+            backup_loaded.live_memory_state == live_state &&
+            backup_loaded.portable_session_state == portable_session,
+        "backup bytes must preserve the previous project+show+live+session transaction");
 
   const std::string project_json = serialize_project_document(document);
   const auto encoded_show = aeyla::show::encode_show_program(
@@ -219,6 +228,7 @@ int main() {
   const auto previous_loaded = load_project_package(previous_current);
   check(previous_loaded.ok() && !previous_loaded.legacy_project_only &&
             previous_loaded.legacy_without_live_memory &&
+            previous_loaded.legacy_without_portable_session &&
             previous_loaded.show_program.has_value() &&
             *previous_loaded.show_program == show_program &&
             previous_loaded.live_memory_state == LiveMemoryPersistentState{},
@@ -232,6 +242,7 @@ int main() {
   const auto legacy_loaded = load_project_package(legacy);
   check(legacy_loaded.ok() && legacy_loaded.legacy_project_only &&
             legacy_loaded.legacy_without_live_memory &&
+            legacy_loaded.legacy_without_portable_session &&
             legacy_loaded.show_program.has_value() &&
             legacy_loaded.show_program->songs.empty() &&
             legacy_loaded.live_memory_state == LiveMemoryPersistentState{},
@@ -248,6 +259,7 @@ int main() {
   const auto empty_current_loaded = load_project_package(empty_current);
   check(empty_current_loaded.ok() && !empty_current_loaded.legacy_project_only &&
             !empty_current_loaded.legacy_without_live_memory &&
+            empty_current_loaded.legacy_without_portable_session &&
             empty_current_loaded.show_program.has_value() &&
             empty_current_loaded.show_program->songs.empty() &&
             empty_current_loaded.live_memory_state == LiveMemoryPersistentState{},
@@ -257,6 +269,12 @@ int main() {
   check(!save_project_package_atomic(wrong_extension, document, show_program,
                                      live_state).ok(),
         "save must reject a non-.aeylashow extension");
+
+  const std::vector<std::uint8_t> oversized_session(64U * 1024U + 1U, 0x5aU);
+  check(!save_project_package_atomic(directory / "oversized-session.aeylashow",
+                                     document, show_program, live_state,
+                                     oversized_session).ok(),
+        "save must reject portable session state beyond 64 KiB");
 
   auto with_asset = document;
   with_asset.assets.push_back({"assets/intro.mov", std::string(64U, 'a')});

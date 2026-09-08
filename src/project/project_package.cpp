@@ -28,9 +28,11 @@ namespace {
 constexpr std::uintmax_t kMaximumArchiveBytes = 9U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumProjectJsonBytes = 4U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumLiveMemoryBytes = 8192U;
+constexpr std::uint64_t kMaximumPortableSessionBytes = 64U * 1024U;
 constexpr const char* kProjectEntry = "project.json";
 constexpr const char* kShowEntry = "show.bin";
 constexpr const char* kLiveEntry = "live.bin";
+constexpr const char* kSessionEntry = "session.bin";
 
 void add(std::vector<ProjectPackageDiagnostic>& diagnostics,
          std::string operation, std::string entry, std::string message) {
@@ -235,9 +237,9 @@ ProjectPackageLoadResult load_bytes(
   }
 
   const mz_uint file_count = mz_zip_reader_get_num_files(&archive);
-  if (file_count < 1U || file_count > 3U) {
+  if (file_count < 1U || file_count > 4U) {
     add(result.diagnostics, "validate-entries", source.string(),
-        "package must contain project.json, optionally show.bin, and optionally R10.1 live.bin only with show.bin");
+        "package must contain project.json, optionally show.bin, live.bin and bounded session.bin in canonical order");
     finish();
     return result;
   }
@@ -245,9 +247,11 @@ ProjectPackageLoadResult load_bytes(
   std::optional<mz_uint> project_index;
   std::optional<mz_uint> show_index;
   std::optional<mz_uint> live_index;
+  std::optional<mz_uint> session_index;
   mz_zip_archive_file_stat project_stat{};
   mz_zip_archive_file_stat show_stat{};
   mz_zip_archive_file_stat live_stat{};
+  mz_zip_archive_file_stat session_stat{};
 
   for (mz_uint index = 0U; index < file_count; ++index) {
     mz_zip_archive_file_stat stat{};
@@ -285,9 +289,18 @@ ProjectPackageLoadResult load_bytes(
       }
       live_index = index;
       live_stat = stat;
+    } else if (name == kSessionEntry) {
+      if (session_index.has_value()) {
+        add(result.diagnostics, "validate-entry", name,
+            "duplicate session.bin entry is not permitted");
+        finish();
+        return result;
+      }
+      session_index = index;
+      session_stat = stat;
     } else {
       add(result.diagnostics, "validate-entry", name,
-          "only project.json, show.bin and live.bin are permitted at the archive root");
+          "only project.json, show.bin, live.bin and session.bin are permitted at the archive root");
       finish();
       return result;
     }
@@ -305,9 +318,17 @@ ProjectPackageLoadResult load_bytes(
     finish();
     return result;
   }
-  if (file_count == 3U && (!show_index.has_value() || !live_index.has_value())) {
+  if (file_count == 3U && (!show_index.has_value() || !live_index.has_value() ||
+                           session_index.has_value())) {
     add(result.diagnostics, "validate-entry", source.string(),
         "three-entry packages must contain project.json + show.bin + live.bin");
+    finish();
+    return result;
+  }
+  if (file_count == 4U && (!show_index.has_value() || !live_index.has_value() ||
+                           !session_index.has_value())) {
+    add(result.diagnostics, "validate-entry", source.string(),
+        "four-entry packages must contain project.json + show.bin + live.bin + session.bin");
     finish();
     return result;
   }
@@ -338,6 +359,17 @@ ProjectPackageLoadResult load_bytes(
         archive, *live_index, live_stat, kMaximumLiveMemoryBytes,
         kLiveEntry, result.diagnostics);
     if (!live_bytes.has_value()) {
+      finish();
+      return result;
+    }
+  }
+
+  std::optional<std::vector<std::uint8_t>> session_bytes;
+  if (session_index.has_value()) {
+    session_bytes = extract_entry(
+        archive, *session_index, session_stat, kMaximumPortableSessionBytes,
+        kSessionEntry, result.diagnostics);
+    if (!session_bytes.has_value()) {
       finish();
       return result;
     }
@@ -400,6 +432,10 @@ ProjectPackageLoadResult load_bytes(
   result.document = std::move(parsed.document);
   result.show_program = std::move(program);
   result.live_memory_state = std::move(live_state);
+  if (session_bytes.has_value())
+    result.portable_session_state = std::move(*session_bytes);
+  else
+    result.legacy_without_portable_session = true;
   return result;
 }
 
@@ -407,6 +443,7 @@ std::optional<std::vector<std::uint8_t>> build_archive(
     const ProjectDocument& document,
     const show::ShowProgram& show_program,
     const LiveMemoryPersistentState& live_memory_state,
+    std::span<const std::uint8_t> portable_session_state,
     std::vector<ProjectPackageDiagnostic>& diagnostics) {
   const ProjectValidation validation = validate_project_document(document);
   if (!validation.ok()) {
@@ -448,11 +485,18 @@ std::optional<std::vector<std::uint8_t>> build_archive(
     return std::nullopt;
   }
 
+  if (portable_session_state.size() > kMaximumPortableSessionBytes) {
+    add(diagnostics, "validate-session", kSessionEntry,
+        "portable session state exceeds the 64 KiB bound");
+    return std::nullopt;
+  }
+
   const std::string project_json = serialize_project_document(document);
   mz_zip_archive archive{};
   mz_zip_zero_struct(&archive);
   const std::size_t reserve =
-      project_json.size() + encoded_show.bytes.size() + encoded_live.size() + 3072U;
+      project_json.size() + encoded_show.bytes.size() + encoded_live.size() +
+      portable_session_state.size() + 4096U;
   if (!mz_zip_writer_init_heap(&archive, 0U, reserve)) {
     add(diagnostics, "create-archive", kProjectEntry, zip_error(archive));
     return std::nullopt;
@@ -475,6 +519,14 @@ std::optional<std::vector<std::uint8_t>> build_archive(
                              encoded_live.data(), encoded_live.size(),
                              MZ_BEST_COMPRESSION)) {
     add(diagnostics, "add-entry", kLiveEntry, zip_error(archive));
+    (void) mz_zip_writer_end(&archive);
+    return std::nullopt;
+  }
+  if (!portable_session_state.empty() &&
+      !mz_zip_writer_add_mem(&archive, kSessionEntry,
+                             portable_session_state.data(),
+                             portable_session_state.size(), MZ_BEST_COMPRESSION)) {
+    add(diagnostics, "add-entry", kSessionEntry, zip_error(archive));
     (void) mz_zip_writer_end(&archive);
     return std::nullopt;
   }
@@ -505,9 +557,13 @@ std::optional<std::vector<std::uint8_t>> build_archive(
       verified.legacy_without_live_memory ||
       serialize_project_document(*verified.document) != project_json ||
       *verified.show_program != show_program ||
-      verified.live_memory_state != live_memory_state) {
+      verified.live_memory_state != live_memory_state ||
+      verified.portable_session_state !=
+          std::vector<std::uint8_t>(portable_session_state.begin(),
+                                    portable_session_state.end()) ||
+      verified.legacy_without_portable_session != portable_session_state.empty()) {
     add(diagnostics, "verify-archive", "<generated>",
-        "generated package failed deterministic project+show+live read-back verification");
+        "generated package failed deterministic project+show+live+session read-back verification");
     return std::nullopt;
   }
   return bytes;
@@ -534,7 +590,8 @@ ProjectPackageSaveResult save_project_package_atomic(
     const std::filesystem::path& target,
     const ProjectDocument& document,
     const show::ShowProgram& show_program,
-    const LiveMemoryPersistentState& live_memory_state) {
+    const LiveMemoryPersistentState& live_memory_state,
+    std::span<const std::uint8_t> portable_session_state) {
   ProjectPackageSaveResult result;
   result.target = target;
   result.backup = backup_path(target);
@@ -546,7 +603,8 @@ ProjectPackageSaveResult save_project_package_atomic(
   }
 
   const auto archive = build_archive(
-      document, show_program, live_memory_state, result.diagnostics);
+      document, show_program, live_memory_state, portable_session_state,
+      result.diagnostics);
   if (!archive.has_value()) return result;
 
   std::error_code error;
@@ -583,9 +641,13 @@ ProjectPackageSaveResult save_project_package_atomic(
       serialize_project_document(*verified.document) !=
           serialize_project_document(document) ||
       *verified.show_program != show_program ||
-      verified.live_memory_state != live_memory_state) {
+      verified.live_memory_state != live_memory_state ||
+      verified.portable_session_state !=
+          std::vector<std::uint8_t>(portable_session_state.begin(),
+                                    portable_session_state.end()) ||
+      verified.legacy_without_portable_session != portable_session_state.empty()) {
     add(result.diagnostics, "verify-temp", temporary.string(),
-        "temporary package failed project+show+live read-back verification");
+        "temporary package failed project+show+live+session read-back verification");
     remove_if_present(temporary, result.diagnostics, "cleanup-temp");
     return result;
   }
@@ -629,6 +691,16 @@ ProjectPackageSaveResult save_project_package_atomic(
 
   result.saved = true;
   return result;
+}
+
+ProjectPackageSaveResult save_project_package_atomic(
+    const std::filesystem::path& target,
+    const ProjectDocument& document,
+    const show::ShowProgram& show_program,
+    const LiveMemoryPersistentState& live_memory_state) {
+  return save_project_package_atomic(
+      target, document, show_program, live_memory_state,
+      std::span<const std::uint8_t>{});
 }
 
 ProjectPackageSaveResult save_project_package_atomic(

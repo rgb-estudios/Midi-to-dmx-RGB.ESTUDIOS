@@ -61,6 +61,7 @@ ProjectFileStatus ProjectFileController::new_project(
 
   current_path_.clear();
   live_memory_state_ = project::LiveMemoryPersistentState{};
+  portable_session_state_.clear();
   model_.mark_project_unsaved();
   return publish_success(ProjectFileOperation::new_project,
                          "New project created in blackout and disarmed");
@@ -106,6 +107,7 @@ ProjectFileStatus ProjectFileController::open(
   // Publish live-memory state only after project+show publication succeeds.
   // Runtime levels are not part of this DTO and therefore always restore OFF.
   live_memory_state_ = loaded.live_memory_state;
+  portable_session_state_ = std::move(loaded.portable_session_state);
   current_path_ = path;
   if (loaded.legacy_project_only) {
     return publish_success(
@@ -145,7 +147,8 @@ ProjectFileStatus ProjectFileController::save_to(
   const auto document = model_.project_document_for_save(timestamp_utc);
   const auto show_program = model_.show_program_for_save();
   const auto saved = project::save_project_package_atomic(
-      path, document, show_program, live_memory_state_);
+      path, document, show_program, live_memory_state_,
+      portable_session_state_);
   if (!saved.ok()) {
     return publish_failure(operation,
                            "Could not save project package",
@@ -156,8 +159,8 @@ ProjectFileStatus ProjectFileController::save_to(
   model_.mark_project_saved(std::move(timestamp_utc));
   return publish_success(operation,
                          operation == ProjectFileOperation::save
-                             ? "Project, show and live-memory package saved and verified"
-                             : "Project, show and live-memory package saved to a new path and verified");
+                             ? "Project, show, live-memory and portable session saved and verified"
+                             : "Project, show, live-memory and portable session saved to a new path and verified");
 }
 
 ProjectFileStatus ProjectFileController::publish_failure(
