@@ -129,7 +129,9 @@ int main() {
         "authored show must satisfy performance preflight before save");
 
   const auto live_state = make_live_state();
+  const std::vector<std::uint8_t> portable_session{0x01U, 0x02U, 0x03U, 0x04U};
   controller.set_live_memory_state(live_state);
+  controller.set_portable_session_state(portable_session);
   const auto package = directory / "controller.aeylashow";
   const auto saved = controller.save_as(package, "2026-08-07T04:05:00Z");
   check(saved.succeeded &&
@@ -172,10 +174,13 @@ int main() {
         "Open must restore authored visual state from the package");
   check(reopened.live_memory_state() == live_state,
         "Open must restore the persisted live-memory configuration DTO");
+  check(reopened.portable_session_state() == portable_session,
+        "Open must restore the opaque portable session payload exactly");
 
   const std::string current_project_id = reopened_model.snapshot().project_id;
   const auto current_show = reopened_model.show_program();
   const auto current_live = reopened.live_memory_state();
+  const auto current_portable = reopened.portable_session_state();
   const auto invalid = directory / "invalid.aeylashow";
   {
     std::ofstream output(invalid, std::ios::binary | std::ios::trunc);
@@ -188,8 +193,9 @@ int main() {
             reopened_model.snapshot().project_id == current_project_id &&
             reopened_model.snapshot().project_valid &&
             reopened_model.show_program() == current_show &&
-            reopened.live_memory_state() == current_live,
-        "corrupt Open must preserve current project+show+live runtime/path state");
+            reopened.live_memory_state() == current_live &&
+            reopened.portable_session_state() == current_portable,
+        "corrupt Open must preserve current project+show+live+session runtime/path state");
 
   auto incompatible = aeyla::project::make_default_project_document(
       "99999999-aaaa-4bbb-8ccc-333333333333",

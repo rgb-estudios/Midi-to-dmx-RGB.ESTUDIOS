@@ -4,8 +4,10 @@
 #include "project/project_document.h"
 #include "show/show_program.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -23,8 +25,12 @@ struct ProjectPackageLoadResult {
   std::optional<ProjectDocument> document;
   std::optional<show::ShowProgram> show_program;
   LiveMemoryPersistentState live_memory_state{};
+  // Opaque, bounded plug-in/session state. The project layer does not interpret
+  // this payload; the product plug-in validates it with runtime/plugin_state.
+  std::vector<std::uint8_t> portable_session_state{};
   bool legacy_project_only{false};
   bool legacy_without_live_memory{false};
+  bool legacy_without_portable_session{false};
   std::vector<ProjectPackageDiagnostic> diagnostics;
 
   [[nodiscard]] bool ok() const noexcept {
@@ -45,16 +51,18 @@ struct ProjectPackageSaveResult {
 };
 
 // `.aeylashow` package contract:
-// - R10.1 current format: deterministic root entries
-//   `project.json` + `show.bin` + `live.bin`;
+// - R10.10 current format: deterministic root entries
+//   `project.json` + `show.bin` + `live.bin` + `session.bin`;
+// - R10.1-R10.9 three-entry packages remain readable; they simply have no
+//   portable host/take binding payload;
 // - previous two-entry project+show packages remain readable and restore an
 //   empty/OFF live-memory state;
 // - legacy Alpha 0.3 `project.json`-only packages remain readable and migrate to
 //   an empty authoring ShowProgram + empty/OFF live-memory state;
 // - unknown entries, ZIP64, encryption and asset payloads are rejected;
 // - project, show and live-memory state are validated together before publish;
-// - live.bin contains configuration only. Runtime level/target, Learn state,
-//   LTP serial and physical output ARM are never persisted.
+// - session.bin is bounded to 64 KiB and contains no DMX frames. Physical ARM
+//   is not part of the plug-in component state and all restore paths stay safe.
 ProjectPackageLoadResult load_project_package(
     const std::filesystem::path& source);
 
@@ -62,10 +70,17 @@ ProjectPackageSaveResult save_project_package_atomic(
     const std::filesystem::path& target,
     const ProjectDocument& document,
     const show::ShowProgram& show_program,
+    const LiveMemoryPersistentState& live_memory_state,
+    std::span<const std::uint8_t> portable_session_state);
+
+ProjectPackageSaveResult save_project_package_atomic(
+    const std::filesystem::path& target,
+    const ProjectDocument& document,
+    const show::ShowProgram& show_program,
     const LiveMemoryPersistentState& live_memory_state);
 
-// Compatibility overloads write the current three-entry package with an empty
-// live-memory state so all newly saved projects migrate forward deterministically.
+// Compatibility overloads retain the older three-entry package when no
+// portable session payload is supplied.
 ProjectPackageSaveResult save_project_package_atomic(
     const std::filesystem::path& target,
     const ProjectDocument& document,

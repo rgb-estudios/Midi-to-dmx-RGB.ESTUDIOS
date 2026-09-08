@@ -3,6 +3,7 @@
 #include "product/application_model.h"
 #include "project/project_package.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -54,6 +55,15 @@ class ProjectFileController final {
     live_memory_state_ = std::move(state);
   }
 
+  [[nodiscard]] const std::vector<std::uint8_t>& portable_session_state()
+      const noexcept {
+    return portable_session_state_;
+  }
+
+  void set_portable_session_state(std::vector<std::uint8_t> state) {
+    portable_session_state_ = std::move(state);
+  }
+
  private:
   ProjectFileStatus save_to(const std::filesystem::path& path,
                             std::string timestamp_utc,
@@ -68,6 +78,7 @@ class ProjectFileController final {
   std::filesystem::path current_path_;
   ProjectFileStatus status_{};
   project::LiveMemoryPersistentState live_memory_state_{};
+  std::vector<std::uint8_t> portable_session_state_{};
 };
 
 }  // namespace aeyla::product
