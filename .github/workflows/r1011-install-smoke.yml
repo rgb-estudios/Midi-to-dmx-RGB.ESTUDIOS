@@ -1,0 +1,56 @@
+name: R10.11.1 install and host evidence
+on:
+  push:
+    branches: [validation/r10.11-install-smoke-20260908]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: R10.11-validation-evidence
+          run-id: 34291165700
+          github-token: ${{ github.token }}
+          path: prior-evidence
+      - name: Inspect previous host attempt
+        shell: bash
+        run: |
+          find prior-evidence -type f
+          for path in prior-evidence/evidence/*.txt; do echo "$path"; cat "$path"; done
+          if [ -f prior-evidence/evidence/mac-host.png ]; then
+            sips -s format jpeg -s formatOptions 55 -Z 1100 prior-evidence/evidence/mac-host.png --out host-preview.jpg
+            echo SCREENSHOT_BASE64_BEGIN
+            base64 -i host-preview.jpg
+            echo SCREENSHOT_BASE64_END
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: AEYLA-R10.11.1-macOS-Direct-Song-MIDI-Pretest
+          run-id: 34291429955
+          github-token: ${{ github.token }}
+          path: package
+      - name: Install exact DMG and verify installed Universal plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$(find package -name '*.dmg' | head -n 1)"
+          expected="$(awk '{print $1}' "$dmg.sha256")"
+          actual="$(shasum -a 256 "$dmg" | awk '{print $1}')"
+          test "$actual" = "$expected"
+          echo "DMG_SHA256=$actual"
+          hdiutil verify "$dmg"
+          mkdir -p "$RUNNER_TEMP/aeyla-install"
+          hdiutil attach "$dmg" -mountpoint "$RUNNER_TEMP/aeyla-install" -readonly -nobrowse
+          pkg="$(find "$RUNNER_TEMP/aeyla-install" -name '*.pkg' | head -n 1)"
+          sudo installer -pkg "$pkg" -target /
+          target=/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3
+          codesign --verify --deep --strict "$target"
+          lipo "$target/Contents/MacOS/AeylaVisualDmx" -verify_arch arm64 x86_64
+          shasum -a 256 "$target/Contents/MacOS/AeylaVisualDmx"
+          hdiutil detach "$RUNNER_TEMP/aeyla-install"
+          echo INSTALL_VERIFICATION=PASS
+
