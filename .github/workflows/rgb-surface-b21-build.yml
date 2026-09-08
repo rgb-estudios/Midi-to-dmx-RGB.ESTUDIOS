@@ -1,0 +1,52 @@
+name: RGB Surface B21 build
+
+on:
+  push:
+    branches: [rgb-surface-b21-build]
+    paths:
+      - 'rgb-surface-b21/**'
+      - '.github/workflows/rgb-surface-b21-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore B21 Android source
+        shell: bash
+        run: |
+          base64 -d rgb-surface-b21/android_b21-src.tar.gz.b64 > /tmp/android_b21-src.tar.gz
+          tar -xzf /tmp/android_b21-src.tar.gz
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Build signed debug APK
+        working-directory: android_b21
+        run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Stage direct APK
+        shell: bash
+        run: |
+          mkdir -p out
+          cp android_b21/app/build/outputs/apk/debug/app-debug.apk out/RGB-Surface-B21.apk
+          sha256sum out/RGB-Surface-B21.apk > out/SHA256-ANDROID-B21.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RGB-Surface-B21-Android
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
