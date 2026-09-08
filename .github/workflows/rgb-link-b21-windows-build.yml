@@ -1,0 +1,62 @@
+name: RGB Link B21 Windows build
+
+on:
+  push:
+    branches: [rgb-surface-b21-build]
+    paths:
+      - 'rgb-surface-b21/windows_b21-src.tar.gz.b64'
+      - '.github/workflows/rgb-link-b21-windows-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore B21 Windows source
+        shell: pwsh
+        run: |
+          $b64 = Get-Content -Raw 'rgb-surface-b21/windows_b21-src.tar.gz.b64'
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\windows_b21-src.tar.gz", [Convert]::FromBase64String($b64))
+          tar -xzf "$env:RUNNER_TEMP\windows_b21-src.tar.gz"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore and publish self-contained app
+        shell: pwsh
+        run: |
+          dotnet restore windows_b21\RGBLink.csproj
+          dotnet publish windows_b21\RGBLink.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o windows_b21\publish
+          if (!(Test-Path 'windows_b21\publish\RGB-Link-B21.exe')) { throw 'RGB-Link-B21.exe missing' }
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc.exe -ErrorAction SilentlyContinue
+          if (-not $iscc) { choco install innosetup -y --no-progress }
+      - name: Build offline installer
+        shell: pwsh
+        working-directory: windows_b21
+        run: |
+          $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue)
+          if ($iscc) { & $iscc.Source 'installer.iss' }
+          elseif (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe') { & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'installer.iss' }
+          else { throw 'ISCC not found' }
+          if (!(Test-Path 'installer-out\RGB-Link-B21-Setup-Windows-x64.exe')) { throw 'installer missing' }
+      - name: Stage direct EXE and hashes
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item 'windows_b21\installer-out\RGB-Link-B21-Setup-Windows-x64.exe' 'out\RGB-Link-B21-Setup-Windows-x64.exe'
+          Copy-Item 'windows_b21\README.txt' 'out\README-B21.txt'
+          $h = (Get-FileHash 'out\RGB-Link-B21-Setup-Windows-x64.exe' -Algorithm SHA256).Hash.ToLower()
+          "$h  RGB-Link-B21-Setup-Windows-x64.exe" | Set-Content -Encoding ascii 'out\SHA256-WINDOWS-B21.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RGB-Link-B21-Windows
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
