@@ -54,3 +54,70 @@ jobs:
           hdiutil detach "$RUNNER_TEMP/aeyla-install"
           echo INSTALL_VERIFICATION=PASS
 
+      - name: Install REAPER evaluation
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL https://www.reaper.fm/files/7.x/reaper778_universal.dmg -o "$RUNNER_TEMP/reaper.dmg"
+          mkdir -p "$RUNNER_TEMP/reaper-mount"
+          printf 'Y\n' | hdiutil attach "$RUNNER_TEMP/reaper.dmg" -mountpoint "$RUNNER_TEMP/reaper-mount" -nobrowse -readonly
+          app="$(find "$RUNNER_TEMP/reaper-mount" -maxdepth 2 -type d -name REAPER.app | head -n 1)"
+          ditto "$app" "$RUNNER_TEMP/REAPER.app"
+          hdiutil detach "$RUNNER_TEMP/reaper-mount"
+      - name: Exercise installed plugin in REAPER
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          Path("host-smoke.lua").write_text('local result = {"REAPER_VERSION=" .. reaper.GetAppVersion(), "STAGE=SCRIPT_STARTED"}\nlocal resource = reaper.GetResourcePath()\nlocal report = resource .. "/AEYLA_REAPER_HOST_SMOKE.txt"\nlocal function record(line)\n  if line then result[#result+1] = line end\n  local file=assert(io.open(report,"w"))\n  for _,entry in ipairs(result) do file:write(entry.."\\n") end\n  file:close()\nend\nlocal function failed(message) record("REASON="..tostring(message));record("RESULT=FAIL") end\nlocal function later(callback)\n  local started=reaper.time_precise()\n  local function poll()\n    if reaper.time_precise()-started < 2 then reaper.defer(poll);return end\n    local ok,message=pcall(callback)\n    if not ok then failed(message) end\n  end\n  reaper.defer(poll)\nend\nlocal function screenshot(name)\n  reaper.ExecProcess(\'/usr/sbin/screencapture -x "\'..resource..\'/\'..name..\'"\',5000)\nend\nlocal function test()\n  record()\n  local found\n  for index=0,4096 do\n    local ok,name,ident=reaper.EnumInstalledFX(index)\n    if not ok then break end\n    if (name or ""):lower():find("rgb live control",1,true) or\n       (ident or ""):lower():find("aeylavisualdmx",1,true) then found=ident;record("ENUM_NAME="..name);break end\n  end\n  assert(found,"AEYLA not enumerated")\n  reaper.InsertTrackAtIndex(0,true)\n  local track=reaper.GetTrack(0,0)\n  local fx=reaper.TrackFX_AddByName(track,found,false,-1)\n  assert(fx>=0,"AEYLA not instantiated")\n  local ok,name=reaper.TrackFX_GetFXName(track,fx)\n  assert(ok,"No instantiated FX name")\n  record("INSTANTIATED_NAME="..name)\n  reaper.TrackFX_Show(track,fx,3)\n  later(function()\n    assert(reaper.TrackFX_GetOpen(track,fx),"Editor did not open")\n    record("EDITOR_OPEN=PASS")\n    screenshot("AEYLA_EDITOR_OPEN.png")\n    reaper.TrackFX_Show(track,fx,2)\n    local project=resource.."/AEYLA_VALIDATION.rpp"\n    reaper.Main_SaveProjectEx(0,project,false)\n    local saved=io.open(project,"r");assert(saved,"Project not saved to disk");saved:close()\n    record("PROJECT_SAVE=PASS")\n    reaper.Main_openProject(project)\n    later(function()\n      local restored=reaper.GetTrack(0,0)\n      assert(restored and reaper.TrackFX_GetCount(restored)==1,"FX missing after reopen")\n      local restored_ok,restored_name=reaper.TrackFX_GetFXName(restored,0)\n      assert(restored_ok and restored_name==name,"Wrong FX after reopen")\n      record("PROJECT_REOPEN=PASS")\n      reaper.TrackFX_Show(restored,0,3)\n      later(function()\n        assert(reaper.TrackFX_GetOpen(restored,0),"Restored editor did not open")\n        screenshot("AEYLA_EDITOR_REOPEN.png")\n        record("EDITOR_REOPEN=PASS")\n        record("SCOPE=SCAN_INSTANTIATE_EDITOR_SAVE_REOPEN_EDITOR")\n        record("RESULT=PASS")\n      end)\n    end)\n  end)\nend\nlocal ok,message=pcall(test)\nif not ok then failed(message) end\n', encoding="utf-8")
+          PY
+          mkdir -p evidence
+          "$RUNNER_TEMP/REAPER.app/Contents/MacOS/REAPER" -nosplash -newinst "$PWD/host-smoke.lua" >evidence/stdout.txt 2>evidence/stderr.txt &
+          pid=$!
+          sleep 8
+          osascript - <<'APPLESCRIPT' >evidence/dialog.txt 2>&1 || true
+          tell application "System Events"
+            tell process "REAPER"
+              set frontmost to true
+              repeat with currentWindow in windows
+                if exists button "No" of currentWindow then
+                  click button "No" of currentWindow
+                  return "AUDIO_DEVICE_DIALOG_DISMISSED"
+                end if
+              end repeat
+              return "NO_AUDIO_DIALOG_FOUND"
+            end tell
+          end tell
+          APPLESCRIPT
+          report="$HOME/Library/Application Support/REAPER/AEYLA_REAPER_HOST_SMOKE.txt"
+          for attempt in $(seq 1 90); do
+            if [ -f "$report" ] && grep -q 'RESULT=' "$report"; then break; fi
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if [ -f "$report" ]; then cp "$report" evidence/; cat "$report"; fi
+          cp "$HOME/Library/Application Support/REAPER/AEYLA_EDITOR_"*.png evidence/ 2>/dev/null || true
+          screencapture -x evidence/current-screen.png || true
+          cat evidence/dialog.txt
+          cat evidence/stderr.txt
+          kill "$pid" 2>/dev/null || true
+          test -f "$report" && grep -q 'RESULT=PASS' "$report"
+      - name: Capture reviewable screenshots
+        if: always()
+        shell: bash
+        run: |
+          for path in evidence/*.png; do
+            test -f "$path" || continue
+            sips -s format jpeg -s formatOptions 65 -Z 1400 "$path" --out "$path.jpg"
+            echo "IMAGE_BEGIN=$path"
+            base64 -i "$path.jpg"
+            echo IMAGE_END
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: R10.11.1-installed-host-evidence
+          path: evidence/
+          if-no-files-found: error
+
