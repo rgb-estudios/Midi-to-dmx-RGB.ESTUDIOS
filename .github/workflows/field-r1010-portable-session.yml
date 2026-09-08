@@ -1,0 +1,64 @@
+name: field-r1010-portable-session
+
+on:
+  push:
+    branches:
+      - field/r10.10-portable-session-state-20260908
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply deterministic R10.10 patch
+        run: python3 tools/field_r1010_portable_state_patch.py
+
+      - name: Patch hygiene and contract checks
+        run: |
+          git diff --check
+          grep -q 'session.bin' src/project/project_package.cpp
+          grep -q 'portable_session_state' src/project/project_package.h
+          grep -q 'SESION PORTABLE' product/AeylaVisualDmx/AeylaVisualDmx.h || grep -q 'SESIÓN PORTABLE' product/AeylaVisualDmx/AeylaVisualDmx.h
+          grep -q 'R10.10 PORTABLE PRETEST' product/AeylaVisualDmx/AeylaRuntimeStatusControl.h
+
+      - name: Configure strict core build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build persistence and portability regression targets
+        run: |
+          cmake --build build --config Release --parallel 2 --target \
+            aeyla_project_package_tests \
+            aeyla_project_file_controller_tests \
+            aeyla_plugin_state_tests \
+            aeyla_take_library_session_tests \
+            aeyla_live_memory_session_tests \
+            aeyla_show_midi_control_tests \
+            aeyla_host_song_binding_tests
+
+      - name: Run persistence and portability regression suite
+        run: |
+          ctest --test-dir build --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests)$'
+
+      - name: Commit verified product changes and remove scaffolding
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/field-r1010-portable-session.yml tools/field_r1010_portable_state_patch.py
+          git add src/project/project_package.h \
+                  src/project/project_package.cpp \
+                  src/product/project_file_controller.h \
+                  src/product/project_file_controller.cpp \
+                  product/AeylaVisualDmx/AeylaVisualDmx.h \
+                  product/AeylaVisualDmx/AeylaRuntimeStatusControl.h \
+                  tests/test_project_package.cpp \
+                  tests/test_project_file_controller.cpp
+          git commit -m 'fix: persist portable take and song bindings inside aeylashow'
+          git push origin HEAD:${GITHUB_REF_NAME}
