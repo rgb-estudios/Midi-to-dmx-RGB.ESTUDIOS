@@ -32,8 +32,8 @@ jobs:
 
       - name: Build and run focused regressions
         run: |
-          cmake --build build --target aeyla_take_file_tests aeyla_live_memory_session_tests --config Release -j 2
-          ctest --test-dir build -R '^(aeyla_take_file_tests|aeyla_live_memory_session_tests)$' --output-on-failure
+          cmake --build build --target aeyla_take_library_session_tests aeyla_live_memory_session_tests --config Release -j 2
+          ctest --test-dir build -R '^(aeyla_take_library_session_tests|aeyla_live_memory_session_tests)$' --output-on-failure
 
       - name: Commit verified product patch and remove one-shot scaffolding
         run: |
