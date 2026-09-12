@@ -1,1 +1,410 @@
-name: placeholder
+name: field-r1012-midi-learn-hardening
+
+on:
+  push:
+    branches:
+      - field/r10.11-direct-song-midi-20260908
+
+permissions:
+  contents: read
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  macos:
+    name: R10.12 macOS Universal / hardened per-song MIDI Learn / DMG
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply R10.11 direct-song patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+          wf = Path('.github/workflows/field-r1011-direct-song-midi.yml').read_text()
+          marker = "          python3 - <<'PY'\n"
+          start = wf.index(marker) + len(marker)
+          end = wf.index("\n          PY\n", start)
+          script = textwrap.dedent(wf[start:end])
+          exec(compile(script, 'r1011_embedded_patch.py', 'exec'), {})
+          PY
+
+      - name: Apply R10.12 MIDI Learn hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {n}: {old[:120]!r}")
+              p.write_text(s.replace(old, new, count))
+
+          # --- portable state: R10.12 uses explicit unassigned sentinel 255 ---
+          replace('src/runtime/plugin_state.h',
+              'inline constexpr std::uint16_t kPluginStateFormatMinor = 5;',
+              'inline constexpr std::uint16_t kPluginStateFormatMinor = 6;')
+          replace('src/runtime/plugin_state.h',
+              '  std::array<std::uint8_t, kShowMidiSongCapacity> song_launch_notes{\n'
+              '      48U, 49U, 50U, 51U, 52U, 53U, 54U, 55U,\n'
+              '      56U, 57U, 58U, 59U, 60U, 61U, 62U};',
+              '  // 255 = SIN ASIGNAR. Song launch notes are authored explicitly by Learn.\n'
+              '  std::array<std::uint8_t, kShowMidiSongCapacity> song_launch_notes{\n'
+              '      255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U,\n'
+              '      255U, 255U, 255U, 255U, 255U, 255U, 255U};')
+          replace('src/runtime/plugin_state.cpp',
+              '    for (const auto note : state.song_launch_notes) {\n'
+              '      if (note > 127U || !used.insert(note).second)\n'
+              '        return PluginStateError::invalid_show_midi_mapping;\n'
+              '    }',
+              '    for (const auto note : state.song_launch_notes) {\n'
+              '      if (note == 255U) continue;\n'
+              '      if (note > 127U || !used.insert(note).second)\n'
+              '        return PluginStateError::invalid_show_midi_mapping;\n'
+              '    }')
+          replace('src/runtime/plugin_state.cpp',
+              '  } else if (format_minor >= 2U) {\n'
+              '    // Migrate R10.10 and older states from the old contiguous launch bank.\n'
+              '    for (std::size_t index = 0U; index < kShowMidiSongCapacity; ++index)\n'
+              '      result.state.song_launch_notes[index] = static_cast<std::uint8_t>(\n'
+              '          result.state.show_midi.launch_base_note + index);\n'
+              '  }',
+              '  } else if (format_minor >= 2U) {\n'
+              '    // R10.12 migration is intentionally fail-safe: old contiguous banks\n'
+              '    // become unassigned so every real song is learned explicitly.\n'
+              '    result.state.song_launch_notes.fill(255U);\n'
+              '  }')
+
+          # --- legacy contiguous launch bank becomes inert; globals no longer reserve N48..N62 ---
+          p = Path('src/runtime/show_midi_control.cpp')
+          s = p.read_text()
+          start = s.index('constexpr std::uint8_t kMaximumLaunchBase =')
+          end = s.index('\n}  // namespace', start)
+          helper = '''std::array<std::uint8_t, 7U> global_notes(\n    const ShowMidiMapping& mapping) noexcept {\n  return {mapping.previous_note, mapping.next_note, mapping.play_note,\n          mapping.pause_note, mapping.stop_note, mapping.capture_start_note,\n          mapping.capture_stop_note};\n}\n'''
+          s = s[:start] + helper + s[end:]
+          p.write_text(s)
+
+          p = Path('src/runtime/show_midi_control.cpp')
+          s = p.read_text()
+          fstart = s.index('ShowMidiMappingError validate_show_midi_mapping(')
+          fend = s.index('\nbool match_show_midi_note(', fstart)
+          new_validate = '''ShowMidiMappingError validate_show_midi_mapping(\n    const ShowMidiMapping& mapping) noexcept {\n  if(mapping.channel < 1U || mapping.channel > 16U)\n    return ShowMidiMappingError::invalid_channel;\n\n  const auto notes = global_notes(mapping);\n  if(std::any_of(notes.begin(), notes.end(), [](std::uint8_t note) {\n       return note > 127U;\n     }))\n    return ShowMidiMappingError::invalid_note;\n\n  for(std::size_t left = 0U; left < notes.size(); ++left) {\n    if(notes[left] == kShowMidiPanicNote)\n      return ShowMidiMappingError::duplicate_note;\n    for(std::size_t right = left + 1U; right < notes.size(); ++right) {\n      if(notes[left] == notes[right])\n        return ShowMidiMappingError::duplicate_note;\n    }\n  }\n  return ShowMidiMappingError::none;\n}\n'''
+          s = s[:fstart] + new_validate + s[fend:]
+          p.write_text(s)
+          replace('src/runtime/show_midi_control.cpp',
+              '  else if(inside_launch_range(mapping, note)) {\n'
+              '    match.command = ShowMidiCommand::launch_song;\n'
+              '    match.song_index = static_cast<std::uint8_t>(note - mapping.launch_base_note);\n'
+              '  }\n'
+              '  else\n',
+              '  else\n')
+          replace('src/runtime/show_midi_control.cpp',
+              '    case ShowMidiLearnTarget::launch_song_base: candidate.launch_base_note = note; break;',
+              '    case ShowMidiLearnTarget::launch_song_base:\n'
+              '      error_message = "LANZAR CANCIÓN se aprende por canción, no por banco base";\n'
+              '      return false;')
+
+          # --- lock the exact song at the moment Learn is pressed ---
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.h',
+              '  std::atomic<aeyla::runtime::ShowMidiLearnTarget> mShowMidiLearnTarget{\n'
+              '      aeyla::runtime::ShowMidiLearnTarget::none};\n'
+              '  std::atomic<int> mLoadedTakeSongIndex{-1};',
+              '  std::atomic<aeyla::runtime::ShowMidiLearnTarget> mShowMidiLearnTarget{\n'
+              '      aeyla::runtime::ShowMidiLearnTarget::none};\n'
+              '  // Captured when LEARN is pressed; MIDI arrival may not retarget another song.\n'
+              '  std::atomic<int> mShowMidiLearnSongIndex{-1};\n'
+              '  std::atomic<int> mLoadedTakeSongIndex{-1};')
+
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.cpp',
+              '''    if(positiveNoteOn)\n    {\n      const auto learnTarget = mShowMidiLearnTarget.exchange(\n          aeyla::runtime::ShowMidiLearnTarget::none,\n          std::memory_order_acq_rel);\n      if(learnTarget != aeyla::runtime::ShowMidiLearnTarget::none)\n      {\n        const std::uint32_t packed =\n            static_cast<std::uint32_t>(learnTarget) |\n            (static_cast<std::uint32_t>(channel) << 8U) |\n            (static_cast<std::uint32_t>(midiNote) << 16U) |\n            (1U << 24U);\n        mPendingMidiLearnPacked.store(packed, std::memory_order_release);\n        return;\n      }\n    }''',
+              '''    if(positiveNoteOn)\n    {\n      const auto pendingLearn = mShowMidiLearnTarget.load(std::memory_order_acquire);\n      if(pendingLearn != aeyla::runtime::ShowMidiLearnTarget::none)\n      {\n        const auto configured = ShowMidiMapping();\n        // Per-song Learn never changes the global Show channel. Notes arriving\n        // on another channel are ignored while Learn remains armed.\n        if(channel != configured.channel)\n          return;\n        const auto learnTarget = mShowMidiLearnTarget.exchange(\n            aeyla::runtime::ShowMidiLearnTarget::none,\n            std::memory_order_acq_rel);\n        const int learnedSong = mShowMidiLearnSongIndex.exchange(\n            -1, std::memory_order_acq_rel);\n        std::uint32_t packed =\n            static_cast<std::uint32_t>(learnTarget) |\n            (static_cast<std::uint32_t>(channel) << 8U) |\n            (static_cast<std::uint32_t>(midiNote) << 16U) |\n            (1U << 24U);\n        if(learnTarget == aeyla::runtime::ShowMidiLearnTarget::launch_song_base &&\n           learnedSong >= 0 &&\n           learnedSong < static_cast<int>(aeyla::runtime::kShowMidiSongCapacity))\n          packed |= (static_cast<std::uint32_t>(learnedSong + 1) << 25U);\n        mPendingMidiLearnPacked.store(packed, std::memory_order_release);\n        return;\n      }\n    }''')
+
+          # Normalize restored host state: entries beyond the real setlist are inert.
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.cpp',
+              '  const bool schemaMismatch = pending->project_schema_major !=\n'
+              '                                  currentSchemaMajor &&\n'
+              '                              !supportedLegacyMigration;\n\n'
+              '  aeyla::runtime::PluginComponentState previousCache;',
+              '  const bool schemaMismatch = pending->project_schema_major !=\n'
+              '                                  currentSchemaMajor &&\n'
+              '                              !supportedLegacyMigration;\n\n'
+              '  const auto restoredSongCount = std::min<std::size_t>(\n'
+              '      mModel.snapshot().song_count, aeyla::runtime::kShowMidiSongCapacity);\n'
+              '  for(std::size_t index = restoredSongCount;\n'
+              '      index < aeyla::runtime::kShowMidiSongCapacity; ++index)\n'
+              '    pending->song_launch_notes[index] = 255U;\n\n'
+              '  aeyla::runtime::PluginComponentState previousCache;')
+
+          # Portable .aeylashow restore gets the same normalization using song count captured under model lock.
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.h',
+              '    std::vector<std::uint8_t> portableSession;\n    std::string projectId;',
+              '    std::vector<std::uint8_t> portableSession;\n    std::string projectId;\n    std::size_t projectSongCount{0U};')
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.h',
+              '        projectId = mModel.project_document().project_id;\n        mLoadedTakeSongIndex.store',
+              '        projectId = mModel.project_document().project_id;\n'
+              '        projectSongCount = mModel.snapshot().song_count;\n'
+              '        mLoadedTakeSongIndex.store')
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.h',
+              '      // Apply only portable authoring/session fields. Never restore locator\n'
+              '      // paths, blackout state, grand master or physical output authority.\n'
+              '      {',
+              '      auto portableSongNotes = decoded.state.song_launch_notes;\n'
+              '      const auto boundedSongCount = std::min<std::size_t>(\n'
+              '          projectSongCount, aeyla::runtime::kShowMidiSongCapacity);\n'
+              '      for(std::size_t index = boundedSongCount;\n'
+              '          index < aeyla::runtime::kShowMidiSongCapacity; ++index)\n'
+              '        portableSongNotes[index] = 255U;\n\n'
+              '      // Apply only portable authoring/session fields. Never restore locator\n'
+              '      // paths, blackout state, grand master or physical output authority.\n'
+              '      {')
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.h',
+              '        mHostStateCache.song_launch_notes = decoded.state.song_launch_notes;',
+              '        mHostStateCache.song_launch_notes = portableSongNotes;')
+          replace('product/AeylaVisualDmx/AeylaVisualDmx.h',
+              '        mShowMidiLaunchNotes[index].store(decoded.state.song_launch_notes[index],\n'
+              '                                         std::memory_order_release);',
+              '        mShowMidiLaunchNotes[index].store(portableSongNotes[index],\n'
+              '                                         std::memory_order_release);')
+
+          # --- per-song validation only considers real songs; 255 is unassigned ---
+          p = Path('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp')
+          s = p.read_text()
+          a = s.index('bool ValidateSongLaunchLayout(')
+          b = s.index('\n}  // namespace', a)
+          helper = '''bool ValidateSongLaunchLayout(\n    const aeyla::runtime::ShowMidiMapping& mapping,\n    const std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity>& notes,\n    std::size_t songCount,\n    std::string& error) {\n  if(mapping.channel < 1U || mapping.channel > 16U) {\n    error = "Canal MIDI fuera de rango";\n    return false;\n  }\n  std::set<std::uint8_t> used{\n      mapping.previous_note, mapping.next_note, mapping.play_note,\n      mapping.pause_note, mapping.stop_note, mapping.capture_start_note,\n      mapping.capture_stop_note, aeyla::runtime::kShowMidiPanicNote};\n  const auto bounded = std::min(songCount, notes.size());\n  for(std::size_t index = 0U; index < bounded; ++index) {\n    const auto note = notes[index];\n    if(note == 255U)\n      continue;\n    if(note > 127U) {\n      error = "Nota de canción fuera de rango";\n      return false;\n    }\n    if(!used.insert(note).second) {\n      error = "La nota " + std::to_string(note) +\n              " ya está ocupada por otro control o canción";\n      return false;\n    }\n  }\n  return true;\n}\n'''
+          s = s[:a] + helper + s[b:]
+          p.write_text(s)
+
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '  if(songIndex >= aeyla::runtime::kShowMidiSongCapacity)\n    return 0U;',
+              '  if(songIndex >= aeyla::runtime::kShowMidiSongCapacity)\n    return 255U;')
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '''void AeylaVisualDmx::SyncSongMidiLaunchNotesToState(\n    const std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity>& notes)\n{\n  for(std::size_t index = 0U; index < notes.size(); ++index)\n    mShowMidiLaunchNotes[index].store(notes[index], std::memory_order_release);\n  const std::scoped_lock lock(mHostStateMutex);\n  mHostStateCache.song_launch_notes = notes;\n}''',
+              '''void AeylaVisualDmx::SyncSongMidiLaunchNotesToState(\n    const std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity>& notes)\n{\n  auto normalized = notes;\n  const auto songCount = std::min<std::size_t>(\n      mModel.snapshot().song_count, aeyla::runtime::kShowMidiSongCapacity);\n  for(std::size_t index = songCount; index < normalized.size(); ++index)\n    normalized[index] = 255U;\n  for(std::size_t index = 0U; index < normalized.size(); ++index)\n    mShowMidiLaunchNotes[index].store(normalized[index], std::memory_order_release);\n  const std::scoped_lock lock(mHostStateMutex);\n  mHostStateCache.song_launch_notes = normalized;\n}''')
+
+          # Toggle validates global + real-song map before enabling.
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '  mapping.enabled = !mapping.enabled;\n  mShowMidiLearnTarget.store',
+              '  if(!mapping.enabled)\n'
+              '  {\n'
+              '    std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity> songNotes{};\n'
+              '    for(std::size_t index = 0U; index < songNotes.size(); ++index)\n'
+              '      songNotes[index] = mShowMidiLaunchNotes[index].load(std::memory_order_acquire);\n'
+              '    std::string layoutError;\n'
+              '    if(!ValidateSongLaunchLayout(mapping, songNotes, mModel.snapshot().song_count, layoutError))\n'
+              '      return {false, {}, "MIDI SHOW BLOQUEADO · " + layoutError};\n'
+              '  }\n'
+              '  mapping.enabled = !mapping.enabled;\n'
+              '  mShowMidiLearnSongIndex.store(-1, std::memory_order_release);\n'
+              '  mShowMidiLearnTarget.store')
+
+          # Begin Learn captures exact song and never follows later UI selection changes.
+          p = Path('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp')
+          s = p.read_text()
+          a = s.index('aeyla::product::AuthoringResult AeylaVisualDmx::BeginShowMidiLearnFromUI(')
+          b = s.index('\naeyla::runtime::ShowMidiLearnTarget\nAeylaVisualDmx::ShowMidiLearnTarget()', a)
+          new_begin = '''aeyla::product::AuthoringResult AeylaVisualDmx::BeginShowMidiLearnFromUI(\n    aeyla::runtime::ShowMidiLearnTarget target)\n{\n  if(target == aeyla::runtime::ShowMidiLearnTarget::none) {\n    mShowMidiLearnSongIndex.store(-1, std::memory_order_release);\n    mShowMidiLearnTarget.store(target, std::memory_order_release);\n    return {true, {}, "APRENDER MIDI CANCELADO"};\n  }\n  if(ShowMidiConfigurationLocked())\n    return {false, {},\n            "Desarma la salida antes de aprender notas MIDI del show"};\n\n  std::string subject = LearnTargetName(target);\n  if(target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base)\n  {\n    const auto selected = mModel.snapshot().active_song_index;\n    if(selected >= mModel.snapshot().song_count ||\n       selected >= aeyla::runtime::kShowMidiSongCapacity)\n      return {false, {}, "Selecciona una canción válida antes de APRENDER MIDI"};\n    mShowMidiLearnSongIndex.store(static_cast<int>(selected),\n                                  std::memory_order_release);\n    subject = mModel.show_program().songs[selected].name;\n  }\n  else\n    mShowMidiLearnSongIndex.store(-1, std::memory_order_release);\n\n  mShowMidiLearnTarget.store(target, std::memory_order_release);\n  const auto channel = ShowMidiMapping().channel;\n  const std::string message =\n      "APRENDER MIDI · " + subject + " · CANAL " +\n      std::to_string(channel) + " · toca una nota";\n  SetShowMidiMessage(message);\n  return {true, {}, message};\n}\n'''
+          s = s[:a] + new_begin + s[b:]
+          p.write_text(s)
+
+          # Consume learned song index embedded at NOTE ON ingress; channel stays fixed.
+          p = Path('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp')
+          s = p.read_text()
+          start = s.index('    auto mapping = ShowMidiMapping();\n    std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity> songNotes{};',
+                          s.index('const std::uint32_t learned ='))
+          end = s.index('    } else {\n      SetShowMidiMessage("MIDI NO ASIGNADO · " + error);\n    }', start) + len('    } else {\n      SetShowMidiMessage("MIDI NO ASIGNADO · " + error);\n    }')
+          new_learn = '''    auto mapping = ShowMidiMapping();\n    std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity> songNotes{};\n    for(std::size_t index = 0U; index < songNotes.size(); ++index)\n      songNotes[index] = mShowMidiLaunchNotes[index].load(std::memory_order_acquire);\n    std::string error;\n    bool assigned = false;\n    if(target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base) {\n      const auto packedSong = static_cast<std::uint8_t>((learned >> 25U) & 0x1FU);\n      if(packedSong == 0U) {\n        error = "No existe una canción capturada para este Learn";\n      } else if(channel != mapping.channel) {\n        error = "La nota llegó por otro canal MIDI";\n      } else {\n        const auto selected = static_cast<std::size_t>(packedSong - 1U);\n        const auto songCount = mModel.snapshot().song_count;\n        if(selected >= songCount || selected >= songNotes.size()) {\n          error = "La canción aprendida ya no existe en el setlist";\n        } else {\n          auto candidateNotes = songNotes;\n          candidateNotes[selected] = note;\n          if(ValidateSongLaunchLayout(mapping, candidateNotes, songCount, error)) {\n            songNotes = candidateNotes;\n            assigned = true;\n          }\n        }\n      }\n    } else if(aeyla::runtime::assign_show_midi_note(\n                  mapping, target, channel, note, error)) {\n      assigned = ValidateSongLaunchLayout(\n          mapping, songNotes, mModel.snapshot().song_count, error);\n    }\n    if(assigned) {\n      mModel.release_transients();\n      SyncShowMidiMappingToState(mapping);\n      SyncSongMidiLaunchNotesToState(songNotes);\n      std::string subject = LearnTargetName(target);\n      if(target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base) {\n        const auto packedSong = static_cast<std::uint8_t>((learned >> 25U) & 0x1FU);\n        const auto selected = static_cast<std::size_t>(packedSong - 1U);\n        if(selected < mModel.snapshot().song_count)\n          subject = mModel.show_program().songs[selected].name;\n      }\n      SetShowMidiMessage(std::string("MIDI APRENDIDO · ") + subject +\n                         " = nota " + std::to_string(note) + " · canal " +\n                         std::to_string(mapping.channel) +\n                         (target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base\n                              ? " · DISPARO DIRECTO" : ""));\n    } else {\n      SetShowMidiMessage("MIDI NO ASIGNADO · " + error);\n    }'''
+          s = s[:start] + new_learn + s[end:]
+          p.write_text(s)
+
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '  mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,\n                             std::memory_order_release);\n  mMidiPreloadSongRequest.store(-1, std::memory_order_release);',
+              '  mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,\n                             std::memory_order_release);\n'
+              '  mShowMidiLearnSongIndex.store(-1, std::memory_order_release);\n'
+              '  mMidiPreloadSongRequest.store(-1, std::memory_order_release);')
+
+          # UI: no fake 15-note range; unassigned is explicit and readable.
+          replace('product/AeylaVisualDmx/AeylaMainControl.h',
+              '      std::string note = "NOTA " + std::to_string(notes[index]);\n'
+              '      if(index == 7U)\n'
+              '        note += "–" + std::to_string(\n'
+              '            static_cast<unsigned>(notes[index]) + 14U);',
+              '      const std::string note = notes[index] == 255U\n'
+              '          ? "SIN ASIGNAR"\n'
+              '          : "NOTA " + std::to_string(notes[index]);')
+          replace('product/AeylaVisualDmx/AeylaRuntimeStatusControl.h',
+              'R10.11 DIRECT MIDI PRETEST', 'R10.12 MIDI HARDENED CANDIDATE')
+
+          # --- regressions: legacy base bank must be inert and per-song state must round-trip ---
+          replace('tests/test_show_midi_control.cpp',
+              '''  for(std::uint8_t song = 0U; song < kShowMidiSongCapacity; ++song) {\n    const auto note = static_cast<std::uint8_t>(mapping.launch_base_note + song);\n    check(match_show_midi_note(mapping, 16U, note, 100U, match) &&\n              match.command == ShowMidiCommand::launch_song &&\n              match.song_index == song,\n          "direct Song note must resolve its stable zero-based index");\n  }\n''',
+              '''  for(std::uint8_t song = 0U; song < kShowMidiSongCapacity; ++song) {\n    const auto note = static_cast<std::uint8_t>(mapping.launch_base_note + song);\n    check(!match_show_midi_note(mapping, 16U, note, 100U, match),\n          "legacy contiguous Song bank must be inert in R10.12");\n  }\n''')
+          replace('tests/test_show_midi_control.cpp',
+              '''  check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,\n                               12U, 120U, error),\n        "launch base must reserve all 15 direct Song notes");\n\n  for(const auto fixed : {kShowMidiPanicNote,\n                          kShowMidiCaptureStartNote,\n                          kShowMidiCaptureStopNote}) {\n    const auto first = static_cast<std::uint8_t>(\n        fixed - (kShowMidiSongCapacity - 1U));\n    check(!assign_show_midi_note(mapping,\n                                 ShowMidiLearnTarget::launch_song_base,\n                                 12U, first, error),\n          "new Song launch bank must not cross a fixed operational note");\n  }\n''',
+              '''  check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,\n                               12U, 120U, error) &&\n            error.find("por canción") != std::string::npos,\n        "legacy launch-base Learn must be rejected explicitly");\n\n  {\n    auto oldRangeGlobal = mapping;\n    oldRangeGlobal.stop_note = 48U;\n    check(validate_show_midi_mapping(oldRangeGlobal) == ShowMidiMappingError::none,\n          "old N48..N62 bank must no longer reserve notes from global controls");\n    check(match_show_midi_note(oldRangeGlobal, oldRangeGlobal.channel, 48U, 127U, match) &&\n              match.command == ShowMidiCommand::stop_reset,\n          "a global control may use a former bank note without hidden Song launch");\n  }\n''')
+          replace('tests/test_show_midi_control.cpp',
+              '''  {\n    auto invalid = mapping;\n    invalid.launch_base_note = invalid.stop_note;\n    check(validate_show_midi_mapping(invalid) ==\n              ShowMidiMappingError::duplicate_note,\n          "global command inside launch range must be rejected");\n  }\n''',
+              '''  {\n    auto inert = mapping;\n    inert.launch_base_note = inert.stop_note;\n    check(validate_show_midi_mapping(inert) == ShowMidiMappingError::none,\n          "legacy launch_base field must be inert and reserve no notes");\n  }\n''')
+
+          replace('tests/test_plugin_state.cpp',
+              '  check(decoded.state.show_midi == state.show_midi,\n        "MIDI Show mapping must survive host-state round trip");',
+              '  check(decoded.state.show_midi == state.show_midi,\n        "MIDI Show mapping must survive host-state round trip");\n'
+              '  check(decoded.state.song_launch_notes == state.song_launch_notes,\n'
+              '        "per-song MIDI launch map must survive host-state round trip");')
+          replace('tests/test_plugin_state.cpp',
+              '  // Every truncated prefix must fail; no partial state may be accepted.\n',
+              '''  {\n    auto learned = state;\n    learned.song_launch_notes[0] = 60U;\n    learned.song_launch_notes[1] = 73U;\n    const auto learnedBytes = aeyla::runtime::encode_plugin_component_state(learned);\n    check(learnedBytes.ok(), "two independent learned Song notes must encode");\n    const auto learnedRoundTrip =\n        aeyla::runtime::decode_plugin_component_state(learnedBytes.bytes);\n    check(learnedRoundTrip.ok() &&\n              learnedRoundTrip.state.song_launch_notes == learned.song_launch_notes,\n          "learned Song notes must persist exactly");\n\n    auto duplicate = learned;\n    duplicate.song_launch_notes[1] = duplicate.song_launch_notes[0];\n    check(aeyla::runtime::encode_plugin_component_state(duplicate).error ==\n              PluginStateError::invalid_show_midi_mapping,\n          "duplicate assigned Song notes must be rejected");\n\n    auto reserved = learned;\n    reserved.song_launch_notes[1] = reserved.show_midi.stop_note;\n    check(aeyla::runtime::encode_plugin_component_state(reserved).error ==\n              PluginStateError::invalid_show_midi_mapping,\n          "Song note may not collide with a global Show command");\n  }\n\n  // Every truncated prefix must fail; no partial state may be accepted.\n''')
+
+          # Source-level invariants for the plugin integration path.
+          integration = Path('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp').read_text()
+          dsp = Path('product/AeylaVisualDmx/AeylaVisualDmx.cpp').read_text()
+          assert 'mShowMidiLearnSongIndex' in integration and 'mShowMidiLearnSongIndex' in dsp
+          assert 'candidate.channel = channel;' not in integration
+          assert 'SIN ASIGNAR' in Path('product/AeylaVisualDmx/AeylaMainControl.h').read_text()
+          assert 'inside_launch_range(mapping, note)' not in Path('src/runtime/show_midi_control.cpp').read_text()
+          print('R10.12 hardening patch applied')
+          PY
+
+          git diff --check
+          git diff --stat
+
+      - name: Run core regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-core --config Release --parallel 2 --target \
+            aeyla_project_package_tests \
+            aeyla_project_file_controller_tests \
+            aeyla_plugin_state_tests \
+            aeyla_take_library_session_tests \
+            aeyla_live_memory_session_tests \
+            aeyla_show_midi_control_tests \
+            aeyla_host_song_binding_tests \
+            aeyla_dmx_clip_playback_engine_tests
+          ctest --test-dir build-core --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests|aeyla_dmx_clip_playback_engine_tests)$'
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Build Universal VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode \
+            -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" \
+            -DIPLUG2_UNIVERSAL=ON \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Verify Universal and Steinberg Validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          bin="$vst3/Contents/MacOS/AeylaVisualDmx"
+          test -n "$vst3"
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --force --deep --sign - "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK -B build-validator -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          "$validator" "$vst3"
+
+      - name: Build R10.12 PKG and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          root="$GITHUB_WORKSPACE/pkgroot"
+          scripts="$GITHUB_WORKSPACE/pkgscripts"
+          dmgroot="$GITHUB_WORKSPACE/dmgroot"
+          mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$scripts" "$dmgroot"
+          ditto "$vst3" "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          cat > "$scripts/preinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          rm -rf "/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          exit 0
+          EOF
+          cat > "$scripts/postinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          target="/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+          /usr/bin/codesign --verify --deep --strict "$target"
+          /usr/bin/touch "$target"
+          /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+          exit 0
+          EOF
+          chmod +x "$scripts/preinstall" "$scripts/postinstall"
+          pkgbuild --root "$root" --scripts "$scripts" \
+            --identifier 'com.rgbestudios.aeyla.vst3' \
+            --version '10.12.0' --install-location '/' \
+            "$dmgroot/Install RGB Live Control AEYLA R10.12.pkg"
+          cat > "$dmgroot/LEEME PRIMERO.txt" <<'EOF'
+          RGB Live Control / AEYLA R10.12.0 — MIDI LEARN HARDENED CANDIDATE
+
+          CONFIGURACIÓN:
+          1. Selecciona la canción.
+          2. MIDI SHOW > LANZAR CANCIÓN SELECCIONADA > APRENDER MIDI.
+          3. Envía una NOTE ON por el CANAL MIDI SHOW configurado.
+          4. La nota queda asociada sólo a esa canción. Repite para las demás.
+
+          REGLAS:
+          - Learn de canción NO cambia el canal MIDI global.
+          - La canción se fija al pulsar Learn; cambiar selección después no retargetea el Learn.
+          - Nota 255 = SIN ASIGNAR; no dispara nada.
+          - Notas duplicadas/conflictivas se rechazan.
+          - NOTE OFF no dispara nada.
+          - NOTE ON de canción = seleccionar + reproducir inmediatamente desde IN.
+          - A->B cambia de toma conservando ARM; A->A reinicia desde IN.
+          - Las notas quedan dentro de session.bin/.aeylashow.
+          - MIDI no arma Art-Net ni libera APAGÓN.
+
+          Seguridad: PANIC N41 reservado. ARM Art-Net siempre manual.
+          EOF
+          printf 'R10.12.0\nFEATURE=DIRECT_PER_SONG_MIDI_HARDENED\nARCHITECTURES=arm64+x86_64\nSTATUS=FIELD_CANDIDATE\nSIGNING=AD_HOC\n' > "$dmgroot/BUILD_ID.txt"
+          hdiutil create -volname 'RGB Live Control AEYLA R10.12' \
+            -srcfolder "$dmgroot" -ov -format UDZO \
+            "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.12.0-macOS-MIDI-Learn-Hardened-Candidate.dmg"
+          hdiutil verify "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.12.0-macOS-MIDI-Learn-Hardened-Candidate.dmg"
+          shasum -a 256 "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.12.0-macOS-MIDI-Learn-Hardened-Candidate.dmg" \
+            > "$GITHUB_WORKSPACE/RGB-Live-Control-AEYLA-R10.12.0-macOS-MIDI-Learn-Hardened-Candidate.dmg.sha256"
+          git diff > "$GITHUB_WORKSPACE/R10.12-midi-learn-hardening.patch"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-R10.12.0-macOS-MIDI-Learn-Hardened-Candidate
+          path: |
+            RGB-Live-Control-AEYLA-R10.12.0-macOS-MIDI-Learn-Hardened-Candidate.dmg
+            RGB-Live-Control-AEYLA-R10.12.0-macOS-MIDI-Learn-Hardened-Candidate.dmg.sha256
+            R10.12-midi-learn-hardening.patch
+          retention-days: 30
+          if-no-files-found: error
