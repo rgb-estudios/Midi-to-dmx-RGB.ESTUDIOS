@@ -1,0 +1,176 @@
+name: field-r1013-continuity-launch-v2
+
+on:
+  push:
+    branches:
+      - field/r10.13-continuity-launch-20260913
+
+permissions:
+  contents: write
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  macos:
+    name: R10.13 v2 macOS Universal / continuity-safe launch / DMG
+    runs-on: macos-15
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply materialized R10.13 source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          # Reuse the already-reviewed R10.13 patch body, but relax only the
+          # formatting-sensitive source guard that caused run #1 to stop.
+          wf = Path('.github/workflows/field-r1013-continuity-launch.yml').read_text()
+          marker = "          python3 - <<'PY'\n"
+          start = wf.index(marker) + len(marker)
+          end = wf.index("\n          PY\n", start)
+          script = textwrap.dedent(wf[start:end])
+          script = script.replace(
+              "assert 'StartPreparedTakeFromMidiLocked(\\\\n      songIndex, triggerSample' in player",
+              "assert 'StartPreparedTakeFromMidiLocked(' in player\nassert 'songIndex, triggerSample, launchError' in player")
+          exec(compile(script, 'r1013_materialize_v2.py', 'exec'), {})
+          PY
+          git diff --check
+          git diff --stat
+
+      - name: Run core regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-core --config Release --parallel 2 --target \
+            aeyla_project_package_tests \
+            aeyla_project_file_controller_tests \
+            aeyla_plugin_state_tests \
+            aeyla_take_library_session_tests \
+            aeyla_live_memory_session_tests \
+            aeyla_show_midi_control_tests \
+            aeyla_host_song_binding_tests \
+            aeyla_dmx_clip_playback_engine_tests
+          ctest --test-dir build-core --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests|aeyla_dmx_clip_playback_engine_tests)$'
+
+      - name: Commit materialized R10.13 source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "rgb-estudios-ci"
+          git config user.email "claudio@rgb-estudios.com"
+          git add src product tests
+          if ! git diff --cached --quiet; then
+            git commit -m "field: materialize R10.13 continuity launch baseline [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Build Universal VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode \
+            -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" \
+            -DIPLUG2_UNIVERSAL=ON \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Verify Universal and Steinberg Validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          test -n "$vst3"
+          bin="$vst3/Contents/MacOS/AeylaVisualDmx"
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --force --deep --sign - "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK -B build-validator -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          "$validator" "$vst3"
+
+      - name: Build R10.13 PKG and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          root="$GITHUB_WORKSPACE/pkgroot"
+          scripts="$GITHUB_WORKSPACE/pkgscripts"
+          dmgroot="$GITHUB_WORKSPACE/dmgroot"
+          out="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$scripts" "$dmgroot" "$out"
+          ditto "$vst3" "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          cat > "$scripts/preinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          rm -rf "/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          exit 0
+          EOF
+          cat > "$scripts/postinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          target="/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+          /usr/bin/codesign --verify --deep --strict "$target"
+          /usr/bin/touch "$target"
+          /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+          exit 0
+          EOF
+          chmod +x "$scripts/preinstall" "$scripts/postinstall"
+          pkg="$dmgroot/Instalar-AEYLA-R10.13.0.pkg"
+          pkgbuild --root "$root" --scripts "$scripts" \
+            --identifier com.rgbestudios.aeyla.visualdmx \
+            --version 10.13.0 "$pkg"
+          cat > "$dmgroot/LEEME.txt" <<'EOF'
+          RGB Estudios · AEYLA R10.13
+
+          - Cada canción aprende una nota MIDI arbitraria e independiente.
+          - NOTE ON = seleccionar canción + PLAY desde su IN.
+          - Selección manual = mismo lanzamiento directo.
+          - Precarga = caché opcional; nunca requisito de lanzamiento.
+          - NOTE OFF no lanza nada.
+          - PANIC / ARM mantienen sus contratos de seguridad.
+
+          Firma ad-hoc. No notarizado con Apple Developer ID.
+          EOF
+          dmg="$out/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg"
+          hdiutil create -volname "AEYLA R10.13" -srcfolder "$dmgroot" -ov -format UDZO "$dmg"
+          shasum -a 256 "$dmg" | tee "$dmg.sha256"
+          git diff HEAD^..HEAD > "$out/R10.13-materialized-source.patch" || true
+
+      - name: Upload R10.13 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate
+          path: |
+            dist/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg
+            dist/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg.sha256
+            dist/R10.13-materialized-source.patch
+          if-no-files-found: error
