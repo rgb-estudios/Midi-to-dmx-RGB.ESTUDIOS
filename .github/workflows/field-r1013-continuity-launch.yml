@@ -1,0 +1,253 @@
+name: field-r1013-continuity-launch
+
+on:
+  push:
+    branches:
+      - field/r10.13-continuity-launch-20260913
+
+permissions:
+  contents: write
+
+env:
+  IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
+  VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+
+jobs:
+  macos:
+    name: R10.13 macOS Universal / continuity-safe launch / DMG
+    runs-on: macos-15
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize R10.12 baseline and apply R10.13 continuity patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          def extract_python_step(workflow: str, step_name: str) -> str:
+              pos = workflow.index(f"      - name: {step_name}")
+              marker = "          python3 - <<'PY'\n"
+              start = workflow.index(marker, pos) + len(marker)
+              end = workflow.index("\n          PY\n", start)
+              return textwrap.dedent(workflow[start:end])
+
+          r1012 = Path('.github/workflows/field-r1012-midi-learn-hardening.yml').read_text()
+          exec(compile(extract_python_step(r1012, 'Apply R10.11 direct-song patch'),
+                       'r1011_materialize.py', 'exec'), {})
+          exec(compile(extract_python_step(r1012, 'Apply R10.12 MIDI Learn hardening'),
+                       'r1012_materialize.py', 'exec'), {})
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {n}: {old[:140]!r}")
+              p.write_text(s.replace(old, new, count))
+
+          # R10.13 contract: a cache miss is never a launch rejection. While armed,
+          # validate/open the requested take on demand while the Art-Net worker keeps
+          # retransmitting the previous held frame; swap only after validation succeeds.
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '''      if(prepared_reader && prepared_path == selected.path &&\n         prepared_start == expected_start && prepared_end == expected_end) {\n        candidate = std::move(prepared_reader);\n      }\n      else {\n        mMidiPreloadSongRequest.store(static_cast<int>(song_index),\n                                      std::memory_order_release);\n        error_message =\n            "La canción aún no está precargada; espera LISTA y repite PLAY";\n        return false;\n      }''',
+              '''      if(prepared_reader && prepared_path == selected.path &&\n         prepared_start == expected_start && prepared_end == expected_end) {\n        candidate = std::move(prepared_reader);\n      }\n      else {\n        // Cache is an optimization only. Never reject a live trigger because\n        // the optional preloader has not reached this song yet. The previous\n        // armed frame remains on the Art-Net worker while this file is opened\n        // and validated on the non-realtime runtime thread.\n        candidate = std::make_unique<aeyla::capture::DmxTakeFileReader>();\n        if(!candidate->open(selected.path, error_message)) {\n          error_message = "La toma solicitada no superó la validación · " +\n                          error_message;\n          return false;\n        }\n        const auto fresh_info = candidate->info();\n        if(fresh_info.song_id != song.song_id ||\n           fresh_info.port_address != output_universe ||\n           expected_start >= expected_end ||\n           expected_end > fresh_info.frame_count) {\n          error_message =\n              "La toma solicitada no coincide con canción, universo o ENTRADA/SALIDA";\n          return false;\n        }\n      }''')
+
+          # Direct per-song NOTE ON always owns select + restart-from-IN. If the DAW
+          # happens to still be stopped at ingress, the file player sits at IN and
+          # begins advancing as soon as host transport samples advance.
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '''      case aeyla::runtime::ShowMidiCommand::launch_song:\n        if(event.song_index >= song_count) {\n          SetShowMidiMessage("LANZAMIENTO MIDI IGNORADO · esa canción no existe");\n          break;\n        }\n        (void)mModel.select_song(event.song_index);\n        if(!host.running)\n          SetShowMidiMessage(\n              "CANCIÓN PREPARADA · inicia el DAW para lanzarla sincronizada");\n        else if(!StartPreparedTakeFromMidiLocked(\n                    event.song_index, event.trigger_sample, error))\n          SetShowMidiMessage("LANZAMIENTO MIDI BLOQUEADO · " + error);\n        break;''',
+              '''      case aeyla::runtime::ShowMidiCommand::launch_song:\n        if(event.song_index >= song_count) {\n          SetShowMidiMessage("LANZAMIENTO MIDI IGNORADO · esa canción no existe");\n          break;\n        }\n        (void)mModel.select_song(event.song_index);\n        if(!StartPreparedTakeFromMidiLocked(\n               event.song_index, event.trigger_sample, error))\n          SetShowMidiMessage("LANZAMIENTO MIDI BLOQUEADO · " + error);\n        break;''')
+
+          # Manual song selection follows the exact same artistic contract as a
+          # learned NOTE ON: select + immediate restart from that song's IN.
+          p = Path('product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp')
+          s = p.read_text()
+          a = s.index('bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)')
+          b = s.index('\nbool AeylaVisualDmx::RefreshNetworkInterfacesFromUI()', a)
+          new_select = '''bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)\n{\n  if(TakeRecording())\n    return false;\n\n  const std::scoped_lock lock(mModelMutex);\n  if(!mModel.select_song(songIndex))\n    return false;\n\n  bool bound = false;\n  {\n    const std::scoped_lock stateLock(mHostStateMutex);\n    bound = std::any_of(\n        mHostStateCache.song_bindings.begin(), mHostStateCache.song_bindings.end(),\n        [&](const aeyla::runtime::SessionSongBinding& candidate) {\n          return candidate.song_id == mModel.snapshot().active_song_id;\n        });\n  }\n  mActiveSongBound.store(bound, std::memory_order_release);\n  mLastProjectedSongId.clear();\n  mLastProjectedTick = 0U;\n\n  const auto triggerSample = mProcessedTransportSamples.load(\n      std::memory_order_acquire);\n  std::string launchError;\n  const bool launched = StartPreparedTakeFromMidiLocked(\n      songIndex, triggerSample, launchError);\n  SyncSnapshotToAtomicsLocked();\n  if(!launched) {\n    SetShowMidiMessage("SELECCIÓN DIRECTA BLOQUEADA · " + launchError);\n    return false;\n  }\n  return true;\n}\n'''
+          s = s[:a] + new_select + s[b:]
+          p.write_text(s)
+
+          # Previous/next buttons are also real song selections now, not a separate
+          # PREPARADA state. Resolve target under the model lock, then use the shared
+          # direct-launch path without recursively locking mModelMutex.
+          p = Path('product/AeylaVisualDmx/AeylaVisualDmx.cpp')
+          s = p.read_text()
+          a = s.index('bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)')
+          b = s.index('\nstd::string AeylaVisualDmx::ActiveSongStatus() const', a)
+          new_adjacent = '''bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)\n{\n  if(direction == 0 || TakeRecording())\n    return false;\n  std::size_t target = 0U;\n  {\n    const std::scoped_lock lock(mModelMutex);\n    const auto& snapshot = mModel.snapshot();\n    if(snapshot.song_count == 0U)\n      return false;\n    const std::size_t current = snapshot.active_song_index;\n    target = current;\n    if(direction < 0 && current > 0U)\n      target = current - 1U;\n    else if(direction > 0 && current + 1U < snapshot.song_count)\n      target = current + 1U;\n    if(target == current)\n      return false;\n  }\n  return SelectSongFromUI(target);\n}\n'''
+          s = s[:a] + new_adjacent + s[b:]
+          p.write_text(s)
+
+          # Full-set preflight remains an optional cache warmer only. Never perform
+          # disk preloading while a Take is already live/armed; live MIDI launch has
+          # priority and can always fall back to on-demand validation.
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '  if(preflight_cursor >= 0 && ShowMidiMapping().enabled && !TakeRecording()) {',
+              '  if(preflight_cursor >= 0 && ShowMidiMapping().enabled && !TakeRecording() &&\n'
+              '     !TakePlaying() && !TakeOutputArmed()) {')
+          replace('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp',
+              '          " canciones listas para cambio sin apagón");',
+              '          " canciones en caché opcional · no es requisito para lanzar");')
+
+          # Visible version label.
+          replace('product/AeylaVisualDmx/AeylaRuntimeStatusControl.h',
+              'R10.12 MIDI HARDENED CANDIDATE',
+              'R10.13 CONTINUITY LAUNCH CANDIDATE')
+
+          # Build-time regression guards for exactly the failure mode found in R10.12.
+          integration = Path('product/AeylaVisualDmx/AeylaMidiShowIntegration.cpp').read_text()
+          player = Path('product/AeylaVisualDmx/AeylaShowPlayerIntegration.cpp').read_text()
+          main_cpp = Path('product/AeylaVisualDmx/AeylaVisualDmx.cpp').read_text()
+          assert 'espera LISTA y repite PLAY' not in integration
+          assert 'Cache is an optimization only' in integration
+          assert 'candidate = std::make_unique<aeyla::capture::DmxTakeFileReader>();' in integration
+          assert 'CANCIÓN PREPARADA · inicia el DAW' not in integration
+          assert 'StartPreparedTakeFromMidiLocked(\\n      songIndex, triggerSample' in player
+          assert 'return SelectSongFromUI(target);' in main_cpp
+          assert 'candidateNotes[selected] = note;' in integration
+          print('R10.13 continuity-safe launch patch applied')
+          PY
+
+          git diff --check
+          git diff --stat
+
+      - name: Run core regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-core --config Release --parallel 2 --target \
+            aeyla_project_package_tests \
+            aeyla_project_file_controller_tests \
+            aeyla_plugin_state_tests \
+            aeyla_take_library_session_tests \
+            aeyla_live_memory_session_tests \
+            aeyla_show_midi_control_tests \
+            aeyla_host_song_binding_tests \
+            aeyla_dmx_clip_playback_engine_tests
+          ctest --test-dir build-core --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests|aeyla_dmx_clip_playback_engine_tests)$'
+
+      - name: Commit materialized R10.13 source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "rgb-estudios-ci"
+          git config user.email "claudio@rgb-estudios.com"
+          git add src product tests
+          if ! git diff --cached --quiet; then
+            git commit -m "field: materialize R10.13 continuity launch baseline [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Fetch pinned iPlug2 and Steinberg SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout "$IPLUG2_COMMIT"
+          sdk="external/iPlug2/Dependencies/IPlug/VST3_SDK"
+          rm -rf "$sdk"
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git "$sdk"
+          git -C "$sdk" checkout "$VST3SDK_COMMIT"
+          git -C "$sdk" submodule update --init --recursive
+
+      - name: Build Universal VST3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S product -B build-product -G Xcode \
+            -DIPLUG2_DIR="$GITHUB_WORKSPACE/external/iPlug2" \
+            -DIPLUG2_UNIVERSAL=ON \
+            -DIPLUG_DEPLOY_PLUGINS=OFF \
+            -DIGRAPHICS_BACKEND=NANOVG \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Verify Universal and Steinberg Validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          test -n "$vst3"
+          bin="$vst3/Contents/MacOS/AeylaVisualDmx"
+          lipo "$bin" -verify_arch arm64 x86_64
+          codesign --force --deep --sign - "$vst3"
+          codesign --verify --deep --strict --verbose=2 "$vst3"
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK -B build-validator -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
+          "$validator" "$vst3"
+
+      - name: Build R10.13 PKG and DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          vst3="$(find build-product -type d -name 'AeylaVisualDmx.vst3' | head -n 1)"
+          root="$GITHUB_WORKSPACE/pkgroot"
+          scripts="$GITHUB_WORKSPACE/pkgscripts"
+          dmgroot="$GITHUB_WORKSPACE/dmgroot"
+          out="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$scripts" "$dmgroot" "$out"
+          ditto "$vst3" "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          cat > "$scripts/preinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          rm -rf "/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          exit 0
+          EOF
+          cat > "$scripts/postinstall" <<'EOF'
+          #!/bin/bash
+          set -e
+          target="/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
+          /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+          /usr/bin/codesign --verify --deep --strict "$target"
+          /usr/bin/touch "$target"
+          /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+          exit 0
+          EOF
+          chmod +x "$scripts/preinstall" "$scripts/postinstall"
+          pkg="$dmgroot/Instalar-AEYLA-R10.13.0.pkg"
+          pkgbuild --root "$root" \
+            --scripts "$scripts" \
+            --identifier com.rgbestudios.aeyla.visualdmx \
+            --version 10.13.0 \
+            "$pkg"
+          cat > "$dmgroot/LEEME.txt" <<'EOF'
+          RGB Estudios · AEYLA R10.13
+
+          1. Ejecuta Instalar-AEYLA-R10.13.0.pkg.
+          2. Abre Ableton y vuelve a escanear VST3 si es necesario.
+          3. MIDI SHOW: cada canción aprende SU propia nota MIDI arbitraria.
+          4. NOTE ON de esa nota = seleccionar canción + PLAY desde su IN.
+          5. Seleccionar manualmente una canción hace el mismo lanzamiento directo.
+          6. La precarga es sólo caché opcional: jamás es requisito para lanzar.
+          7. NOTE OFF no lanza nada. PANIC/ARM conservan sus contratos de seguridad.
+
+          Firma: ad-hoc. No notarizado con Apple Developer ID.
+          EOF
+          dmg="$out/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg"
+          hdiutil create -volname "AEYLA R10.13" -srcfolder "$dmgroot" -ov -format UDZO "$dmg"
+          shasum -a 256 "$dmg" | tee "$dmg.sha256"
+          git diff HEAD^..HEAD > "$out/R10.13-materialized-source.patch" || true
+
+      - name: Upload R10.13 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate
+          path: |
+            dist/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg
+            dist/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg.sha256
+            dist/R10.13-materialized-source.patch
+          if-no-files-found: error
