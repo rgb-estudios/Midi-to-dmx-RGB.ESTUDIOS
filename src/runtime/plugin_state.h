@@ -12,7 +12,7 @@
 namespace aeyla::runtime {
 
 inline constexpr std::uint16_t kPluginStateFormatMajor = 1;
-inline constexpr std::uint16_t kPluginStateFormatMinor = 4;
+inline constexpr std::uint16_t kPluginStateFormatMinor = 6;
 inline constexpr std::size_t kMaxProjectLocatorBytes = 4096;
 inline constexpr std::size_t kMaxTakeLibraryLocatorBytes = 4096;
 inline constexpr std::size_t kMaxTakeFileNameBytes = 512;
@@ -58,6 +58,13 @@ struct PluginComponentState {
   std::string project_locator{};
   std::vector<SessionSongBinding> song_bindings{};
   ShowMidiMapping show_midi{};
+  // R10.11: each song owns an independent MIDI Note On trigger.
+  // Defaults reproduce the former contiguous N48..N62 bank, while
+  // 1.5 persistence allows every song to be learned independently.
+  // 255 = SIN ASIGNAR. Song launch notes are authored explicitly by Learn.
+  std::array<std::uint8_t, kShowMidiSongCapacity> song_launch_notes{
+      255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U,
+      255U, 255U, 255U, 255U, 255U, 255U, 255U};
   std::string take_library_locator{};
   std::vector<SessionTakeBinding> take_bindings{};
 

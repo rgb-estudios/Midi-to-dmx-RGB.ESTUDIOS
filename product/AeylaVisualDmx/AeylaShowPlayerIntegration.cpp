@@ -171,8 +171,6 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
   if(TakeRecording())
     return false;
 
-  // Selecting PREPARADA is metadata/navigation only. It never owns physical
-  // Art-Net authority and therefore may not disarm or latch blackout.
   const std::scoped_lock lock(mModelMutex);
   if(!mModel.select_song(songIndex))
     return false;
@@ -181,20 +179,25 @@ bool AeylaVisualDmx::SelectSongFromUI(std::size_t songIndex)
   {
     const std::scoped_lock stateLock(mHostStateMutex);
     bound = std::any_of(
-        mHostStateCache.song_bindings.begin(),
-        mHostStateCache.song_bindings.end(),
+        mHostStateCache.song_bindings.begin(), mHostStateCache.song_bindings.end(),
         [&](const aeyla::runtime::SessionSongBinding& candidate) {
           return candidate.song_id == mModel.snapshot().active_song_id;
         });
   }
   mActiveSongBound.store(bound, std::memory_order_release);
-  mMidiPreloadSongRequest.store(static_cast<int>(songIndex),
-                                std::memory_order_release);
-  SetShowMidiMessage("PREPARADA · " + mModel.snapshot().active_song_name +
-                     " · PLAY decide cuándo reemplaza la canción al aire");
   mLastProjectedSongId.clear();
   mLastProjectedTick = 0U;
+
+  const auto triggerSample = mProcessedTransportSamples.load(
+      std::memory_order_acquire);
+  std::string launchError;
+  const bool launched = StartPreparedTakeFromMidiLocked(
+      songIndex, triggerSample, launchError);
   SyncSnapshotToAtomicsLocked();
+  if(!launched) {
+    SetShowMidiMessage("SELECCIÓN DIRECTA BLOQUEADA · " + launchError);
+    return false;
+  }
   return true;
 }
 

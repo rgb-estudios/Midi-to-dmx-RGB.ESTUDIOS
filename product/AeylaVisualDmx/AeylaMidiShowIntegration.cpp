@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <limits>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -43,10 +44,41 @@ const char* LearnTargetName(aeyla::runtime::ShowMidiLearnTarget target) {
     case Target::stop_reset: return "STOP / RESET";
     case Target::capture_start: return "REC START";
     case Target::capture_stop: return "REC STOP";
-    case Target::launch_song_base: return "BASE DE 15 CANCIONES";
+    case Target::launch_song_base: return "CANCIÓN SELECCIONADA";
     case Target::none: return "NINGUNO";
   }
   return "NINGUNO";
+}
+
+bool ValidateSongLaunchLayout(
+    const aeyla::runtime::ShowMidiMapping& mapping,
+    const std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity>& notes,
+    std::size_t songCount,
+    std::string& error) {
+  if(mapping.channel < 1U || mapping.channel > 16U) {
+    error = "Canal MIDI fuera de rango";
+    return false;
+  }
+  std::set<std::uint8_t> used{
+      mapping.previous_note, mapping.next_note, mapping.play_note,
+      mapping.pause_note, mapping.stop_note, mapping.capture_start_note,
+      mapping.capture_stop_note, aeyla::runtime::kShowMidiPanicNote};
+  const auto bounded = std::min(songCount, notes.size());
+  for(std::size_t index = 0U; index < bounded; ++index) {
+    const auto note = notes[index];
+    if(note == 255U)
+      continue;
+    if(note > 127U) {
+      error = "Nota de canción fuera de rango";
+      return false;
+    }
+    if(!used.insert(note).second) {
+      error = "La nota " + std::to_string(note) +
+              " ya está ocupada por otro control o canción";
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -60,6 +92,27 @@ aeyla::runtime::ShowMidiMapping AeylaVisualDmx::ShowMidiMapping() const noexcept
   mapping.capture_stop_note = mShowMidiCaptureStopNote.load(
       std::memory_order_acquire);
   return mapping;
+}
+
+std::uint8_t AeylaVisualDmx::SongMidiLaunchNote(std::size_t songIndex) const noexcept
+{
+  if(songIndex >= aeyla::runtime::kShowMidiSongCapacity)
+    return 255U;
+  return mShowMidiLaunchNotes[songIndex].load(std::memory_order_acquire);
+}
+
+void AeylaVisualDmx::SyncSongMidiLaunchNotesToState(
+    const std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity>& notes)
+{
+  auto normalized = notes;
+  const auto songCount = std::min<std::size_t>(
+      mModel.snapshot().song_count, aeyla::runtime::kShowMidiSongCapacity);
+  for(std::size_t index = songCount; index < normalized.size(); ++index)
+    normalized[index] = 255U;
+  for(std::size_t index = 0U; index < normalized.size(); ++index)
+    mShowMidiLaunchNotes[index].store(normalized[index], std::memory_order_release);
+  const std::scoped_lock lock(mHostStateMutex);
+  mHostStateCache.song_launch_notes = normalized;
 }
 
 void AeylaVisualDmx::SetShowMidiMessage(std::string message)
@@ -150,7 +203,17 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleShowMidiFromUI()
   if(aeyla::runtime::validate_show_midi_mapping(mapping) !=
      aeyla::runtime::ShowMidiMappingError::none)
     return {false, {}, "El mapa MIDI no es válido; vuelve a aprender sus notas"};
+  if(!mapping.enabled)
+  {
+    std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity> songNotes{};
+    for(std::size_t index = 0U; index < songNotes.size(); ++index)
+      songNotes[index] = mShowMidiLaunchNotes[index].load(std::memory_order_acquire);
+    std::string layoutError;
+    if(!ValidateSongLaunchLayout(mapping, songNotes, mModel.snapshot().song_count, layoutError))
+      return {false, {}, "MIDI SHOW BLOQUEADO · " + layoutError};
+  }
   mapping.enabled = !mapping.enabled;
+  mShowMidiLearnSongIndex.store(-1, std::memory_order_release);
   mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,
                              std::memory_order_release);
   {
@@ -206,15 +269,33 @@ aeyla::product::AuthoringResult AeylaVisualDmx::BeginShowMidiLearnFromUI(
     aeyla::runtime::ShowMidiLearnTarget target)
 {
   if(target == aeyla::runtime::ShowMidiLearnTarget::none) {
+    mShowMidiLearnSongIndex.store(-1, std::memory_order_release);
     mShowMidiLearnTarget.store(target, std::memory_order_release);
     return {true, {}, "APRENDER MIDI CANCELADO"};
   }
   if(ShowMidiConfigurationLocked())
     return {false, {},
             "Desarma la salida antes de aprender notas MIDI del show"};
+
+  std::string subject = LearnTargetName(target);
+  if(target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base)
+  {
+    const auto selected = mModel.snapshot().active_song_index;
+    if(selected >= mModel.snapshot().song_count ||
+       selected >= aeyla::runtime::kShowMidiSongCapacity)
+      return {false, {}, "Selecciona una canción válida antes de APRENDER MIDI"};
+    mShowMidiLearnSongIndex.store(static_cast<int>(selected),
+                                  std::memory_order_release);
+    subject = mModel.show_program().songs[selected].name;
+  }
+  else
+    mShowMidiLearnSongIndex.store(-1, std::memory_order_release);
+
   mShowMidiLearnTarget.store(target, std::memory_order_release);
+  const auto channel = ShowMidiMapping().channel;
   const std::string message =
-      std::string("APRENDER MIDI · toca una nota para ") + LearnTargetName(target);
+      "APRENDER MIDI · " + subject + " · CANAL " +
+      std::to_string(channel) + " · toca una nota";
   SetShowMidiMessage(message);
   return {true, {}, message};
 }
@@ -365,11 +446,25 @@ bool AeylaVisualDmx::StartPreparedTakeFromMidiLocked(
         candidate = std::move(prepared_reader);
       }
       else {
-        mMidiPreloadSongRequest.store(static_cast<int>(song_index),
-                                      std::memory_order_release);
-        error_message =
-            "La canción aún no está precargada; espera LISTA y repite PLAY";
-        return false;
+        // Cache is an optimization only. Never reject a live trigger because
+        // the optional preloader has not reached this song yet. The previous
+        // armed frame remains on the Art-Net worker while this file is opened
+        // and validated on the non-realtime runtime thread.
+        candidate = std::make_unique<aeyla::capture::DmxTakeFileReader>();
+        if(!candidate->open(selected.path, error_message)) {
+          error_message = "La toma solicitada no superó la validación · " +
+                          error_message;
+          return false;
+        }
+        const auto fresh_info = candidate->info();
+        if(fresh_info.song_id != song.song_id ||
+           fresh_info.port_address != output_universe ||
+           expected_start >= expected_end ||
+           expected_end > fresh_info.frame_count) {
+          error_message =
+              "La toma solicitada no coincide con canción, universo o ENTRADA/SALIDA";
+          return false;
+        }
       }
       prepared_path.clear();
       prepared_start = 0U;
@@ -673,7 +768,8 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
       SetShowMidiMessage("PREPARACIÓN MIDI INCOMPLETA · " + preload_error);
   }
 
-  if(preflight_cursor >= 0 && ShowMidiMapping().enabled && !TakeRecording()) {
+  if(preflight_cursor >= 0 && ShowMidiMapping().enabled && !TakeRecording() &&
+     !TakePlaying() && !TakeOutputArmed()) {
     const auto song_count = mModel.snapshot().song_count;
     if(static_cast<std::size_t>(preflight_cursor) < song_count) {
       std::string preflight_error;
@@ -699,7 +795,7 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
       SetShowMidiMessage(
           "PRECARGA MIDI COMPLETA · " + std::to_string(ready_count) + "/" +
           std::to_string(song_count) +
-          " canciones listas para cambio sin apagón");
+          " canciones en caché opcional · no es requisito para lanzar");
     }
   }
 
@@ -717,17 +813,53 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
       return;
     }
     auto mapping = ShowMidiMapping();
+    std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity> songNotes{};
+    for(std::size_t index = 0U; index < songNotes.size(); ++index)
+      songNotes[index] = mShowMidiLaunchNotes[index].load(std::memory_order_acquire);
     std::string error;
-    if(aeyla::runtime::assign_show_midi_note(
-           mapping, target, channel, note, error)) {
+    bool assigned = false;
+    if(target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base) {
+      const auto packedSong = static_cast<std::uint8_t>((learned >> 25U) & 0x1FU);
+      if(packedSong == 0U) {
+        error = "No existe una canción capturada para este Learn";
+      } else if(channel != mapping.channel) {
+        error = "La nota llegó por otro canal MIDI";
+      } else {
+        const auto selected = static_cast<std::size_t>(packedSong - 1U);
+        const auto songCount = mModel.snapshot().song_count;
+        if(selected >= songCount || selected >= songNotes.size()) {
+          error = "La canción aprendida ya no existe en el setlist";
+        } else {
+          auto candidateNotes = songNotes;
+          candidateNotes[selected] = note;
+          if(ValidateSongLaunchLayout(mapping, candidateNotes, songCount, error)) {
+            songNotes = candidateNotes;
+            assigned = true;
+          }
+        }
+      }
+    } else if(aeyla::runtime::assign_show_midi_note(
+                  mapping, target, channel, note, error)) {
+      assigned = ValidateSongLaunchLayout(
+          mapping, songNotes, mModel.snapshot().song_count, error);
+    }
+    if(assigned) {
       mModel.release_transients();
       SyncShowMidiMappingToState(mapping);
-      SetShowMidiMessage(std::string("MIDI APRENDIDO · ") +
-                         LearnTargetName(target) + " = nota " +
-                         std::to_string(note) + " · canal " +
-                         std::to_string(channel));
-    }
-    else {
+      SyncSongMidiLaunchNotesToState(songNotes);
+      std::string subject = LearnTargetName(target);
+      if(target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base) {
+        const auto packedSong = static_cast<std::uint8_t>((learned >> 25U) & 0x1FU);
+        const auto selected = static_cast<std::size_t>(packedSong - 1U);
+        if(selected < mModel.snapshot().song_count)
+          subject = mModel.show_program().songs[selected].name;
+      }
+      SetShowMidiMessage(std::string("MIDI APRENDIDO · ") + subject +
+                         " = nota " + std::to_string(note) + " · canal " +
+                         std::to_string(mapping.channel) +
+                         (target == aeyla::runtime::ShowMidiLearnTarget::launch_song_base
+                              ? " · DISPARO DIRECTO" : ""));
+    } else {
       SetShowMidiMessage("MIDI NO ASIGNADO · " + error);
     }
   }
@@ -881,11 +1013,8 @@ void AeylaVisualDmx::DrainShowMidiCommandsLocked(
           break;
         }
         (void)mModel.select_song(event.song_index);
-        if(!host.running)
-          SetShowMidiMessage(
-              "CANCIÓN PREPARADA · inicia el DAW para lanzarla sincronizada");
-        else if(!StartPreparedTakeFromMidiLocked(
-                    event.song_index, event.trigger_sample, error))
+        if(!StartPreparedTakeFromMidiLocked(
+               event.song_index, event.trigger_sample, error))
           SetShowMidiMessage("LANZAMIENTO MIDI BLOQUEADO · " + error);
         break;
     }
@@ -900,6 +1029,7 @@ void AeylaVisualDmx::ClearShowMidiCommandsLocked() noexcept
   mPendingMidiLearnPacked.store(0U, std::memory_order_release);
   mShowMidiLearnTarget.store(aeyla::runtime::ShowMidiLearnTarget::none,
                              std::memory_order_release);
+  mShowMidiLearnSongIndex.store(-1, std::memory_order_release);
   mMidiPreloadSongRequest.store(-1, std::memory_order_release);
   mMidiPreflightCursor.store(-1, std::memory_order_release);
   for(std::size_t index = 0U; index < mPreparedMidiTakeReaders.size(); ++index) {

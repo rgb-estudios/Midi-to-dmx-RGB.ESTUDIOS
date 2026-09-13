@@ -65,9 +65,36 @@ int main() {
         "all 15-song session bindings must survive host-state round trip");
   check(decoded.state.show_midi == state.show_midi,
         "MIDI Show mapping must survive host-state round trip");
+  check(decoded.state.song_launch_notes == state.song_launch_notes,
+        "per-song MIDI launch map must survive host-state round trip");
   check(decoded.state.take_library_locator == state.take_library_locator &&
             decoded.state.take_bindings == state.take_bindings,
         "take library selection and trims must survive host-state round trip");
+
+  {
+    auto learned = state;
+    learned.song_launch_notes[0] = 60U;
+    learned.song_launch_notes[1] = 73U;
+    const auto learnedBytes = aeyla::runtime::encode_plugin_component_state(learned);
+    check(learnedBytes.ok(), "two independent learned Song notes must encode");
+    const auto learnedRoundTrip =
+        aeyla::runtime::decode_plugin_component_state(learnedBytes.bytes);
+    check(learnedRoundTrip.ok() &&
+              learnedRoundTrip.state.song_launch_notes == learned.song_launch_notes,
+          "learned Song notes must persist exactly");
+
+    auto duplicate = learned;
+    duplicate.song_launch_notes[1] = duplicate.song_launch_notes[0];
+    check(aeyla::runtime::encode_plugin_component_state(duplicate).error ==
+              PluginStateError::invalid_show_midi_mapping,
+          "duplicate assigned Song notes must be rejected");
+
+    auto reserved = learned;
+    reserved.song_launch_notes[1] = reserved.show_midi.stop_note;
+    check(aeyla::runtime::encode_plugin_component_state(reserved).error ==
+              PluginStateError::invalid_show_midi_mapping,
+          "Song note may not collide with a global Show command");
+  }
 
   // Every truncated prefix must fail; no partial state may be accepted.
   for (std::size_t size = 0; size < encoded.bytes.size(); ++size) {

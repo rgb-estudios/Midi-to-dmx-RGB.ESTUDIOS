@@ -151,6 +151,18 @@ PluginStateError validate_state(const PluginComponentState& state) noexcept {
   if (validate_show_midi_mapping(state.show_midi) !=
       ShowMidiMappingError::none)
     return PluginStateError::invalid_show_midi_mapping;
+  {
+    std::set<std::uint8_t> used{
+        state.show_midi.previous_note, state.show_midi.next_note,
+        state.show_midi.play_note, state.show_midi.pause_note,
+        state.show_midi.stop_note, state.show_midi.capture_start_note,
+        state.show_midi.capture_stop_note, kShowMidiPanicNote};
+    for (const auto note : state.song_launch_notes) {
+      if (note == 255U) continue;
+      if (note > 127U || !used.insert(note).second)
+        return PluginStateError::invalid_show_midi_mapping;
+    }
+  }
   if (state.take_library_locator.size() > kMaxTakeLibraryLocatorBytes ||
       state.take_library_locator.find('\0') != std::string::npos)
     return PluginStateError::invalid_take_binding;
@@ -190,7 +202,7 @@ PluginStateEncodeResult encode_plugin_component_state(
                           binding.file_name.size() + 8U + 8U;
   const auto payload_size = static_cast<std::uint32_t>(
       kFixedPayloadSize + locator_size + binding_bytes + 8U +
-      take_binding_bytes + 2U);
+      take_binding_bytes + 2U + kShowMidiSongCapacity);
   const auto total_size = kHeaderSize + static_cast<std::size_t>(payload_size);
   if (total_size > kMaxPluginStateBytes) {
     result.error = PluginStateError::locator_too_large;
@@ -246,6 +258,9 @@ PluginStateEncodeResult encode_plugin_component_state(
     // safely ignore them while 1.4 restores them exactly.
     result.bytes.push_back(state.show_midi.capture_start_note);
     result.bytes.push_back(state.show_midi.capture_stop_note);
+    // State 1.5: arbitrary direct launch note per song.
+    result.bytes.insert(result.bytes.end(), state.song_launch_notes.begin(),
+                        state.song_launch_notes.end());
   } catch (const std::bad_alloc&) {
     result.bytes.clear();
     result.error = PluginStateError::allocation_failure;
@@ -454,6 +469,20 @@ PluginStateDecodeResult decode_plugin_component_state(
     }
     result.state.show_midi.capture_start_note = bytes[offset++];
     result.state.show_midi.capture_stop_note = bytes[offset++];
+  }
+
+  if (format_minor >= 5U) {
+    if (offset + kShowMidiSongCapacity > payload_end) {
+      result.error = PluginStateError::invalid_show_midi_mapping;
+      return result;
+    }
+    std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                kShowMidiSongCapacity, result.state.song_launch_notes.begin());
+    offset += kShowMidiSongCapacity;
+  } else if (format_minor >= 2U) {
+    // R10.12 migration is intentionally fail-safe: old contiguous banks
+    // become unassigned so every real song is learned explicitly.
+    result.state.song_launch_notes.fill(255U);
   }
 
   // Same-major future minor versions may append fields inside payload_size.

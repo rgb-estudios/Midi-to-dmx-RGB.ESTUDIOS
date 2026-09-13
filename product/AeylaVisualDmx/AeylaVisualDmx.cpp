@@ -132,6 +132,9 @@ AeylaVisualDmx::AeylaVisualDmx(const InstanceInfo& info)
                                   std::memory_order_release);
   mShowMidiCaptureStopNote.store(mHostStateCache.show_midi.capture_stop_note,
                                  std::memory_order_release);
+  for(std::size_t index = 0U; index < aeyla::runtime::kShowMidiSongCapacity; ++index)
+    mShowMidiLaunchNotes[index].store(mHostStateCache.song_launch_notes[index],
+                                     std::memory_order_release);
 
 #if IPLUG_EDITOR
   mMakeGraphicsFunc = [&]() {
@@ -247,16 +250,28 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
 
     if(positiveNoteOn)
     {
-      const auto learnTarget = mShowMidiLearnTarget.exchange(
-          aeyla::runtime::ShowMidiLearnTarget::none,
-          std::memory_order_acq_rel);
-      if(learnTarget != aeyla::runtime::ShowMidiLearnTarget::none)
+      const auto pendingLearn = mShowMidiLearnTarget.load(std::memory_order_acquire);
+      if(pendingLearn != aeyla::runtime::ShowMidiLearnTarget::none)
       {
-        const std::uint32_t packed =
+        const auto configured = ShowMidiMapping();
+        // Per-song Learn never changes the global Show channel. Notes arriving
+        // on another channel are ignored while Learn remains armed.
+        if(channel != configured.channel)
+          return;
+        const auto learnTarget = mShowMidiLearnTarget.exchange(
+            aeyla::runtime::ShowMidiLearnTarget::none,
+            std::memory_order_acq_rel);
+        const int learnedSong = mShowMidiLearnSongIndex.exchange(
+            -1, std::memory_order_acq_rel);
+        std::uint32_t packed =
             static_cast<std::uint32_t>(learnTarget) |
             (static_cast<std::uint32_t>(channel) << 8U) |
             (static_cast<std::uint32_t>(midiNote) << 16U) |
             (1U << 24U);
+        if(learnTarget == aeyla::runtime::ShowMidiLearnTarget::launch_song_base &&
+           learnedSong >= 0 &&
+           learnedSong < static_cast<int>(aeyla::runtime::kShowMidiSongCapacity))
+          packed |= (static_cast<std::uint32_t>(learnedSong + 1) << 25U);
         mPendingMidiLearnPacked.store(packed, std::memory_order_release);
         return;
       }
@@ -264,8 +279,29 @@ void AeylaVisualDmx::ProcessMidiMsg(const IMidiMsg& msg)
 
     aeyla::runtime::ShowMidiMatch showMatch{};
     const auto showMapping = ShowMidiMapping();
-    const bool mappedShowNote = aeyla::runtime::match_show_midi_note(
-        showMapping, channel, midiNote, 127U, showMatch);
+    bool mappedShowNote = false;
+    if(showMapping.enabled && channel == showMapping.channel)
+    {
+      for(std::size_t index = 0U; index < aeyla::runtime::kShowMidiSongCapacity; ++index)
+      {
+        if(midiNote == mShowMidiLaunchNotes[index].load(std::memory_order_acquire))
+        {
+          showMatch.command = aeyla::runtime::ShowMidiCommand::launch_song;
+          showMatch.song_index = static_cast<std::uint8_t>(index);
+          mappedShowNote = true;
+          break;
+        }
+      }
+    }
+    if(!mappedShowNote)
+    {
+      mappedShowNote = aeyla::runtime::match_show_midi_note(
+          showMapping, channel, midiNote, 127U, showMatch);
+      // R10.11 replaces the old contiguous launch bank with the
+      // independent per-song array. Do not let stale base-range notes launch.
+      if(mappedShowNote && showMatch.command == aeyla::runtime::ShowMidiCommand::launch_song)
+        return;
+    }
     if(mappedShowNote)
     {
       if(positiveNoteOn)
@@ -910,6 +946,12 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
                                   currentSchemaMajor &&
                               !supportedLegacyMigration;
 
+  const auto restoredSongCount = std::min<std::size_t>(
+      mModel.snapshot().song_count, aeyla::runtime::kShowMidiSongCapacity);
+  for(std::size_t index = restoredSongCount;
+      index < aeyla::runtime::kShowMidiSongCapacity; ++index)
+    pending->song_launch_notes[index] = 255U;
+
   aeyla::runtime::PluginComponentState previousCache;
   {
     const std::scoped_lock lock(mHostStateMutex);
@@ -923,6 +965,9 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
                                   std::memory_order_release);
   mShowMidiCaptureStopNote.store(pending->show_midi.capture_stop_note,
                                  std::memory_order_release);
+  for(std::size_t index = 0U; index < aeyla::runtime::kShowMidiSongCapacity; ++index)
+    mShowMidiLaunchNotes[index].store(pending->song_launch_notes[index],
+                                     std::memory_order_release);
   mMidiPreflightCursor.store(pending->show_midi.enabled ? 0 : -1,
                              std::memory_order_release);
   SetShowMidiMessage(pending->show_midi.enabled
@@ -1205,38 +1250,22 @@ bool AeylaVisualDmx::SelectAdjacentSongFromUI(int direction)
 {
   if(direction == 0 || TakeRecording())
     return false;
-  const std::scoped_lock lock(mModelMutex);
-  const auto& snapshot = mModel.snapshot();
-  if(snapshot.song_count == 0U)
-    return false;
-
-  const std::size_t current = snapshot.active_song_index;
-  std::size_t target = current;
-  if(direction < 0 && current > 0U)
-    target = current - 1U;
-  else if(direction > 0 && current + 1U < snapshot.song_count)
-    target = current + 1U;
-  if(target == current || !mModel.select_song(target))
-    return false;
-
-  bool bound = false;
+  std::size_t target = 0U;
   {
-    const std::scoped_lock stateLock(mHostStateMutex);
-    bound = std::any_of(
-        mHostStateCache.song_bindings.begin(), mHostStateCache.song_bindings.end(),
-        [&](const aeyla::runtime::SessionSongBinding& candidate) {
-          return candidate.song_id == mModel.snapshot().active_song_id;
-        });
+    const std::scoped_lock lock(mModelMutex);
+    const auto& snapshot = mModel.snapshot();
+    if(snapshot.song_count == 0U)
+      return false;
+    const std::size_t current = snapshot.active_song_index;
+    target = current;
+    if(direction < 0 && current > 0U)
+      target = current - 1U;
+    else if(direction > 0 && current + 1U < snapshot.song_count)
+      target = current + 1U;
+    if(target == current)
+      return false;
   }
-  mActiveSongBound.store(bound, std::memory_order_release);
-  mMidiPreloadSongRequest.store(static_cast<int>(target),
-                                std::memory_order_release);
-  SetShowMidiMessage("PREPARADA · " + mModel.snapshot().active_song_name +
-                     " · la canción al aire continúa");
-  mLastProjectedSongId.clear();
-  mLastProjectedTick = 0U;
-  SyncSnapshotToAtomicsLocked();
-  return true;
+  return SelectSongFromUI(target);
 }
 
 std::string AeylaVisualDmx::ActiveSongStatus() const

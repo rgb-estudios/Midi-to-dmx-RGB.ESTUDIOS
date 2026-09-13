@@ -160,6 +160,7 @@ public:
   [[nodiscard]] double ActiveTakePlaybackProgress() const;
 
   [[nodiscard]] aeyla::runtime::ShowMidiMapping ShowMidiMapping() const noexcept;
+  [[nodiscard]] std::uint8_t SongMidiLaunchNote(std::size_t songIndex) const noexcept;
   [[nodiscard]] aeyla::product::AuthoringResult ToggleShowMidiFromUI();
   [[nodiscard]] aeyla::product::AuthoringResult CycleShowMidiChannelFromUI(
       int direction);
@@ -472,6 +473,7 @@ public:
     aeyla::project::LiveMemoryPersistentState liveState;
     std::vector<std::uint8_t> portableSession;
     std::string projectId;
+    std::size_t projectSongCount{0U};
     {
       const std::scoped_lock lock(mModelMutex);
       status = mProjectFiles.open(path);
@@ -480,6 +482,7 @@ public:
         liveState = mProjectFiles.live_memory_state();
         portableSession = mProjectFiles.portable_session_state();
         projectId = mModel.project_document().project_id;
+        projectSongCount = mModel.snapshot().song_count;
         mLoadedTakeSongIndex.store(-1, std::memory_order_release);
         mActiveTakeSongIndex.store(-1, std::memory_order_release);
         SyncParametersFromProject();
@@ -530,12 +533,20 @@ public:
         return status;
       }
 
+      auto portableSongNotes = decoded.state.song_launch_notes;
+      const auto boundedSongCount = std::min<std::size_t>(
+          projectSongCount, aeyla::runtime::kShowMidiSongCapacity);
+      for(std::size_t index = boundedSongCount;
+          index < aeyla::runtime::kShowMidiSongCapacity; ++index)
+        portableSongNotes[index] = 255U;
+
       // Apply only portable authoring/session fields. Never restore locator
       // paths, blackout state, grand master or physical output authority.
       {
         const std::scoped_lock stateLock(mHostStateMutex);
         mHostStateCache.song_bindings = decoded.state.song_bindings;
         mHostStateCache.show_midi = decoded.state.show_midi;
+        mHostStateCache.song_launch_notes = portableSongNotes;
         mHostStateCache.take_library_locator.clear();
         mHostStateCache.take_bindings = decoded.state.take_bindings;
       }
@@ -546,6 +557,9 @@ public:
                                       std::memory_order_release);
       mShowMidiCaptureStopNote.store(decoded.state.show_midi.capture_stop_note,
                                      std::memory_order_release);
+      for(std::size_t index = 0U; index < aeyla::runtime::kShowMidiSongCapacity; ++index)
+        mShowMidiLaunchNotes[index].store(portableSongNotes[index],
+                                         std::memory_order_release);
       mMidiPreflightCursor.store(decoded.state.show_midi.enabled ? 0 : -1,
                                  std::memory_order_release);
 
@@ -824,6 +838,8 @@ private:
   void SetShowMidiMessage(std::string message);
   void SyncShowMidiMappingToState(
       const aeyla::runtime::ShowMidiMapping& mapping);
+  void SyncSongMidiLaunchNotesToState(
+      const std::array<std::uint8_t, aeyla::runtime::kShowMidiSongCapacity>& notes);
   [[nodiscard]] std::uint64_t BeginShowTransportMutation() noexcept;
   void EndShowTransportMutation() noexcept;
   void SynchronizeShowTransportCursor(std::uint64_t trigger_sample,
@@ -1000,6 +1016,8 @@ private:
   std::atomic<std::uint64_t> mAudioAdvanceSequence{0U};
   std::atomic<bool> mShowTransportMutation{false};
   std::atomic<std::uint64_t> mShowMidiMappingPacked{0U};
+  std::array<std::atomic<std::uint8_t>,
+             aeyla::runtime::kShowMidiSongCapacity> mShowMidiLaunchNotes{};
   std::atomic<std::uint8_t> mShowMidiCaptureStartNote{
       aeyla::runtime::kShowMidiCaptureStartNote};
   std::atomic<std::uint8_t> mShowMidiCaptureStopNote{
@@ -1007,6 +1025,8 @@ private:
   std::atomic<std::uint32_t> mPendingMidiLearnPacked{0U};
   std::atomic<aeyla::runtime::ShowMidiLearnTarget> mShowMidiLearnTarget{
       aeyla::runtime::ShowMidiLearnTarget::none};
+  // Captured when LEARN is pressed; MIDI arrival may not retarget another song.
+  std::atomic<int> mShowMidiLearnSongIndex{-1};
   std::atomic<int> mLoadedTakeSongIndex{-1};
   std::atomic<int> mActiveTakeSongIndex{-1};
   std::atomic<int> mMidiPreloadSongRequest{-1};

@@ -1243,11 +1243,12 @@ private:
         "STOP / CERO",
         "REC START",
         "REC STOP",
-        "LANZAR CANCIÓN 01–15"};
+        "LANZAR CANCIÓN SELECCIONADA"};
     const std::array<std::uint8_t, 8U> notes{
         mapping.previous_note, mapping.next_note, mapping.play_note,
         mapping.pause_note, mapping.stop_note, mapping.capture_start_note,
-        mapping.capture_stop_note, mapping.launch_base_note};
+        mapping.capture_stop_note,
+        mPlug.SongMidiLaunchNote(mPlug.ActiveSongIndex())};
     constexpr std::array<aeyla::runtime::ShowMidiLearnTarget, 8U> targets{
         aeyla::runtime::ShowMidiLearnTarget::previous_song,
         aeyla::runtime::ShowMidiLearnTarget::next_song,
@@ -1269,10 +1270,9 @@ private:
                        EVAlign::Middle),
                  labels[index],
                  IRECT(row.L + 12.0F, row.T, row.L + row.W() * 0.52F, row.B));
-      std::string note = "NOTA " + std::to_string(notes[index]);
-      if(index == 7U)
-        note += "–" + std::to_string(
-            static_cast<unsigned>(notes[index]) + 14U);
+      const std::string note = notes[index] == 255U
+          ? "SIN ASIGNAR"
+          : "NOTA " + std::to_string(notes[index]);
       g.DrawText(IText(12.0F, waiting ? kWarn : kGood, "AeylaUI",
                        EAlign::Center, EVAlign::Middle),
                  note.c_str(),

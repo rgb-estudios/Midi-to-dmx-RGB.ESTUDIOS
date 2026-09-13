@@ -60,10 +60,8 @@ int main() {
 
   for(std::uint8_t song = 0U; song < kShowMidiSongCapacity; ++song) {
     const auto note = static_cast<std::uint8_t>(mapping.launch_base_note + song);
-    check(match_show_midi_note(mapping, 16U, note, 100U, match) &&
-              match.command == ShowMidiCommand::launch_song &&
-              match.song_index == song,
-          "direct Song note must resolve its stable zero-based index");
+    check(!match_show_midi_note(mapping, 16U, note, 100U, match),
+          "legacy contiguous Song bank must be inert in R10.12");
   }
 
   std::string error;
@@ -89,18 +87,18 @@ int main() {
             mapping == before_collision && !error.empty(),
         "REC STOP note must not collide with another command");
   check(!assign_show_midi_note(mapping, ShowMidiLearnTarget::launch_song_base,
-                               12U, 120U, error),
-        "launch base must reserve all 15 direct Song notes");
+                               12U, 120U, error) &&
+            error.find("por canción") != std::string::npos,
+        "legacy launch-base Learn must be rejected explicitly");
 
-  for(const auto fixed : {kShowMidiPanicNote,
-                          kShowMidiCaptureStartNote,
-                          kShowMidiCaptureStopNote}) {
-    const auto first = static_cast<std::uint8_t>(
-        fixed - (kShowMidiSongCapacity - 1U));
-    check(!assign_show_midi_note(mapping,
-                                 ShowMidiLearnTarget::launch_song_base,
-                                 12U, first, error),
-          "new Song launch bank must not cross a fixed operational note");
+  {
+    auto oldRangeGlobal = mapping;
+    oldRangeGlobal.stop_note = 48U;
+    check(validate_show_midi_mapping(oldRangeGlobal) == ShowMidiMappingError::none,
+          "old N48..N62 bank must no longer reserve notes from global controls");
+    check(match_show_midi_note(oldRangeGlobal, oldRangeGlobal.channel, 48U, 127U, match) &&
+              match.command == ShowMidiCommand::stop_reset,
+          "a global control may use a former bank note without hidden Song launch");
   }
 
   // R09.1: REC boundaries are independently learnable. START/STOP remain
@@ -153,11 +151,10 @@ int main() {
           "MIDI channel zero must be rejected");
   }
   {
-    auto invalid = mapping;
-    invalid.launch_base_note = invalid.stop_note;
-    check(validate_show_midi_mapping(invalid) ==
-              ShowMidiMappingError::duplicate_note,
-          "global command inside launch range must be rejected");
+    auto inert = mapping;
+    inert.launch_base_note = inert.stop_note;
+    check(validate_show_midi_mapping(inert) == ShowMidiMappingError::none,
+          "legacy launch_base field must be inert and reserve no notes");
   }
 
   {

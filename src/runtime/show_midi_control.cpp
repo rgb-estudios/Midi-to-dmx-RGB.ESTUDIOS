@@ -8,28 +8,11 @@
 namespace aeyla::runtime {
 namespace {
 
-constexpr std::uint8_t kMaximumLaunchBase =
-    static_cast<std::uint8_t>(127U - (kShowMidiSongCapacity - 1U));
-
 std::array<std::uint8_t, 7U> global_notes(
     const ShowMidiMapping& mapping) noexcept {
   return {mapping.previous_note, mapping.next_note, mapping.play_note,
           mapping.pause_note, mapping.stop_note, mapping.capture_start_note,
           mapping.capture_stop_note};
-}
-
-bool inside_launch_range(const ShowMidiMapping& mapping,
-                         std::uint8_t note) noexcept {
-  const auto first = static_cast<unsigned>(mapping.launch_base_note);
-  const auto value = static_cast<unsigned>(note);
-  return value >= first && value < first + kShowMidiSongCapacity;
-}
-
-bool range_contains_fixed_note(std::uint8_t first_note,
-                               std::uint8_t fixed_note) noexcept {
-  const auto first = static_cast<unsigned>(first_note);
-  const auto fixed = static_cast<unsigned>(fixed_note);
-  return fixed >= first && fixed < first + kShowMidiSongCapacity;
 }
 
 }  // namespace
@@ -77,8 +60,6 @@ ShowMidiMappingError validate_show_midi_mapping(
     const ShowMidiMapping& mapping) noexcept {
   if(mapping.channel < 1U || mapping.channel > 16U)
     return ShowMidiMappingError::invalid_channel;
-  if(mapping.launch_base_note > kMaximumLaunchBase)
-    return ShowMidiMappingError::launch_range_overflow;
 
   const auto notes = global_notes(mapping);
   if(std::any_of(notes.begin(), notes.end(), [](std::uint8_t note) {
@@ -86,13 +67,8 @@ ShowMidiMappingError validate_show_midi_mapping(
      }))
     return ShowMidiMappingError::invalid_note;
 
-  // PANIC stays fixed and may never be shadowed. Every other command,
-  // including REC START/STOP, is configurable but must remain unique and out
-  // of the 15-note direct-song bank.
-  if(range_contains_fixed_note(mapping.launch_base_note, kShowMidiPanicNote))
-    return ShowMidiMappingError::duplicate_note;
   for(std::size_t left = 0U; left < notes.size(); ++left) {
-    if(notes[left] == kShowMidiPanicNote || inside_launch_range(mapping, notes[left]))
+    if(notes[left] == kShowMidiPanicNote)
       return ShowMidiMappingError::duplicate_note;
     for(std::size_t right = left + 1U; right < notes.size(); ++right) {
       if(notes[left] == notes[right])
@@ -128,10 +104,6 @@ bool match_show_midi_note(const ShowMidiMapping& mapping,
     match.command = ShowMidiCommand::pause_resume;
   else if(note == mapping.stop_note)
     match.command = ShowMidiCommand::stop_reset;
-  else if(inside_launch_range(mapping, note)) {
-    match.command = ShowMidiCommand::launch_song;
-    match.song_index = static_cast<std::uint8_t>(note - mapping.launch_base_note);
-  }
   else
     return false;
   return true;
@@ -166,7 +138,9 @@ bool assign_show_midi_note(ShowMidiMapping& mapping,
     case ShowMidiLearnTarget::stop_reset: candidate.stop_note = note; break;
     case ShowMidiLearnTarget::capture_start: candidate.capture_start_note = note; break;
     case ShowMidiLearnTarget::capture_stop: candidate.capture_stop_note = note; break;
-    case ShowMidiLearnTarget::launch_song_base: candidate.launch_base_note = note; break;
+    case ShowMidiLearnTarget::launch_song_base:
+      error_message = "LANZAR CANCIÓN se aprende por canción, no por banco base";
+      return false;
     case ShowMidiLearnTarget::none: break;
   }
 
