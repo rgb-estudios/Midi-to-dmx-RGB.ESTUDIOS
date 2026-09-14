@@ -1,9 +1,9 @@
-name: field-r1013-continuity-launch-v2
+name: field-r1014-daw-session-recovery-v2
 
 on:
   push:
     branches:
-      - field/r10.13-continuity-launch-20260913
+      - field/r10.14-daw-session-recovery-20260914
 
 permissions:
   contents: write
@@ -14,7 +14,7 @@ env:
 
 jobs:
   macos:
-    name: R10.13 v2 macOS Universal / continuity-safe launch / DMG
+    name: R10.14 macOS Universal / DAW session recovery / DMG
     runs-on: macos-15
     timeout-minutes: 70
     steps:
@@ -22,25 +22,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply materialized R10.13 source patch
+      - name: Apply R10.14 source patch
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
           import textwrap
-
-          # Reuse the already-reviewed R10.13 patch body, but relax only the
-          # formatting-sensitive source guard that caused run #1 to stop.
-          wf = Path('.github/workflows/field-r1013-continuity-launch.yml').read_text()
+          wf = Path('.github/workflows/field-r1014-daw-session-recovery.yml').read_text()
           marker = "          python3 - <<'PY'\n"
           start = wf.index(marker) + len(marker)
           end = wf.index("\n          PY\n", start)
           script = textwrap.dedent(wf[start:end])
-          script = script.replace(
-              "assert 'StartPreparedTakeFromMidiLocked(\\\\n      songIndex, triggerSample' in player",
-              "assert 'StartPreparedTakeFromMidiLocked(' in player\nassert 'songIndex, triggerSample, launchError' in player")
-          exec(compile(script, 'r1013_materialize_v2.py', 'exec'), {})
+          exec(compile(script, 'r1014_materialize.py', 'exec'), {})
           PY
           git diff --check
           git diff --stat
@@ -61,7 +55,7 @@ jobs:
             aeyla_dmx_clip_playback_engine_tests
           ctest --test-dir build-core --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests|aeyla_dmx_clip_playback_engine_tests)$'
 
-      - name: Commit materialized R10.13 source baseline
+      - name: Commit materialized R10.14 source baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -69,7 +63,7 @@ jobs:
           git config user.email "claudio@rgb-estudios.com"
           git add src product tests
           if ! git diff --cached --quiet; then
-            git commit -m "field: materialize R10.13 continuity launch baseline [skip ci]"
+            git commit -m "field: materialize R10.14 DAW session recovery [skip ci]"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
@@ -116,7 +110,7 @@ jobs:
           validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
           "$validator" "$vst3"
 
-      - name: Build R10.13 PKG and DMG
+      - name: Build R10.14 PKG and DMG
         shell: bash
         run: |
           set -euo pipefail
@@ -144,33 +138,35 @@ jobs:
           exit 0
           EOF
           chmod +x "$scripts/preinstall" "$scripts/postinstall"
-          pkg="$dmgroot/Instalar-AEYLA-R10.13.0.pkg"
+          pkg="$dmgroot/Instalar-AEYLA-R10.14.0.pkg"
           pkgbuild --root "$root" --scripts "$scripts" \
             --identifier com.rgbestudios.aeyla.visualdmx \
-            --version 10.13.0 "$pkg"
+            --version 10.14.0 "$pkg"
           cat > "$dmgroot/LEEME.txt" <<'EOF'
-          RGB Estudios · AEYLA R10.13
+          RGB Estudios · AEYLA R10.14 · DAW Session Recovery
 
-          - Cada canción aprende una nota MIDI arbitraria e independiente.
-          - NOTE ON = seleccionar canción + PLAY desde su IN.
-          - Selección manual = mismo lanzamiento directo.
-          - Precarga = caché opcional; nunca requisito de lanzamiento.
-          - NOTE OFF no lanza nada.
-          - PANIC / ARM mantienen sus contratos de seguridad.
+          - Save / Save As conserva biblioteca y bindings exactos de tomas.
+          - Conserva notas MIDI independientes por canción.
+          - Conserva APAGÓN tal como se guardó.
+          - Si se guardó con Take ARM, rearma sólo tras validar proyecto, toma,
+            universo, backend Art-Net y heartbeat del host.
+          - No inicia PLAY al abrir: queda listo para el siguiente trigger.
+          - Precarga MIDI es caché opcional, nunca requisito para ARM/PLAY.
+          - .aeylashow portable sigue sin transportar ARM físico entre equipos.
 
           Firma ad-hoc. No notarizado con Apple Developer ID.
           EOF
-          dmg="$out/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg"
-          hdiutil create -volname "AEYLA R10.13" -srcfolder "$dmgroot" -ov -format UDZO "$dmg"
+          dmg="$out/RGB-Live-Control-AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate.dmg"
+          hdiutil create -volname "AEYLA R10.14" -srcfolder "$dmgroot" -ov -format UDZO "$dmg"
           shasum -a 256 "$dmg" | tee "$dmg.sha256"
-          git diff HEAD^..HEAD > "$out/R10.13-materialized-source.patch" || true
+          git diff HEAD^..HEAD > "$out/R10.14-materialized-source.patch" || true
 
-      - name: Upload R10.13 artifact
+      - name: Upload R10.14 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate
+          name: AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate
           path: |
-            dist/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg
-            dist/RGB-Live-Control-AEYLA-R10.13.0-macOS-Continuity-Launch-Candidate.dmg.sha256
-            dist/R10.13-materialized-source.patch
+            dist/RGB-Live-Control-AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate.dmg
+            dist/RGB-Live-Control-AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate.dmg.sha256
+            dist/R10.14-materialized-source.patch
           if-no-files-found: error
