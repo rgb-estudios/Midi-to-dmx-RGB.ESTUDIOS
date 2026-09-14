@@ -72,6 +72,37 @@ int main() {
         "take library selection and trims must survive host-state round trip");
 
   {
+    auto recovery = state;
+    recovery.blackout = false;
+    recovery.restore_take_output_armed = true;
+    recovery.restore_take_song_index = 1U;
+    const auto recoveryBytes = aeyla::runtime::encode_plugin_component_state(recovery);
+    check(recoveryBytes.ok(), "armed DAW recovery state must encode");
+    const auto recoveryRoundTrip =
+        aeyla::runtime::decode_plugin_component_state(recoveryBytes.bytes);
+    check(recoveryRoundTrip.ok() && recoveryRoundTrip.state == recovery,
+          "armed DAW recovery state must survive exact round trip");
+
+    auto conflictingAuthority = recovery;
+    conflictingAuthority.restore_output_armed = true;
+    check(aeyla::runtime::encode_plugin_component_state(conflictingAuthority).error ==
+              PluginStateError::invalid_recovery_state,
+          "model and Take authorities may not both auto-restore");
+
+    auto missingSong = recovery;
+    missingSong.restore_take_song_index = 255U;
+    check(aeyla::runtime::encode_plugin_component_state(missingSong).error ==
+              PluginStateError::invalid_recovery_state,
+          "armed Take recovery requires a concrete Song slot");
+
+    auto staleSongWithoutArm = state;
+    staleSongWithoutArm.restore_take_song_index = 2U;
+    check(aeyla::runtime::encode_plugin_component_state(staleSongWithoutArm).error ==
+              PluginStateError::invalid_recovery_state,
+          "disarmed recovery may not carry a stale Take Song slot");
+  }
+
+  {
     auto learned = state;
     learned.song_launch_notes[0] = 60U;
     learned.song_launch_notes[1] = 73U;

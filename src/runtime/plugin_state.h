@@ -12,7 +12,7 @@
 namespace aeyla::runtime {
 
 inline constexpr std::uint16_t kPluginStateFormatMajor = 1;
-inline constexpr std::uint16_t kPluginStateFormatMinor = 6;
+inline constexpr std::uint16_t kPluginStateFormatMinor = 7;
 inline constexpr std::size_t kMaxProjectLocatorBytes = 4096;
 inline constexpr std::size_t kMaxTakeLibraryLocatorBytes = 4096;
 inline constexpr std::size_t kMaxTakeFileNameBytes = 512;
@@ -45,8 +45,9 @@ struct SessionTakeBinding {
   bool operator==(const SessionTakeBinding&) const = default;
 };
 
-// Authoritative VST3 component state. Output Arm is deliberately absent: every
-// instantiate/restore path starts disarmed regardless of previously saved UI.
+// Authoritative VST3 component state. R10.14 persists the operator
+// recovery intent used by the DAW session: a show saved armed may reopen armed
+// only after project, take bindings, backend and host heartbeat validate again.
 struct PluginComponentState {
   std::array<std::uint8_t, 16> project_uuid{};
   std::array<std::uint8_t, 32> project_checksum{};
@@ -54,6 +55,9 @@ struct PluginComponentState {
   std::uint16_t project_schema_minor{0};
   float grand_master{1.0F};
   bool blackout{true};
+  bool restore_output_armed{false};
+  bool restore_take_output_armed{false};
+  std::uint8_t restore_take_song_index{255U};
   ProjectLocatorMode locator_mode{ProjectLocatorMode::none};
   std::string project_locator{};
   std::vector<SessionSongBinding> song_bindings{};
@@ -86,6 +90,7 @@ enum class PluginStateError : std::uint8_t {
   inconsistent_locator,
   invalid_song_binding,
   invalid_show_midi_mapping,
+  invalid_recovery_state,
   invalid_take_binding
 };
 

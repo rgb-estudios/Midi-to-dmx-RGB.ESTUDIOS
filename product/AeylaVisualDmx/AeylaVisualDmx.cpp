@@ -400,6 +400,18 @@ bool AeylaVisualDmx::SerializeState(IByteChunk& chunk) const
       state = mHostStateCache;
     }
 
+    // DAW Save/Save As is the crash-recovery checkpoint. Snapshot physical
+    // authority at serialization time instead of depending on the next 8 ms
+    // runtime refresh, so an immediate save after ARM/APAGÓN is exact.
+    state.blackout = GlobalBlackout();
+    state.restore_output_armed = OutputArmed();
+    const int loadedTakeSong = mLoadedTakeSongIndex.load(std::memory_order_acquire);
+    const bool validLoadedTakeSong = loadedTakeSong >= 0 &&
+        loadedTakeSong < static_cast<int>(aeyla::runtime::kShowMidiSongCapacity);
+    state.restore_take_output_armed = TakeOutputArmed() && validLoadedTakeSong;
+    state.restore_take_song_index = state.restore_take_output_armed
+        ? static_cast<std::uint8_t>(loadedTakeSong) : 255U;
+
     const auto encoded = aeyla::runtime::encode_plugin_component_state(state);
     if(!encoded.ok() || encoded.bytes.size() >
                             static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
@@ -651,7 +663,10 @@ void AeylaVisualDmx::RuntimeTick() noexcept
     }
 
     if(!host.rendering_offline)
+    {
+      RestoreSavedDawSessionLocked(host);
       DrainShowMidiCommandsLocked(host);
+    }
 
     const auto& snapshotBeforeTransport = mModel.snapshot();
     const auto& show = mModel.show_program();
@@ -976,10 +991,15 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
             " · salida física permanece desarmada"
       : "MIDI SHOW DESACTIVADO · mapa restaurado");
   const bool checksumMismatch = !IsZero(pending->project_checksum) &&
+                                !IsZero(previousCache.project_checksum) &&
                                 pending->project_checksum != previousCache.project_checksum;
 
   if(uuidMismatch || schemaMismatch || checksumMismatch)
   {
+    mDawSessionRecoveryPending = false;
+    mDawRestoreModelArm = false;
+    mDawRestoreTakeArm = false;
+    mDawRestoreTakeSongIndex = 255U;
     mModel.set_project_valid(false);
     mModel.set_blackout(true);
     mParamBlackout.store(true, std::memory_order_release);
@@ -997,9 +1017,153 @@ void AeylaVisualDmx::ApplyPendingHostStateLocked()
     aeyla::take_library_session::stage_persisted_state(
         this, mModel.project_document().project_id,
         pending->take_library_locator, pending->take_bindings);
+
+    // Restore the operator latch exactly as saved. Physical ARM itself is
+    // deferred until the library/backend/host heartbeat are all verified.
+    mParamBlackout.store(pending->blackout, std::memory_order_release);
+    mModel.set_blackout(pending->blackout);
+    mArtNetOutput.set_blackout_latched(pending->blackout);
+    mDawRestoreModelArm = pending->restore_output_armed;
+    mDawRestoreTakeArm = pending->restore_take_output_armed;
+    mDawRestoreTakeSongIndex = pending->restore_take_song_index;
+    mDawSessionRecoveryPending = mDawRestoreModelArm || mDawRestoreTakeArm;
+    SetShowMidiMessage(mDawSessionRecoveryPending
+        ? "SESIÓN DAW RESTAURADA · validando tomas/red antes de recuperar ARM"
+        : "SESIÓN DAW RESTAURADA · tomas y mapa listos · salida desarmada");
   }
 
   mParameterUpdatePending.store(true, std::memory_order_release);
+}
+
+void AeylaVisualDmx::RestoreSavedDawSessionLocked(
+    const aeyla::runtime::HostTransportSnapshot& host)
+{
+  if(!mDawSessionRecoveryPending || host.rendering_offline || host.revision == 0U)
+    return;
+
+  const auto snapshot = mModel.snapshot();
+  if(!RuntimeHealthy() || !snapshot.project_valid || !snapshot.backend_ready)
+    return;
+
+  const auto fail_recovery = [&](std::string message) {
+    mTakeScheduler.disarm();
+    mModel.disarm(aeyla::runtime::RuntimeSafetyReason::project_reload);
+    mDawSessionRecoveryPending = false;
+    mDawRestoreModelArm = false;
+    mDawRestoreTakeArm = false;
+    mDawRestoreTakeSongIndex = 255U;
+    SyncSnapshotToAtomicsLocked();
+    SetShowMidiMessage("RECUPERACIÓN DAW BLOQUEADA · " + std::move(message));
+  };
+
+  if(mDawRestoreTakeArm)
+  {
+    const auto& show = mModel.show_program();
+    const std::size_t songIndex = mDawRestoreTakeSongIndex;
+    if(songIndex >= show.songs.size() ||
+       songIndex >= aeyla::runtime::kShowMidiSongCapacity)
+    {
+      fail_recovery("la canción armada guardada ya no existe");
+      return;
+    }
+
+    const auto& song = show.songs[songIndex];
+    aeyla::take_library_session::ensure_scope(
+        this, mModel.project_document().project_id);
+    (void)aeyla::take_library_session::restore_persisted_state(this);
+    const auto library = aeyla::take_library_session::directory(this);
+    if(library.empty())
+    {
+      fail_recovery("la biblioteca DMX guardada no está disponible");
+      return;
+    }
+
+    const auto scan = aeyla::capture::scan_take_directory(library, song.song_id);
+    if(!scan.ok() || scan.entries.empty())
+    {
+      fail_recovery(scan.ok()
+          ? "la canción armada no tiene una toma DMX"
+          : "no se pudo leer la biblioteca · " + scan.error);
+      return;
+    }
+
+    const auto restoredPath = aeyla::take_library_session::loaded_path(this, song.song_id);
+    auto selected = scan.entries.end();
+    if(!restoredPath.empty())
+      selected = std::find_if(scan.entries.begin(), scan.entries.end(),
+          [&](const auto& entry) { return entry.path == restoredPath; });
+    if(selected == scan.entries.end() && scan.entries.size() == 1U)
+      selected = scan.entries.begin();
+    if(selected == scan.entries.end())
+    {
+      fail_recovery("la toma exacta guardada no pudo resolverse; no se eligió otra automáticamente");
+      return;
+    }
+
+    const auto outputUniverse = mModel.project_document().output.universe;
+    if(selected->port_address != outputUniverse)
+    {
+      fail_recovery("el universo de la toma guardada no coincide con la salida del proyecto");
+      return;
+    }
+
+    const auto edited = aeyla::take_library_session::edit_state(this, song.song_id);
+    const std::uint64_t expectedStart = edited.has_value() && edited->path == selected->path
+        ? edited->start_frame : 0U;
+    const std::uint64_t expectedEnd = edited.has_value() && edited->path == selected->path
+        ? edited->end_frame_exclusive : selected->frame_count;
+
+    std::string error;
+    mTakeScheduler.disarm();
+    mTakeScheduler.stop_reset();
+    mTakeScheduler.attach(&mArtNetOutput, &mHostTransport);
+    if(!mTakeScheduler.load_take_file(selected->path, GetSampleRate(), error))
+    {
+      fail_recovery("la toma guardada no superó validación · " + error);
+      return;
+    }
+    if((expectedStart != 0U || expectedEnd != selected->frame_count) &&
+       !mTakeScheduler.set_play_range(static_cast<std::size_t>(expectedStart),
+                                      static_cast<std::size_t>(expectedEnd), error))
+    {
+      fail_recovery("no se pudo restaurar ENTRADA / SALIDA · " + error);
+      return;
+    }
+
+    aeyla::take_library_session::set_loaded_path(this, song.song_id, selected->path);
+    mLoadedTakeSongIndex.store(static_cast<int>(songIndex), std::memory_order_release);
+    mActiveTakeSongIndex.store(-1, std::memory_order_release);
+    (void)mModel.select_song(songIndex);
+    mArtNetOutput.set_blackout_latched(mParamBlackout.load(std::memory_order_acquire));
+    if(!mTakeScheduler.arm(error))
+    {
+      fail_recovery("la toma quedó cargada pero ARM no pudo recuperarse · " + error);
+      return;
+    }
+  }
+
+  if(mDawRestoreModelArm)
+  {
+    if(!mModel.request_arm())
+    {
+      fail_recovery("la autoridad de salida del modelo no pudo rearmarse");
+      return;
+    }
+    mArtNetOutput.prepare_explicit_rearm();
+  }
+
+  mDawSessionRecoveryPending = false;
+  mDawRestoreModelArm = false;
+  mDawRestoreTakeArm = false;
+  mDawRestoreTakeSongIndex = 255U;
+  SyncSnapshotToAtomicsLocked();
+  PublishOutputFrameLocked(false);
+  RefreshHostStateCacheLocked();
+  SetShowMidiMessage(
+      std::string("SESIÓN DAW RECUPERADA · TOMAS VINCULADAS · ") +
+      (TakeOutputArmed() || OutputArmed() ? "ARM RESTAURADO" : "DESARMADA") +
+      (GlobalBlackout() ? " · APAGÓN ACTIVO" : " · APAGÓN LIBERADO") +
+      " · LISTA PARA PLAY");
 }
 
 void AeylaVisualDmx::ApplyPendingParameterStateLocked()
@@ -1088,6 +1252,8 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
   }
   auto hostTakeState =
       aeyla::take_library_session::snapshot_for_host(this, songIds);
+  const auto takeSchedulerStatus = mTakeScheduler.status();
+  const int loadedTakeSong = mLoadedTakeSongIndex.load(std::memory_order_acquire);
 
   const std::scoped_lock lock(mHostStateMutex);
   if(mHostStateCache.project_uuid != uuid)
@@ -1106,6 +1272,17 @@ void AeylaVisualDmx::RefreshHostStateCacheLocked()
       mModel.project_document().schema_version.minor;
   mHostStateCache.grand_master = snapshot.grand_master;
   mHostStateCache.blackout = snapshot.global_blackout;
+  if(!mDawSessionRecoveryPending)
+  {
+    mHostStateCache.restore_output_armed = snapshot.output_armed;
+    const bool validLoadedTakeSong = loadedTakeSong >= 0 &&
+        loadedTakeSong < static_cast<int>(aeyla::runtime::kShowMidiSongCapacity);
+    mHostStateCache.restore_take_output_armed =
+        takeSchedulerStatus.armed && validLoadedTakeSong;
+    mHostStateCache.restore_take_song_index =
+        mHostStateCache.restore_take_output_armed
+            ? static_cast<std::uint8_t>(loadedTakeSong) : 255U;
+  }
   mHostStateCache.take_library_locator =
       std::move(hostTakeState.library_locator);
   mHostStateCache.take_bindings = std::move(hostTakeState.bindings);

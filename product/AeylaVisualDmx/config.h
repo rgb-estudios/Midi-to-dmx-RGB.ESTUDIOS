@@ -27,9 +27,9 @@
 #define PLUG_DOES_MIDI_IN 1
 #define PLUG_DOES_MIDI_OUT 0
 #define PLUG_DOES_MPE 0
-// Custom component chunks contain versioned RGB Live Control project identity
-// and safe preferences, followed by iPlug's parameter state. Output Arm is
-// excluded.
+// Custom component chunks contain versioned RGB Live Control project/session
+// state, followed by iPlug parameter state. R10.14 also stores explicit crash
+// recovery intent for ARM; runtime validation must succeed before rearming.
 #define PLUG_DOES_STATE_CHUNKS 1
 
 #define PLUG_HAS_UI 1

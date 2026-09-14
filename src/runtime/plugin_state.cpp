@@ -163,6 +163,14 @@ PluginStateError validate_state(const PluginComponentState& state) noexcept {
         return PluginStateError::invalid_show_midi_mapping;
     }
   }
+  if (state.restore_output_armed && state.restore_take_output_armed)
+    return PluginStateError::invalid_recovery_state;
+  if (state.restore_take_output_armed) {
+    if (state.restore_take_song_index >= kShowMidiSongCapacity)
+      return PluginStateError::invalid_recovery_state;
+  } else if (state.restore_take_song_index != 255U) {
+    return PluginStateError::invalid_recovery_state;
+  }
   if (state.take_library_locator.size() > kMaxTakeLibraryLocatorBytes ||
       state.take_library_locator.find('\0') != std::string::npos)
     return PluginStateError::invalid_take_binding;
@@ -202,7 +210,7 @@ PluginStateEncodeResult encode_plugin_component_state(
                           binding.file_name.size() + 8U + 8U;
   const auto payload_size = static_cast<std::uint32_t>(
       kFixedPayloadSize + locator_size + binding_bytes + 8U +
-      take_binding_bytes + 2U + kShowMidiSongCapacity);
+      take_binding_bytes + 2U + kShowMidiSongCapacity + 2U);
   const auto total_size = kHeaderSize + static_cast<std::size_t>(payload_size);
   if (total_size > kMaxPluginStateBytes) {
     result.error = PluginStateError::locator_too_large;
@@ -261,6 +269,13 @@ PluginStateEncodeResult encode_plugin_component_state(
     // State 1.5: arbitrary direct launch note per song.
     result.bytes.insert(result.bytes.end(), state.song_launch_notes.begin(),
                         state.song_launch_notes.end());
+    // State 1.7: exact DAW-session recovery intent. The physical authority is
+    // never trusted blindly on restore; runtime validation must re-establish it.
+    std::uint8_t recovery_flags = 0U;
+    if (state.restore_output_armed) recovery_flags |= 0x01U;
+    if (state.restore_take_output_armed) recovery_flags |= 0x02U;
+    result.bytes.push_back(recovery_flags);
+    result.bytes.push_back(state.restore_take_song_index);
   } catch (const std::bad_alloc&) {
     result.bytes.clear();
     result.error = PluginStateError::allocation_failure;
@@ -485,6 +500,25 @@ PluginStateDecodeResult decode_plugin_component_state(
     result.state.song_launch_notes.fill(255U);
   }
 
+  if (format_minor >= 7U) {
+    if (offset + 2U > payload_end) {
+      result.error = PluginStateError::invalid_recovery_state;
+      return result;
+    }
+    const std::uint8_t recovery_flags = bytes[offset++];
+    if ((recovery_flags & ~0x03U) != 0U) {
+      result.error = PluginStateError::invalid_recovery_state;
+      return result;
+    }
+    result.state.restore_output_armed = (recovery_flags & 0x01U) != 0U;
+    result.state.restore_take_output_armed = (recovery_flags & 0x02U) != 0U;
+    result.state.restore_take_song_index = bytes[offset++];
+  } else {
+    result.state.restore_output_armed = false;
+    result.state.restore_take_output_armed = false;
+    result.state.restore_take_song_index = 255U;
+  }
+
   // Same-major future minor versions may append fields inside payload_size.
   if (offset > payload_end) {
     result.error = PluginStateError::invalid_payload_size;
@@ -511,6 +545,7 @@ const char* plugin_state_error_name(PluginStateError error) noexcept {
     case PluginStateError::inconsistent_locator: return "inconsistent_locator";
     case PluginStateError::invalid_song_binding: return "invalid_song_binding";
     case PluginStateError::invalid_show_midi_mapping: return "invalid_show_midi_mapping";
+    case PluginStateError::invalid_recovery_state: return "invalid_recovery_state";
     case PluginStateError::invalid_take_binding: return "invalid_take_binding";
   }
   return "unknown";

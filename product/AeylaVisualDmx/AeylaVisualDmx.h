@@ -644,6 +644,9 @@ public:
     portableState.project_locator.clear();
     portableState.take_library_locator.clear();
     portableState.blackout = true;
+    portableState.restore_output_armed = false;
+    portableState.restore_take_output_armed = false;
+    portableState.restore_take_song_index = 255U;
     const auto encodedPortable =
         aeyla::runtime::encode_plugin_component_state(portableState);
     if(!encodedPortable.ok())
@@ -682,6 +685,9 @@ public:
     portableState.project_locator.clear();
     portableState.take_library_locator.clear();
     portableState.blackout = true;
+    portableState.restore_output_armed = false;
+    portableState.restore_take_output_armed = false;
+    portableState.restore_take_song_index = 255U;
     const auto encodedPortable =
         aeyla::runtime::encode_plugin_component_state(portableState);
     if(!encodedPortable.ok())
@@ -826,6 +832,8 @@ private:
   void ReconcileNetworkConfiguration() noexcept;
   void ApplyPendingHostStateLocked();
   void ApplyPendingParameterStateLocked();
+  void RestoreSavedDawSessionLocked(
+      const aeyla::runtime::HostTransportSnapshot& host);
   void DrainHostEventsLocked();
   void DrainShowMidiCommandsLocked(
       const aeyla::runtime::HostTransportSnapshot& host);
@@ -980,6 +988,13 @@ private:
   mutable std::mutex mHostStateMutex;
   aeyla::runtime::PluginComponentState mHostStateCache{};
   std::optional<aeyla::runtime::PluginComponentState> mPendingHostState;
+  // R10.14: DAW Save/Save As may explicitly request restoration of the exact
+  // operator authority state after a crash/reopen. These fields are consumed
+  // only after host heartbeat, project, backend and Take bindings validate.
+  bool mDawSessionRecoveryPending{false};
+  bool mDawRestoreModelArm{false};
+  bool mDawRestoreTakeArm{false};
+  std::uint8_t mDawRestoreTakeSongIndex{255U};
   std::optional<aeyla::runtime::ShowMidiEvent> mPendingShowMidiEvent;
   std::array<std::unique_ptr<aeyla::capture::DmxTakeFileReader>,
              aeyla::runtime::kShowMidiSongCapacity> mPreparedMidiTakeReaders{};

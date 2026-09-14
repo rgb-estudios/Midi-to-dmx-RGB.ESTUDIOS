@@ -869,10 +869,6 @@ aeyla::product::AuthoringResult AeylaVisualDmx::ToggleTakeOutputArmFromUI()
   mPendingMidiLearnPacked.store(0U, std::memory_order_release);
   if(NetworkConfigurationBusy())
     return {false, {}, "Espera a que termine el cambio de red antes de armar"};
-  if(ShowMidiMapping().enabled &&
-     mMidiPreflightCursor.load(std::memory_order_acquire) >= 0)
-    return {false, {},
-            "Espera a que MIDI / SHOW indique PRECARGA COMPLETA antes de armar"};
   if(OutputArmed())
     return {false, {}, "Desarma la salida del modelo antes de armar la toma DMX"};
   if(TakeRecording())
