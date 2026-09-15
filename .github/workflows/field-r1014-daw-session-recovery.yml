@@ -94,12 +94,123 @@ jobs:
           out="$GITHUB_WORKSPACE/dist"
           mkdir -p "$root/Library/Audio/Plug-Ins/VST3" "$scripts" "$dmgroot" "$out"
           ditto "$vst3" "$root/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3"
-          printf '%s\n' '#!/bin/bash' 'set -e' 'rm -rf /Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3' 'exit 0' > "$scripts/preinstall"
-          printf '%s\n' '#!/bin/bash' 'set -e' 'target=/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3' '/usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true' '/usr/bin/codesign --verify --deep --strict "$target"' '/usr/bin/touch "$target"' '/usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true' 'exit 0' > "$scripts/postinstall"
+
+          cat > "$scripts/preinstall" <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+
+          LOG=/var/tmp/AEYLA-installer-cleanup.log
+          exec >>"$LOG" 2>&1
+          echo "=== AEYLA R10.14 preinstall $(date) ==="
+
+          cleanup_dir() {
+            dir="$1"
+            [ -d "$dir" ] || return 0
+            /usr/bin/find "$dir" -maxdepth 1 -type d \( \
+              -iname 'AeylaVisualDmx*.vst3' -o \
+              -iname 'AEYLA*DMX*.vst3' -o \
+              -iname 'RGB*AEYLA*.vst3' \
+            \) -print -exec /bin/rm -rf {} + 2>/dev/null || true
+          }
+
+          cleanup_components() {
+            dir="$1"
+            [ -d "$dir" ] || return 0
+            /usr/bin/find "$dir" -maxdepth 1 -type d \( \
+              -iname 'AeylaVisualDmx*.component' -o \
+              -iname 'AEYLA*DMX*.component' -o \
+              -iname 'RGB*AEYLA*.component' \
+            \) -print -exec /bin/rm -rf {} + 2>/dev/null || true
+          }
+
+          # Remove all known system-level AEYLA plug-in bundles before copying the new one.
+          cleanup_dir '/Library/Audio/Plug-Ins/VST3'
+          cleanup_components '/Library/Audio/Plug-Ins/Components'
+
+          # Older field builds were sometimes copied manually into the user's Library.
+          # Remove only AEYLA/RGB matching bundles; never touch unrelated plug-ins or show data.
+          for home in /Users/*; do
+            [ -d "$home" ] || continue
+            [ "$(basename "$home")" = 'Shared' ] && continue
+            cleanup_dir "$home/Library/Audio/Plug-Ins/VST3"
+            cleanup_components "$home/Library/Audio/Plug-Ins/Components"
+          done
+
+          # R10.10 used the legacy package identifier. Forget stale receipts so macOS
+          # does not keep two AEYLA package registrations after the upgrade.
+          /usr/sbin/pkgutil --forget com.rgbestudios.aeyla.vst3 >/dev/null 2>&1 || true
+          /usr/sbin/pkgutil --forget com.rgbestudios.aeyla.visualdmx >/dev/null 2>&1 || true
+
+          echo 'Legacy AEYLA plug-ins and receipts cleaned.'
+          exit 0
+          EOF
+
+          cat > "$scripts/postinstall" <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+
+          LOG=/var/tmp/AEYLA-installer-cleanup.log
+          exec >>"$LOG" 2>&1
+          echo "=== AEYLA R10.14 postinstall $(date) ==="
+
+          target='/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3'
+          test -d "$target"
+          /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+          /usr/bin/codesign --verify --deep --strict "$target"
+          /usr/bin/touch "$target"
+
+          # Final duplicate sweep in user-level VST3 folders. The canonical copy is
+          # system-level only; this prevents Ableton from seeing R10.10 and R10.14 together.
+          for home in /Users/*; do
+            [ -d "$home" ] || continue
+            [ "$(basename "$home")" = 'Shared' ] && continue
+            dir="$home/Library/Audio/Plug-Ins/VST3"
+            [ -d "$dir" ] || continue
+            /usr/bin/find "$dir" -maxdepth 1 -type d \( \
+              -iname 'AeylaVisualDmx*.vst3' -o \
+              -iname 'AEYLA*DMX*.vst3' -o \
+              -iname 'RGB*AEYLA*.vst3' \
+            \) -print -exec /bin/rm -rf {} + 2>/dev/null || true
+          done
+
+          # Refresh macOS audio registration. Ableton may still require its normal plug-in
+          # scan on first launch, but no obsolete AEYLA bundle remains on disk.
+          /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+
+          # Verify exactly one canonical AEYLA VST3 remains in the standard locations.
+          count=0
+          [ -d "$target" ] && count=$((count + 1))
+          for home in /Users/*; do
+            [ -d "$home/Library/Audio/Plug-Ins/VST3" ] || continue
+            while IFS= read -r legacy; do
+              [ -n "$legacy" ] && count=$((count + 1))
+            done < <(/usr/bin/find "$home/Library/Audio/Plug-Ins/VST3" -maxdepth 1 -type d \( -iname 'AeylaVisualDmx*.vst3' -o -iname 'AEYLA*DMX*.vst3' -o -iname 'RGB*AEYLA*.vst3' \) -print 2>/dev/null || true)
+          done
+          if [ "$count" -ne 1 ]; then
+            echo "ERROR: expected exactly one AEYLA VST3, found $count"
+            exit 1
+          fi
+
+          echo 'AEYLA R10.14 installed as the single canonical VST3.'
+          exit 0
+          EOF
+
           chmod +x "$scripts/preinstall" "$scripts/postinstall"
           pkg="$dmgroot/Instalar-AEYLA-R10.14.0.pkg"
           pkgbuild --root "$root" --scripts "$scripts" --identifier com.rgbestudios.aeyla.visualdmx --version 10.14.0 "$pkg"
-          printf '%s\n' 'RGB Estudios - AEYLA R10.14 - DAW Session Recovery' '' 'Save/Save As conserva biblioteca, tomas, MIDI, blackout y el ARM guardado.' 'El ARM solo se recupera tras validar proyecto, toma, universo, Art-Net y heartbeat.' 'Abrir la sesion NO inicia PLAY: queda lista para el siguiente trigger.' 'El archivo .aeylashow portable sigue abriendo desarmado por seguridad.' '' 'Firma ad-hoc; no notarizado con Apple Developer ID.' > "$dmgroot/LEEME.txt"
+          printf '%s\n' \
+            'RGB Estudios - AEYLA R10.14 - DAW Session Recovery' \
+            '' \
+            'El instalador reemplaza automaticamente instalaciones AEYLA antiguas.' \
+            'Limpia copias VST3/Component de AEYLA en /Library y ~/Library y elimina el receipt legado R10.10.' \
+            'No borra sesiones Ableton, .aeylashow, TOMAS_DMX, .aeylatake ni datos de usuario.' \
+            '' \
+            'Save/Save As conserva biblioteca, tomas, MIDI, blackout y el ARM guardado.' \
+            'El ARM solo se recupera tras validar proyecto, toma, universo, Art-Net y heartbeat.' \
+            'Abrir la sesion NO inicia PLAY: queda lista para el siguiente trigger.' \
+            'El archivo .aeylashow portable sigue abriendo desarmado por seguridad.' \
+            '' \
+            'Firma ad-hoc; no notarizado con Apple Developer ID.' > "$dmgroot/LEEME.txt"
           dmg="$out/RGB-Live-Control-AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate.dmg"
           hdiutil create -volname 'AEYLA R10.14' -srcfolder "$dmgroot" -ov -format UDZO "$dmg"
           shasum -a 256 "$dmg" | tee "$dmg.sha256"
