@@ -6,29 +6,32 @@ on:
       - field/r10.14-daw-session-recovery-20260914
 
 permissions:
-  contents: write
+  contents: read
 
 env:
+  AEYLA_VERSION: R10.14.0
+  AEYLA_VERSION_NUMERIC: 10.14.0.0
   IPLUG2_COMMIT: 584df5a3306f3a9a62b5ebb803d3fb58134abdcf
   VST3SDK_COMMIT: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+  INNO_SETUP_VERSION: 6.7.1
 
 jobs:
   macos:
-    name: R10.14 macOS Universal - DAW session recovery
+    name: R10.14 macOS Universal - recovery + replacement installer
     runs-on: macos-15
     timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Materialize R10.14 source
+      - name: Assert materialized R10.14 source
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/r1014_materialize.py
+          grep -F 'kPluginStateFormatMinor = 7;' src/runtime/plugin_state.h
+          grep -F 'restore_output_armed' src/runtime/plugin_state.h
+          grep -F 'RestoreSavedDawSessionLocked' product/AeylaVisualDmx/AeylaVisualDmx.cpp
+          grep -F 'mShowMidiLearnSongIndex' product/AeylaVisualDmx/AeylaVisualDmx.h
           git diff --check
-          git diff --stat
 
       - name: Run core regressions
         shell: bash
@@ -37,18 +40,6 @@ jobs:
           cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
           cmake --build build-core --config Release --parallel 2 --target aeyla_project_package_tests aeyla_project_file_controller_tests aeyla_plugin_state_tests aeyla_take_library_session_tests aeyla_live_memory_session_tests aeyla_show_midi_control_tests aeyla_host_song_binding_tests aeyla_dmx_clip_playback_engine_tests
           ctest --test-dir build-core --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests|aeyla_dmx_clip_playback_engine_tests)$'
-
-      - name: Commit materialized source
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name rgb-estudios-ci
-          git config user.email claudio@rgb-estudios.com
-          git add src product tests
-          if ! git diff --cached --quiet; then
-            git commit -m 'field: materialize R10.14 DAW session recovery [skip ci]'
-            git push origin HEAD:${GITHUB_REF_NAME}
-          fi
 
       - name: Fetch pinned dependencies
         shell: bash
@@ -83,7 +74,7 @@ jobs:
           validator="$(find build-validator -type f -name validator -perm +111 | head -n 1)"
           "$validator" "$vst3"
 
-      - name: Build PKG and DMG
+      - name: Build replacement PKG and DMG
         shell: bash
         run: |
           set -euo pipefail
@@ -98,12 +89,11 @@ jobs:
           cat > "$scripts/preinstall" <<'EOF'
           #!/bin/bash
           set -euo pipefail
-
           LOG=/var/tmp/AEYLA-installer-cleanup.log
           exec >>"$LOG" 2>&1
           echo "=== AEYLA R10.14 preinstall $(date) ==="
 
-          cleanup_dir() {
+          cleanup_vst3_dir() {
             dir="$1"
             [ -d "$dir" ] || return 0
             /usr/bin/find "$dir" -maxdepth 1 -type d \( \
@@ -123,44 +113,31 @@ jobs:
             \) -print -exec /bin/rm -rf {} + 2>/dev/null || true
           }
 
-          # Remove all known system-level AEYLA plug-in bundles before copying the new one.
-          cleanup_dir '/Library/Audio/Plug-Ins/VST3'
+          cleanup_vst3_dir '/Library/Audio/Plug-Ins/VST3'
           cleanup_components '/Library/Audio/Plug-Ins/Components'
-
-          # Older field builds were sometimes copied manually into the user's Library.
-          # Remove only AEYLA/RGB matching bundles; never touch unrelated plug-ins or show data.
           for home in /Users/*; do
             [ -d "$home" ] || continue
             [ "$(basename "$home")" = 'Shared' ] && continue
-            cleanup_dir "$home/Library/Audio/Plug-Ins/VST3"
+            cleanup_vst3_dir "$home/Library/Audio/Plug-Ins/VST3"
             cleanup_components "$home/Library/Audio/Plug-Ins/Components"
           done
-
-          # R10.10 used the legacy package identifier. Forget stale receipts so macOS
-          # does not keep two AEYLA package registrations after the upgrade.
           /usr/sbin/pkgutil --forget com.rgbestudios.aeyla.vst3 >/dev/null 2>&1 || true
           /usr/sbin/pkgutil --forget com.rgbestudios.aeyla.visualdmx >/dev/null 2>&1 || true
-
-          echo 'Legacy AEYLA plug-ins and receipts cleaned.'
           exit 0
           EOF
 
           cat > "$scripts/postinstall" <<'EOF'
           #!/bin/bash
           set -euo pipefail
-
           LOG=/var/tmp/AEYLA-installer-cleanup.log
           exec >>"$LOG" 2>&1
           echo "=== AEYLA R10.14 postinstall $(date) ==="
-
           target='/Library/Audio/Plug-Ins/VST3/AeylaVisualDmx.vst3'
           test -d "$target"
           /usr/bin/xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
           /usr/bin/codesign --verify --deep --strict "$target"
           /usr/bin/touch "$target"
 
-          # Final duplicate sweep in user-level VST3 folders. The canonical copy is
-          # system-level only; this prevents Ableton from seeing R10.10 and R10.14 together.
           for home in /Users/*; do
             [ -d "$home" ] || continue
             [ "$(basename "$home")" = 'Shared' ] && continue
@@ -173,11 +150,8 @@ jobs:
             \) -print -exec /bin/rm -rf {} + 2>/dev/null || true
           done
 
-          # Refresh macOS audio registration. Ableton may still require its normal plug-in
-          # scan on first launch, but no obsolete AEYLA bundle remains on disk.
           /usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
 
-          # Verify exactly one canonical AEYLA VST3 remains in the standard locations.
           count=0
           [ -d "$target" ] && count=$((count + 1))
           for home in /Users/*; do
@@ -190,8 +164,6 @@ jobs:
             echo "ERROR: expected exactly one AEYLA VST3, found $count"
             exit 1
           fi
-
-          echo 'AEYLA R10.14 installed as the single canonical VST3.'
           exit 0
           EOF
 
@@ -199,29 +171,200 @@ jobs:
           pkg="$dmgroot/Instalar-AEYLA-R10.14.0.pkg"
           pkgbuild --root "$root" --scripts "$scripts" --identifier com.rgbestudios.aeyla.visualdmx --version 10.14.0 "$pkg"
           printf '%s\n' \
-            'RGB Estudios - AEYLA R10.14 - DAW Session Recovery' \
+            'RGB Estudios - AEYLA R10.14.0' \
+            'VST3 Universal: Apple Silicon arm64 + Intel x86_64 / macOS 11+' \
             '' \
-            'El instalador reemplaza automaticamente instalaciones AEYLA antiguas.' \
-            'Limpia copias VST3/Component de AEYLA en /Library y ~/Library y elimina el receipt legado R10.10.' \
-            'No borra sesiones Ableton, .aeylashow, TOMAS_DMX, .aeylatake ni datos de usuario.' \
+            'Este instalador reemplaza automaticamente copias AEYLA antiguas en las ubicaciones VST3 estandar.' \
+            'No borra sesiones Ableton, .aeylashow, TOMAS_DMX, .aeylatake, mapas MIDI ni otros plugins.' \
             '' \
-            'Save/Save As conserva biblioteca, tomas, MIDI, blackout y el ARM guardado.' \
-            'El ARM solo se recupera tras validar proyecto, toma, universo, Art-Net y heartbeat.' \
-            'Abrir la sesion NO inicia PLAY: queda lista para el siguiente trigger.' \
-            'El archivo .aeylashow portable sigue abriendo desarmado por seguridad.' \
+            'R10.14 conserva el flujo R10.13 y agrega recuperacion de estado de la sesion DAW.' \
+            'Save/Save As conserva biblioteca, tomas, MIDI, blackout y la intencion de ARM guardada.' \
+            'La reapertura no inicia PLAY por si sola.' \
+            'El .aeylashow portable sigue desarmado al moverlo a otro equipo.' \
             '' \
-            'Firma ad-hoc; no notarizado con Apple Developer ID.' > "$dmgroot/LEEME.txt"
-          dmg="$out/RGB-Live-Control-AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate.dmg"
+            'Build VST3 firmado ad-hoc y no notarizado con Apple Developer ID.' > "$dmgroot/LEEME.txt"
+          dmg="$out/RGB-Live-Control-AEYLA-R10.14.0-macOS-Field-Candidate.dmg"
           hdiutil create -volname 'AEYLA R10.14' -srcfolder "$dmgroot" -ov -format UDZO "$dmg"
           shasum -a 256 "$dmg" | tee "$dmg.sha256"
-          git diff HEAD^..HEAD > "$out/R10.14-materialized-source.patch" || true
+          printf 'commit=%s\nplatform=macOS Universal arm64+x86_64\nformat=VST3\n' "$GITHUB_SHA" > "$out/BUILD_MANIFEST.txt"
 
-      - name: Upload artifact
+      - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate
+          name: AEYLA-R10.14.0-macOS-Field-Candidate
           path: |
-            dist/RGB-Live-Control-AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate.dmg
-            dist/RGB-Live-Control-AEYLA-R10.14.0-macOS-DAW-Session-Recovery-Candidate.dmg.sha256
-            dist/R10.14-materialized-source.patch
+            dist/RGB-Live-Control-AEYLA-R10.14.0-macOS-Field-Candidate.dmg
+            dist/RGB-Live-Control-AEYLA-R10.14.0-macOS-Field-Candidate.dmg.sha256
+            dist/BUILD_MANIFEST.txt
           if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: R10.14 Windows x64 - recovery + replacement installer
+    runs-on: windows-2025
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert materialized R10.14 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Select-String -Path src/runtime/plugin_state.h -SimpleMatch 'kPluginStateFormatMinor = 7;' -Quiet | Out-Null
+          Select-String -Path src/runtime/plugin_state.h -SimpleMatch 'restore_output_armed' -Quiet | Out-Null
+          Select-String -Path product/AeylaVisualDmx/AeylaVisualDmx.cpp -SimpleMatch 'RestoreSavedDawSessionLocked' -Quiet | Out-Null
+          Select-String -Path product/AeylaVisualDmx/AeylaVisualDmx.h -SimpleMatch 'mShowMidiLearnSongIndex' -Quiet | Out-Null
+          git diff --check
+
+      - name: Run core regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S . -B build-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-core --config Release --parallel 2 --target aeyla_project_package_tests aeyla_project_file_controller_tests aeyla_plugin_state_tests aeyla_take_library_session_tests aeyla_live_memory_session_tests aeyla_show_midi_control_tests aeyla_host_song_binding_tests aeyla_dmx_clip_playback_engine_tests
+          ctest --test-dir build-core -C Release --output-on-failure -R '^(aeyla_project_package_tests|aeyla_project_file_controller_tests|aeyla_plugin_state_tests|aeyla_take_library_session_tests|aeyla_live_memory_session_tests|aeyla_show_midi_control_tests|aeyla_host_song_binding_tests|aeyla_dmx_clip_playback_engine_tests)$'
+
+      - name: Fetch pinned dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone https://github.com/iPlug2/iPlug2.git external/iPlug2
+          git -C external/iPlug2 checkout $env:IPLUG2_COMMIT
+          $sdk = 'external/iPlug2/Dependencies/IPlug/VST3_SDK'
+          if (Test-Path $sdk) { Remove-Item -Recurse -Force $sdk }
+          git clone --recursive https://github.com/steinbergmedia/vst3sdk.git $sdk
+          git -C $sdk checkout $env:VST3SDK_COMMIT
+          git -C $sdk submodule update --init --recursive
+
+      - name: Build Windows x64 VST3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S product -B build-product -DIPLUG2_DIR="$env:GITHUB_WORKSPACE/external/iPlug2" -DIPLUG_DEPLOY_PLUGINS=OFF -DIGRAPHICS_BACKEND=NANOVG
+          cmake --build build-product --config Release --target AeylaVisualDmx-vst3 --parallel 2
+
+      - name: Validate Windows VST3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S external/iPlug2/Dependencies/IPlug/VST3_SDK -B build-validator -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF
+          cmake --build build-validator --config Release --target validator --parallel 2
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $validator = Get-ChildItem build-validator -Recurse -File -Filter 'validator.exe' | Select-Object -First 1
+          if (-not $bundle -or -not $validator) { throw 'Missing VST3 bundle or validator' }
+          & $validator.FullName $bundle.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Steinberg Validator failed: $LASTEXITCODE" }
+
+      - name: Stage Windows bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Get-ChildItem build-product -Recurse -Directory -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $binary = Get-ChildItem $bundle.FullName -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Where-Object { $_.FullName -match 'x86_64-win' } | Select-Object -First 1
+          if (-not $bundle -or -not $binary) { throw 'Integrated Windows VST3 was not produced' }
+          if ($binary.Length -lt 1MB) { throw 'Windows VST3 binary is unexpectedly small' }
+          $bytes = [System.IO.File]::ReadAllBytes($binary.FullName)
+          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Windows VST3 lacks PE/MZ header' }
+
+          $stage = Join-Path $env:GITHUB_WORKSPACE 'stage-windows'
+          New-Item -ItemType Directory -Force "$stage/VST3" | Out-Null
+          Copy-Item -Recurse -Force $bundle.FullName "$stage/VST3/AeylaVisualDmx.vst3"
+
+          @"
+          RGB Estudios - AEYLA R10.14.0
+          Windows 10/11 x64 - VST3
+
+          El instalador reemplaza la copia AEYLA anterior en las ubicaciones VST3 estandar.
+          No borra sesiones Ableton/REAPER, .aeylashow, TOMAS_DMX, .aeylatake, mapas MIDI ni otros plugins.
+
+          R10.14 conserva el flujo R10.13 y agrega recuperacion de estado de la sesion DAW.
+          Save/Save As conserva biblioteca, tomas, MIDI, blackout y la intencion de ARM guardada.
+          La reapertura no inicia PLAY por si sola.
+          El .aeylashow portable sigue desarmado al moverlo a otro equipo.
+
+          Build sin firma Authenticode.
+          "@ | Set-Content -Encoding utf8 "$stage/LEEME_R1014.txt"
+
+          $hash = (Get-FileHash $binary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            product = 'AEYLA Visual DMX'
+            version = $env:AEYLA_VERSION
+            channel = 'field-candidate-unsigned'
+            commit = $env:GITHUB_SHA
+            platform = 'windows-x64'
+            format = 'VST3'
+            plugin_sha256 = $hash
+            standalone_included = $false
+          }
+          $manifest | ConvertTo-Json | Set-Content -Encoding utf8 "$stage/BUILD_MANIFEST.json"
+
+      - name: Install pinned Inno Setup compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --version=$env:INNO_SETUP_VERSION --allow-downgrade -y --no-progress
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw 'Pinned Inno Setup compiler was not installed' }
+
+      - name: Build Windows replacement installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = (Resolve-Path stage-windows).Path
+          $output = Join-Path $env:GITHUB_WORKSPACE 'dist-windows'
+          New-Item -ItemType Directory -Force $output | Out-Null
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          $args = @(
+            "/DSourceVST3=$stage/VST3/AeylaVisualDmx.vst3",
+            "/DReadmePath=$stage/LEEME_R1014.txt",
+            "/DManifestPath=$stage/BUILD_MANIFEST.json",
+            "/DOutputDir=$output",
+            "/DAppVersion=$env:AEYLA_VERSION",
+            "/DAppVersionNumeric=$env:AEYLA_VERSION_NUMERIC",
+            "/DBuildSha=$env:GITHUB_SHA",
+            'tools/packaging/windows/AEYLA_VST3_SETUP.iss'
+          )
+          & $iscc $args
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          $installer = Get-ChildItem $output -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer -or $installer.Length -lt 1MB) { throw 'Windows installer missing or unexpectedly small' }
+          Rename-Item $installer.FullName 'RGB-Live-Control-AEYLA-R10.14.0-Windows-x64-Field-Candidate.exe'
+          $installer = Get-Item "$output/RGB-Live-Control-AEYLA-R10.14.0-Windows-x64-Field-Candidate.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($installer.FullName)
+          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Windows installer lacks PE/MZ header' }
+          (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content -Encoding ascii "$($installer.FullName).sha256"
+
+      - name: Smoke clean install and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-Item 'dist-windows/RGB-Live-Control-AEYLA-R10.14.0-Windows-x64-Field-Candidate.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'aeyla-r1014-install.log'
+          $process = Start-Process $installer.FullName -Wait -PassThru -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/SP-','/NORESTART',"/LOG=$log")
+          if ($process.ExitCode -ne 0) { Get-Content $log; throw "Installer failed: $($process.ExitCode)" }
+
+          $installedBundle = Join-Path $env:ProgramFiles 'Common Files/VST3/AeylaVisualDmx.vst3'
+          $installedBinary = Get-ChildItem $installedBundle -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          $sourceBinary = Get-ChildItem stage-windows/VST3 -Recurse -File -Filter 'AeylaVisualDmx.vst3' | Select-Object -First 1
+          if (-not $installedBinary -or -not $sourceBinary) { throw 'Installed or source VST3 binary missing' }
+          if ((Get-FileHash $installedBinary.FullName -Algorithm SHA256).Hash -ne (Get-FileHash $sourceBinary.FullName -Algorithm SHA256).Hash) { throw 'Installed Windows VST3 hash differs from staged source' }
+
+          $userCopy = Join-Path $env:LOCALAPPDATA 'Programs/Common/VST3/AeylaVisualDmx.vst3'
+          if (Test-Path $userCopy) { throw 'Legacy user-level AEYLA VST3 remains after install' }
+
+          $uninstaller = Join-Path $env:ProgramFiles 'RGB Estudios/AEYLA Visual DMX/unins000.exe'
+          if (-not (Test-Path $uninstaller)) { throw 'Inno uninstaller missing' }
+          $uninstall = Start-Process $uninstaller -Wait -PassThru -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART')
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed: $($uninstall.ExitCode)" }
+          if (Test-Path $installedBundle) { throw 'Windows VST3 remains after uninstall' }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEYLA-R10.14.0-Windows-x64-Field-Candidate
+          path: |
+            dist-windows/RGB-Live-Control-AEYLA-R10.14.0-Windows-x64-Field-Candidate.exe
+            dist-windows/RGB-Live-Control-AEYLA-R10.14.0-Windows-x64-Field-Candidate.exe.sha256
+            stage-windows/BUILD_MANIFEST.json
+          if-no-files-found: error
+          retention-days: 30
