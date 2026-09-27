@@ -62,6 +62,13 @@ VersionInfoTextVersion={#AppVersion} ({#BuildSha})
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
+[InstallDelete]
+; Keep exactly one canonical AEYLA VST3. Remove old field copies from the
+; Steinberg-defined global and per-user VST3 locations before installing.
+Type: filesandordirs; Name: "{commoncf64}\VST3\AeylaVisualDmx.vst3"
+Type: filesandordirs; Name: "{localappdata}\Programs\Common\VST3\AeylaVisualDmx.vst3"
+Type: filesandordirs; Name: "{commoncf32}\VST3\AeylaVisualDmx.vst3"
+
 [Files]
 Source: "{#SourceVST3}\*"; DestDir: "{commoncf64}\VST3\AeylaVisualDmx.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#ReadmePath}"; DestDir: "{app}"; DestName: "LEEME_AEYLA.txt"; Flags: ignoreversion
@@ -79,9 +86,9 @@ function InitializeSetup(): Boolean;
 begin
   Result := True;
   if SuppressibleMsgBox(
-    'Este instalador contiene una version ALPHA sin firma digital. ' +
-    'Cierra REAPER y Ableton antes de continuar. La salida DMX comienza ' +
-    'desarmada y este build no esta autorizado para depender de el en show.',
+    'AEYLA R10.14 es un build de campo sin firma digital de Windows. ' +
+    'Cierra REAPER y Ableton antes de continuar. El instalador reemplaza ' +
+    'copias AEYLA anteriores en las ubicaciones VST3 estandar.',
     mbInformation,
     MB_OKCANCEL,
     IDOK
